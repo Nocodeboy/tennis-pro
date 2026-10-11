@@ -35,7 +35,7 @@ SEEDED = """(() => { let s = %d >>> 0; Math.random = () => { s = (s + 0x6D2B79F5
   t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; })();""" % SEED
 ST = """(() => { const pb = window.__pb, m = pb.match, v = pb.view;
   return { t: +m.t.toFixed(3), phase: m.phase, wu: m.windup ? +(m.windup.at - m.t).toFixed(3) : null, shot: v.director.kind,
-    cine: pb.bc.cine ? pb.bc.cine.kind : null, server: m.phase === 'serve' ? m.server().id : -1, score: m.score.join('-') }; })()"""
+    cine: pb.bc.cine ? pb.bc.cine.kind : null, server: m.phase === 'serve' ? m.server().id : -1, score: m.games.join('-') + ' ' + m.pointText(0) + '-' + m.pointText(1) }; })()"""
 
 with sync_playwright() as p:
     b = p.chromium.launch(args=ARGS)

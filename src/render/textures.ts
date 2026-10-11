@@ -156,82 +156,44 @@ function sample(f: Float32Array, size: number, u: number, v: number): number {
 }
 
 /**
- * The fine texture of the acrylic, tiled: R the sand grain's shade (0.5 = none), G the roughness, plus a normal map from
- * the same grain. A tile is `tile` metres; the court's own paint (courtPaint) carries everything that does not repeat.
+ * The fine texture of the artificial grass, tiled: R the shade (0.5 = none: the tips of the fibres light, the sand
+ * between them darker, a few lighter grains of the sand infill), G the roughness, plus a normal map from the same
+ * field. A tile is `tile` metres; the court's own colour (courtPaint) carries everything that does not repeat.
  */
-export function acrylicDetail(size: number, seed: number): { detail: THREE.CanvasTexture; normal: THREE.CanvasTexture } {
-  const fine = noise(size, seed, 2, 64);
-  const mid = noise(size, seed + 5, 3, 16);
+export function turfDetail(size: number, seed: number): { detail: THREE.CanvasTexture; normal: THREE.CanvasTexture } {
+  const fine = noise(size, seed, 2, 128);
+  const mid = noise(size, seed + 5, 3, 24);
   const r = rng(seed + 3);
   const h = new Float32Array(size * size);
   const [c, x, img] = canvasOf(size);
   for (let i = 0; i < size * size; i++) {
-    const sand = fine[i] * 0.65 + r() * 0.35;
-    h[i] = sand;
-    const shade = 0.5 + (sand - 0.5) * 0.55 + (mid[i] - 0.5) * 0.12;
-    const rough = Math.min(1, 0.78 + (sand - 0.5) * 0.3 + (mid[i] - 0.5) * 0.1);
+    // a fibre tip or the sand between the fibres (per texel: a few mm), and now and then a grain of the infill on top
+    const tip = r();
+    const sand = r() < 0.06 ? 1 : 0;
+    const f = fine[i] * 0.45 + tip * 0.55;
+    h[i] = f + sand * 0.4;
+    const shade = 0.5 + (f - 0.5) * 0.7 + (mid[i] - 0.5) * 0.14 + sand * 0.16;
+    const rough = Math.min(1, 0.86 + (f - 0.5) * 0.18);
     img.data[i * 4] = Math.max(0, Math.min(255, shade * 255));
     img.data[i * 4 + 1] = rough * 255;
     img.data[i * 4 + 2] = 128;
     img.data[i * 4 + 3] = 255;
   }
   x.putImageData(img, 0, 0);
-  return { detail: tex(c, false, 1), normal: normalMap(h, size, 1.6, 1) };
+  return { detail: tex(c, false, 1), normal: normalMap(h, size, 2.2, 1) };
 }
 
 /**
- * The paint of the whole court surround as one canvas (no tiling, about 3 cm a texel): the surround, the court and
- * the kitchen in their colours, the faint passes of the squeegee, the broad mottling of a resurfaced court, the pale
- * worn patches where the players stand (behind the baselines, along the kitchen lines) and the rubber marks of
- * shoes. RGB: colour (sRGB). A: wear 0…1 (smoother and paler; the shader reads it).
+ * The colour of the whole court and its surround as one canvas (no tiling, about 4 cm a texel): the blue artificial
+ * grass inside the glass, the dark floor round it, the rolls of the turf as faint bands along the court, the broad
+ * mottling of the pile and the paler, flattened patches where the players stand most (at the back, along the
+ * service lines, at the net), where the sand infill shows. RGB: colour (sRGB). A: wear 0…1 (the shader reads it).
  * Court frame: x across (−sw/2 … sw/2), z along (−sl/2 … sl/2), metres.
  */
-export function courtPaint(o: {
-  sw: number;
-  sl: number;
-  cw: number;
-  cl: number;
-  nvz: number;
-  apron: number;
-  court: number;
-  kitchen: number;
-  px: number;
-  seed: number;
-}): THREE.DataTexture {
+export function courtPaint(o: { sw: number; sl: number; cw: number; cl: number; service: number; apron: number; court: number; px: number; seed: number }): THREE.DataTexture {
   const W = Math.round(o.px);
   const H = Math.round((o.px * o.sl) / o.sw);
   const mpp = o.sw / W;
-  // rubber marks of shoes first, on their own white canvas: short dark arcs, most where the players stand
-  // (row py is z = −sl/2 + (py + ½)·mpp, the same as the data below: no flips anywhere)
-  const c = document.createElement('canvas');
-  c.width = W;
-  c.height = H;
-  const x = c.getContext('2d', { willReadFrequently: true })!;
-  x.fillStyle = '#fff';
-  x.fillRect(0, 0, W, H);
-  const hl = o.cl / 2;
-  const r = rng(o.seed + 9);
-  const toPx = (mx: number, mz: number) => [(mx + o.sw / 2) / mpp, (mz + o.sl / 2) / mpp];
-  x.lineCap = 'round';
-  for (let n = 0; n < 220; n++) {
-    const end = r() < 0.5 ? 1 : -1;
-    const zone = r();
-    const mx = (r() - 0.5) * (zone < 0.6 ? 4.2 : 6.6);
-    const mz = end * (zone < 0.6 ? hl + 0.2 + r() * 1.4 : zone < 0.9 ? o.nvz + 0.1 + r() * 0.7 : r() * hl);
-    const len = 0.12 + r() * 0.45;
-    const ang = r() * Math.PI * 2;
-    const bend = (r() - 0.5) * 0.5;
-    const [ax, ay] = toPx(mx, mz);
-    const [bx, by] = toPx(mx + Math.cos(ang) * len, mz + Math.sin(ang) * len);
-    const [qx, qy] = toPx(mx + Math.cos(ang + bend) * len * 0.5, mz + Math.sin(ang + bend) * len * 0.5);
-    x.strokeStyle = `rgba(28,30,36,${(0.06 + r() * 0.14).toFixed(3)})`;
-    x.lineWidth = Math.max(0.6, (0.012 + r() * 0.025) / mpp);
-    x.beginPath();
-    x.moveTo(ax, ay);
-    x.quadraticCurveTo(qx, qy, bx, by);
-    x.stroke();
-  }
-  const marks = x.getImageData(0, 0, W, H).data;
   const data = new Uint8Array(W * H * 4);
   const N = 256;
   const broad = noise(N, o.seed, 4, 3);
@@ -240,39 +202,44 @@ export function courtPaint(o: {
   const rgb = (h: number) => [(h >> 16) & 255, (h >> 8) & 255, h & 255];
   const A = rgb(o.apron);
   const C = rgb(o.court);
-  const K = rgb(o.kitchen);
+  const hl = o.cl / 2;
   const g2 = (dx: number, dz: number, rx: number, rz: number) => Math.exp(-((dx * dx) / (rx * rx) + (dz * dz) / (rz * rz)));
   for (let py = 0; py < H; py++) {
     const z = -o.sl / 2 + (py + 0.5) * mpp;
+    const az = Math.abs(z);
     for (let px = 0; px < W; px++) {
       const xx = -o.sw / 2 + (px + 0.5) * mpp;
-      const inCourt = Math.abs(xx) <= o.cw / 2 && Math.abs(z) <= hl;
-      const col = inCourt ? (Math.abs(z) <= o.nvz ? K : C) : A;
-      // where the players stand most: behind the baselines (serve and return), along the kitchen lines (dinks),
-      // a little through the transition; patchy, never a clean blob
-      const az = Math.abs(z);
-      let wear = 0;
-      wear += 0.9 * g2(xx - 1.3, az - (hl + 0.55), 1.5, 0.9) + 0.9 * g2(xx + 1.3, az - (hl + 0.55), 1.5, 0.9) + 0.6 * g2(xx, az - (hl + 0.25), 1.2, 0.7);
-      wear += 0.75 * g2(0, az - (o.nvz + 0.35), 9, 0.45) * (Math.abs(xx) < o.cw / 2 + 0.2 ? 1 : 0.3);
-      wear += 0.35 * g2(xx * 0.6, az - (o.nvz + 2.2), 2.4, 1.4);
+      const inCourt = Math.abs(xx) <= o.cw / 2 && az <= hl;
+      const col = inCourt ? C : A;
       const u = (px / W) * N * (o.sw / 6);
       const v = (py / H) * N * (o.sl / 6);
       const pt = sample(patchy, N, u * 0.7, v * 0.7);
-      wear = Math.min(1, wear * (0.45 + 1.1 * pt));
-      // broad mottling (a few %), squeegee passes across the court (faint bands along z)
+      let wear = 0;
+      if (inCourt) {
+        // at the back (both halves of each end), along the service line, at the net (the volleys), the serve spots
+        wear += 0.75 * g2(Math.abs(xx) - 2.6, az - (hl - 1.3), 1.6, 1.1);
+        wear += 0.45 * g2(0, az - (o.service + 0.2), 4.5, 0.7);
+        wear += 0.55 * g2(Math.abs(xx) - 2.4, az - 3.0, 1.5, 1.0);
+        wear += 0.5 * g2(Math.abs(xx) - 1.3, az - (o.service + 1.0), 0.6, 0.5);
+        // (the glass' foot: the infill swept there by the ball and the shoes)
+        wear += 0.35 * Math.max(0, 1 - Math.min(o.cw / 2 - Math.abs(xx), hl - az) / 0.25);
+        wear = Math.min(1, wear * (0.45 + 1.1 * pt));
+      }
+      // broad mottling (a few %); inside, the rolls of turf (2 m wide, laid along the court) in slightly different
+      // shades and the pile brushed in passes
       const b = sample(broad, N, u * 0.25, v * 0.25) - 0.5;
       const s = sample(streak, N, u * 0.05, v * 3.5) - 0.5;
-      let k = 1 + b * 0.07 + s * 0.035;
-      // dust along the boards at the edge of the surround
-      const edge = Math.min(o.sw / 2 - Math.abs(xx), o.sl / 2 - az);
-      k *= 1 - 0.07 * Math.max(0, 1 - edge / 0.7) * (0.6 + pt * 0.8);
+      let k = 1 + b * (inCourt ? 0.06 : 0.08);
+      if (inCourt) {
+        const roll = Math.floor((xx + o.cw / 2) / 2);
+        k *= 1 + ((roll * 0.37) % 1 - 0.5) * 0.035 + s * 0.03;
+      }
       const i = (py * W + px) * 4;
-      const mk = marks[i] / 255;
-      const pale = wear * 0.16;
+      // worn: paler and a little greyer (the sand infill showing through the flattened pile)
+      const pale = wear * 0.13;
       for (let ch = 0; ch < 3; ch++) {
         const base = col[ch] * k;
-        // worn: paler and greyer (the pigment rubbed off, dust in the grain)
-        data[i + ch] = Math.max(0, Math.min(255, (base + (168 - base) * pale) * mk));
+        data[i + ch] = Math.max(0, Math.min(255, base + (150 - base) * pale));
       }
       data[i + 3] = Math.round(Math.min(1, wear) * 255);
     }
@@ -319,69 +286,6 @@ export function aoTexture(): THREE.CanvasTexture {
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.NoColorSpace;
   return t;
-}
-
-/** Chain-link fence (diamond weave). */
-export function chainLink(): THREE.CanvasTexture {
-  const c = document.createElement('canvas');
-  c.width = c.height = 64;
-  const x = c.getContext('2d')!;
-  x.clearRect(0, 0, 64, 64);
-  x.strokeStyle = 'rgba(40,52,48,0.95)';
-  x.lineWidth = 2.6;
-  x.beginPath();
-  x.moveTo(0, 32);
-  x.lineTo(32, 0);
-  x.lineTo(64, 32);
-  x.lineTo(32, 64);
-  x.closePath();
-  x.stroke();
-  const t = new THREE.CanvasTexture(c);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.anisotropy = 8;
-  t.colorSpace = THREE.SRGBColorSpace;
-  return t;
-}
-
-/** A pickleball: neon yellow with its rings of holes. */
-export function ballTexture(): THREE.CanvasTexture {
-  const w = 256;
-  const h = 128;
-  const c = document.createElement('canvas');
-  c.width = w;
-  c.height = h;
-  const x = c.getContext('2d')!;
-  x.fillStyle = '#dcff3c';
-  x.fillRect(0, 0, w, h);
-  // 40 holes in rings (equirectangular: holes near the poles get wider). Seen from the broadcast camera the ball is a
-  // few pixels across, so the holes stay a mid olive with a light rim: the ball reads bright, the holes still show
-  // up close and its turning shows
-  const rows = [0.18, 0.38, 0.62, 0.82];
-  rows.forEach((v, ri) => {
-    const n = ri === 0 || ri === 3 ? 6 : 12;
-    for (let i = 0; i < n; i++) {
-      const u = (i + (ri % 2) * 0.5) / n;
-      const lat = (v - 0.5) * Math.PI;
-      const sx = 8 / Math.max(0.35, Math.cos(lat));
-      x.fillStyle = '#f2ff9a';
-      x.beginPath();
-      x.ellipse(u * w, v * h, sx + 2, 10, 0, 0, Math.PI * 2);
-      x.fill();
-      x.fillStyle = '#7d9219';
-      x.beginPath();
-      x.ellipse(u * w, v * h, sx, 8, 0, 0, Math.PI * 2);
-      x.fill();
-    }
-  });
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  return t;
-}
-
-function shade(hex: string, k: number): string {
-  const n = parseInt(hex.slice(1), 16);
-  const f = (v: number) => Math.max(0, Math.min(255, Math.round(v * (1 + k))));
-  return `rgb(${f(n >> 16)},${f((n >> 8) & 255)},${f(n & 255)})`;
 }
 
 /** Soft round blob for contact shadows under feet and ball. */

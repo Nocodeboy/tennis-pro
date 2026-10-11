@@ -32,11 +32,12 @@ export interface BroadcastSetup {
   names: string[];
   /** the event («PRO TOUR FINALS») */
   title: string;
-  /** «Quarterfinal · Center Court» */
+  /** «Cuartos de final · Pista Central» */
   round: string;
 }
 
 type PointEvent = Extract<MatchEvent, { type: 'point' }>;
+type GameEvent = Extract<MatchEvent, { type: 'game' }>;
 type Cine =
   | { kind: 'intro'; t: number }
   | { kind: 'replay'; t: number; stage: 'in' | 'play' | 'out'; run: ReplayRun }
@@ -46,7 +47,8 @@ const REDUCED = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduce
 /** the sting: the cut happens when the band covers the screen */
 const STING = REDUCED ? 0.3 : 0.56;
 const STING_CUT = STING / 2;
-const WON = new Set<PointReason>(['winner', 'miss', 'letGo']);
+/** points won by the last shot (not an error): a winner, a ball they could not get to or let go, «por 3», «por 4» */
+const WON = new Set<PointReason>(['winner', 'miss', 'letGo', 'exit', 'back']);
 /**
  * How great a point has to be (planReplay's score) for a replay: normally (a smash or a net-cord winner after a
  * rally, an attack that wins a long rally, a perfect attack of yours, the winner of an epic rally), and within two
@@ -105,6 +107,7 @@ export class Broadcast {
   private skipHint: HTMLElement;
   private skipLayer: HTMLElement;
   private callTimer = 0;
+  private strapTimer = 0;
   private strapShown = -1;
 
   constructor(
@@ -150,7 +153,7 @@ export class Broadcast {
   get teams(): [TeamInfo, TeamInfo] | null {
     return this.setup?.teams ?? null;
   }
-  /** «Quarterfinal · Center Court» */
+  /** «Cuartos de final · Pista Central» */
   get round(): string {
     return this.setup?.round ?? '';
   }
@@ -242,35 +245,73 @@ export class Broadcast {
   }
 
   // ------------------------------------------------------------------ the score bug and the umpire's call
-  /** The broadcast scoreboard: both teams, the score, who serves (and server 1 or 2 in classic doubles). */
+  /**
+   * The broadcast scoreboard, as padel TV draws it: per pair its colour, the names (who serves lit, with the ball, and
+   * «2º» on a second serve), the games of the set and the points of the game (0 · 15 · 30 · 40 · AD; the tie-break's
+   * numbers). Beside it, the state of the game when it matters: match point, golden point, deuce or advantage, the
+   * tie-break. `scored`: the team that just won a point (its points flip; its games too when the point won a game).
+   */
   renderBug(m: Match, force = false, scored: 0 | 1 | null = null) {
     const s = this.setup;
     if (!s) return;
     const srv = m.server();
-    const key = `${m.score.join()}|${m.serverTeam}|${srv.id}|${m.serverNum}`;
+    const key = `${m.games.join()}|${m.points.join()}|${m.tiebreak}|${m.rules.golden}|${m.serverTeam}|${srv.id}|${m.serveNum}|${this.matchPoint}|${m.phase === 'over'}`;
     if (!force && key === this.bugKey && scored === null) return;
+    // (a game was just won: the games flip rather than the points, which are back to 0)
+    const gameWon = scored !== null && m.points[0] === 0 && m.points[1] === 0;
     this.bugKey = key;
-    const side = m.rules.scoring === 'sideout' && m.doubles;
     const row = (k: 0 | 1) => {
       const tm = s.teams[k];
       const serving = m.serverTeam === k;
       const ps = m.team(k);
       const nm = ps.map((p, i) => `<span class="${serving && p === srv ? 'on' : ''}">${esc(tm.names[i] ?? '')}</span>`).join('<i>/</i>');
-      const badge = serving ? `<b class="ball"></b>${side ? `<b class="no">${m.serverNum}</b>` : ''}` : '';
-      return `<div class="tr${serving ? ' serving' : ''}${scored === k ? ' scored' : ''}"><i class="tc" style="background:${tm.color}"></i><span class="nm">${nm}</span><span class="sv">${badge}</span><span class="sc"><span class="${scored === k ? 'flip' : ''}">${m.score[k]}</span></span></div>`;
+      const badge = serving ? `<b class="ball"></b>${m.serveNum === 2 ? `<b class="no">${esc(t('tv.second'))}</b>` : ''}` : '';
+      const fg = scored === k && gameWon ? 'flip' : '';
+      const fp = scored === k && !gameWon ? 'flip' : '';
+      return `<div class="tr${serving ? ' serving' : ''}${scored === k ? ' scored' : ''}"><i class="tc" style="background:${tm.color}"></i><span class="nm">${nm}</span><span class="sv">${badge}</span><span class="sc"><span class="${fg}">${m.games[k]}</span></span><span class="pt"><span class="${fp}">${esc(m.pointText(k))}</span></span></div>`;
     };
-    this.bug.innerHTML = `<div class="tvbug">${row(0)}${row(1)}</div><button class="icon-btn" id="pauseBtn" aria-label="${esc(t('pause.title'))}">${ICON.pause}</button>`;
+    const tags = this.stateTags(m)
+      .map(([txt, cls]) => `<span class="${cls}">${esc(txt)}</span>`)
+      .join('');
+    this.bug.innerHTML = `<div class="bugwrap"><div class="tvbug${m.tiebreak ? ' tb' : ''}">${row(0)}${row(1)}</div>${tags ? `<div class="tv-state">${tags}</div>` : ''}</div><button class="icon-btn" id="pauseBtn" aria-label="${esc(t('pause.title'))}">${ICON.pause}</button>`;
+    // (the tags make the bug taller: the umpire's call and the point's tag move down under them)
+    this.bug.parentElement?.classList.toggle('bug-st', !!tags);
   }
 
-  /** The umpire calls the score before the serve: one slim line under the bug (a chime; gold at match point). */
+  /**
+   * What the moment of the game is (beside the bug, and on the umpire's call): match point, the golden point (40-40,
+   * the next point wins the game), deuce or advantage (with advantages), the tie-break. Before a serve only: once the
+   * point is over the bug shows the score as it is.
+   */
+  private stateTags(m: Match): [string, string][] {
+    const tags: [string, string][] = [];
+    if (m.phase === 'over') return tags;
+    if (this.matchPoint) tags.push([t('hud.matchPoint'), 'mp']);
+    if (m.goldenPoint()) tags.push([t('tv.golden'), 'gold']);
+    else if (m.deuce()) tags.push([t('tv.deuce'), '']);
+    else if (!m.tiebreak && !m.rules.golden && Math.min(m.points[0], m.points[1]) >= 3) tags.push([t('tv.adv'), '']);
+    if (m.tiebreak) tags.push([t('tv.tiebreak'), 'tb']);
+    return tags;
+  }
+
+  /**
+   * The umpire calls the score before the serve: one slim line under the bug (a chime; gold at match point). The
+   * points, server's pair first («15-30»; «IGUALES» at deuce); a label for the moment (match point, golden point, the
+   * tie-break, a second serve) and who serves.
+   */
   private umpire(m: Match, who: string, matchPoint: boolean) {
-    const nums = m.call().split('-');
-    this.call.className = `tv-call on${matchPoint ? ' mp' : ''}`;
+    const second = m.serveNum === 2;
+    const deuce = m.deuce();
+    const nums = deuce ? [t('tv.deuce')] : m.call().split('-');
+    const label = matchPoint ? t('hud.matchPoint') : m.goldenPoint() ? t('tv.golden') : m.tiebreak ? t('tv.tiebreak') : '';
+    const gold = matchPoint || m.goldenPoint();
+    this.call.className = `tv-call on${gold ? ' mp' : ''}${second ? ' second' : ''}`;
     this.call.setAttribute('aria-label', `${t('tv.score')} ${nums.join(' ')} · ${who}`);
-    this.call.innerHTML = `${matchPoint ? `<span class="lb">${esc(t('hud.matchPoint'))}</span>` : ''}<span class="nums">${nums.map((n) => `<b>${n}</b>`).join('<i></i>')}</span><span class="who">${esc(who)}</span>`;
-    audio.chime(matchPoint);
+    this.call.innerHTML = `${label ? `<span class="lb${gold ? '' : ' plain'}">${esc(label)}</span>` : ''}<span class="nums${deuce ? ' word' : ''}">${nums.map((n) => `<b>${esc(n)}</b>`).join('<i></i>')}</span><span class="who">${esc(who)}</span>`;
+    // (a second serve: no chime, the call is only a reminder)
+    if (!second) audio.chime(gold);
     clearTimeout(this.callTimer);
-    this.callTimer = window.setTimeout(() => this.call.classList.remove('on'), matchPoint ? 2600 : 1900);
+    this.callTimer = window.setTimeout(() => this.call.classList.remove('on'), gold ? 2600 : 1900);
   }
 
   // ------------------------------------------------------------------ events of the live match
@@ -284,7 +325,7 @@ export class Broadcast {
         this.umpire(m, extra.who ?? '', !!extra.matchPoint);
         audio.tension = 0;
         this.view.crowd.tension = 0;
-        if (extra.matchPoint) audio.crowdHush();
+        if (extra.matchPoint || m.goldenPoint()) audio.crowdHush();
         const d = this.view.director;
         // the players were just put in place: a cut to the server (a long lens if they are at the far end)
         if (d.kind !== 'play') d.play(0);
@@ -319,8 +360,28 @@ export class Broadcast {
           this.view.crowd.react('ooh', 1);
         }
         break;
+      case 'wall':
+        // a ball dug out of the corner off the glass, late in a rally: the stands go "ooh"
+        if (e.surface === 'glass' && (m.rally?.walls ?? 0) >= 2 && (m.rally?.shots ?? 0) >= 4) {
+          audio.ooh(0.4);
+          this.view.crowd.react('ooh', 0.4);
+        }
+        break;
+      case 'fault':
+        // the first fault: a murmur; the second is the point (the point does the rest)
+        if (e.second) {
+          audio.crowdSwell(0.2);
+          this.call.classList.remove('on');
+        }
+        break;
+      case 'let':
+        this.call.classList.remove('on');
+        break;
       case 'point':
         this.point(m, e, extra.reacts ?? []);
+        break;
+      case 'game':
+        this.gameStrap(m, e);
         break;
       case 'over':
         if (this.after) {
@@ -346,7 +407,7 @@ export class Broadcast {
     const great = plan ? plan.score : 0;
     // the stands: a roar for a great point or a long rally, applause for a winner, polite claps otherwise
     const big = Math.min(1, great / 5 + (e.rally >= 12 ? 0.3 : 0));
-    if (great >= 2.5 || e.rally >= (m.doubles ? 16 : 10)) {
+    if (great >= 2.5 || e.rally >= 16) {
       audio.roar(0.5 + big * 0.5);
       this.view.crowd.react('cheer', 0.5 + big * 0.5);
     } else if (won && e.rally >= 3) {
@@ -380,19 +441,22 @@ export class Broadcast {
       return (r.find((x) => human && x.pid === human.id) ?? r.find((x) => human && m.players[x.pid].team === human.team) ?? r[0])?.pid ?? -1;
     };
     const major = over || this.matchPoint || !!replay;
-    const meaningful = major || (!!plan?.won && e.rally >= (m.doubles ? 20 : 14)) || e.rally >= (m.doubles ? 30 : 24);
+    const meaningful = major || (!!plan?.won && e.rally >= 20) || e.rally >= 30;
     let react = -1;
     if (meaningful && (major || this.pointNo - this.lastReactPoint >= 3)) {
       react = pick('cheer');
       if (react < 0) react = pick('lost');
     }
     if (react >= 0) this.lastReactPoint = this.pointNo;
+    // (the match point has been played: the bug drops its tag until the umpire calls the next one)
+    this.matchPoint = false;
     this.after = { tp: m.t, react, reacted: false, replay, replayAt: react >= 0 ? 1.3 : 0.7, over, winner: e.winner, victory: false, victoryT: 0, ended: false };
   }
 
   /**
-   * How great the point was, and the replay. Only a point won by a shot is great (a winner, more so a smash, an
-   * attack, a perfect swing, a net cord, the end of a long rally); a long rally that ends in an error only when it is
+   * How great the point was, and the replay. Only a point won by a shot is great (a winner, more so a smash out of the
+   * court («por 3», «por 4»), a víbora or a volley, a perfect swing, a net cord, the end of a long rally, a ball played
+   * off the glass); a long rally that ends in an error only when it is
    * epic. The replay runs from just before the shot that set it up (the last few shots of a long rally) to a moment
    * after the decisive ball landed in, slowing down for the decisive hit and a net cord, and it is cut before the
    * dead ball rolls away (no slow motion on an empty corner).
@@ -406,7 +470,7 @@ export class Broadcast {
     const hitter = m.players[last.pid];
     const won = WON.has(e.reason) && hitter?.team === e.winner;
     const tape = rec.events.find((x) => x.type === 'net' && x.tape && x.t >= last.t - 1e-6 && x.t <= tp + 1e-6);
-    const longT = m.doubles ? 20 : 14;
+    const longT = 20;
     let score = 0;
     const keys = [last.t];
     const portrait = this.view.camera.aspect < 0.8;
@@ -415,10 +479,16 @@ export class Broadcast {
     const long = e.rally >= longT ? Math.min(2, 1 + (e.rally - longT) * 0.08) : 0;
     if (won) {
       score += 0.5 + long;
-      if (last.kind === 'smash') {
+      if (e.reason === 'exit' || e.reason === 'back') {
+        // «por 3», «por 4»: the shot of the match, from the end
+        score += 3;
+        angle = 'end';
+      } else if (last.kind === 'smash' || last.kind === 'vibora') {
         score += 2.5;
         angle = 'end';
-      } else if (last.kind === 'speedup' || last.speed >= 15) score += 1.5;
+      } else if (last.kind === 'speedup' || last.kind === 'bandeja' || last.speed >= 15) score += 1.5;
+      // (a rally with the glass in it: the walls are padel's show)
+      if ((m.rally?.walls ?? 0) >= 2) score += 0.5;
       if (last.perfect) score += 0.5;
       if (e.rally >= 5) score += 0.5;
       if (tape) {
@@ -428,7 +498,7 @@ export class Broadcast {
       }
       // (the player's own shot, a touch more: he wants to see it again)
       if (hitter?.human) score += 0.3;
-    } else if (e.rally >= (m.doubles ? 40 : 32)) score = REPLAY_AT;
+    } else if (e.rally >= 40) score = REPLAY_AT;
     if (this.forceAngle) angle = this.forceAngle;
     // the end: a winner, a moment after it lands in (it has passed the player who could not get it); an error, a
     // moment after the point is called
@@ -466,6 +536,7 @@ export class Broadcast {
     if (a.replay && since >= a.replayAt) {
       const run = a.replay;
       a.replay = null;
+      this.strap.classList.remove('on');
       this.cine = { kind: 'replay', t: 0, stage: 'in', run };
       this.frozen = true;
       this.hold(true);
@@ -586,12 +657,32 @@ export class Broadcast {
     return `<i class="tc" style="background:${tm.color};color:${tm.ink}">${badge}</i><div class="sx">${first}${second}</div>`;
   }
 
+  /**
+   * A game won: a lower third with the pair («JUEGO · NAVARRA / CHINGOTO · 2–1», the winners' games first; the
+   * tie-break's own label), for a moment in the pause after the point. Not for the game that ends the match: the
+   * victory strap says it.
+   */
+  private gameStrap(m: Match, e: GameEvent) {
+    const s = this.setup;
+    if (!s || m.phase === 'over') return;
+    const tm = s.teams[e.winner];
+    const g = e.games;
+    this.strap.className = 'tv-strap game';
+    this.strap.innerHTML = this.strapHtml(tm, `<div class="lb">${esc(t(e.tiebreak ? 'tv.tbWon' : 'tv.game'))}</div>`, `<div class="nm">${tm.names.map(esc).join('<i>/</i>')}<span class="sc">${g[e.winner]}–${g[e.winner === 0 ? 1 : 0]}</span></div>`);
+    void this.strap.offsetWidth;
+    this.strap.classList.add('on');
+    clearTimeout(this.strapTimer);
+    this.strapTimer = window.setTimeout(() => {
+      if (this.strap.classList.contains('game')) this.strap.classList.remove('on');
+    }, 2400);
+  }
+
   private victoryStrap(m: Match, team: 0 | 1) {
     const s = this.setup;
     if (!s) return;
     const tm = s.teams[team];
     this.strap.className = 'tv-strap win';
-    this.strap.innerHTML = this.strapHtml(tm, `<div class="lb">${esc(t('tv.match'))}</div>`, `<div class="nm">${tm.full.map(esc).join('<i>/</i>')}<span class="sc">${m.score[team]}–${m.score[team === 0 ? 1 : 0]}</span></div>`);
+    this.strap.innerHTML = this.strapHtml(tm, `<div class="lb">${esc(t('tv.match'))}</div>`, `<div class="nm">${tm.full.map(esc).join('<i>/</i>')}<span class="sc">${m.games[team]}–${m.games[team === 0 ? 1 : 0]}</span></div>`);
     this.strap.classList.remove('on');
     void this.strap.offsetWidth;
     this.strap.classList.add('on');

@@ -1,13 +1,15 @@
 // Random thumbs: the real Input and HumanController driven by noise (stick flicks and holds, presses, drags, releases,
 // Space with arrows, taps in the pause after a point, and the right thumb's gestures through the real path: taps and
-// flicks, docs/notas-08-ataque.md) in singles and doubles, every help level and both swings.
-// Checks: no exception, no NaN, nobody through the net or the fence, no match stuck.
+// flicks, docs/pickleball/notas-08-ataque.md) in padel against every pair, every help level, both swings and both
+// scorings (golden point, advantages). Checks: no exception, no NaN, nobody through the net or the glass, the ball
+// never below the floor nor out of the court before the point is over, no match stuck.
 // npx tsx tools/review/fuzz.ts [matches=24]
 const g = globalThis as unknown as { window?: unknown };
 g.window ??= { addEventListener() {} };
 import { Input } from '../../src/input';
 import { HumanController } from '../../src/human';
-import { AIController, HUMAN_REACTION, HUMAN_SPEED, PAIRS, PARTNER, RIVALS } from '../../src/sim/brain';
+import { AIController, HUMAN_REACTION, HUMAN_SPEED, PAIRS, PARTNER } from '../../src/sim/brain';
+import { HL, W } from '../../src/sim/court';
 import { Match } from '../../src/sim/match';
 import { Rng } from '../../src/sim/rng';
 
@@ -18,7 +20,6 @@ let points = 0;
 const intents = { attack: 0, block: 0 };
 for (let i = 0; i < N; i++) {
   const rng = new Rng(500 + i * 13);
-  const dbl = i % 2 === 1;
   const el = { addEventListener() {}, clientWidth: 390, setPointerCapture() {} } as unknown as HTMLElement;
   let m: Match | null = null;
   const input = new Input(el, () => m?.t ?? 0);
@@ -27,12 +28,11 @@ for (let i = 0; i < N; i++) {
   ctl.mode = i % 4 === 3 ? 'manual' : 'assist';
   ctl.recover = i % 5 < 2;
   ctl.pxPerM = 33;
-  const rv = RIVALS[i % 5];
   const pair = PAIRS[i % 4];
-  const ais = dbl ? [PARTNER, pair.a, pair.b] : [rv];
+  const ais = [PARTNER, pair.a, pair.b];
   m = new Match(
-    [{ team: 0, human: true, speed: HUMAN_SPEED, reaction: HUMAN_REACTION, look: 0 }, ...ais.map((r, k) => ({ team: (dbl && k === 0 ? 0 : 1) as 0 | 1, human: false, speed: r.skill.speed, reaction: r.skill.reaction, look: r.look }))],
-    { scoring: i % 3 === 2 ? 'sideout' : 'rally', to: 11 },
+    [{ team: 0, human: true, speed: HUMAN_SPEED, reaction: HUMAN_REACTION, look: 0 }, ...ais.map((r, k) => ({ team: (k === 0 ? 0 : 1) as 0 | 1, human: false, speed: r.skill.speed, reaction: r.skill.reaction, look: r.look }))],
+    { games: 3, golden: i % 3 !== 2 },
     900 + i,
   );
   m.setControllers([ctl, ...ais.map((r) => new AIController(r.skill))]);
@@ -40,6 +40,7 @@ for (let i = 0; i < N; i++) {
   const end = () => (input as unknown as { end(c: boolean): void }).end(false);
   // a gesture under way: a tap (down, a few frames, up) or a flick (down, a stroke up, up)
   let gest: { kind: 'tap' | 'flick'; n: number; y: number } | null = null;
+  let wasOut = false;
   let guard = 0;
   try {
     while (m.phase !== 'over' && guard++ < 60 * 60 * 60) {
@@ -85,15 +86,22 @@ for (let i = 0; i < N; i++) {
       for (const p of m.players) {
         if (!Number.isFinite(p.x) || !Number.isFinite(p.z) || !Number.isFinite(p.vx) || !Number.isFinite(p.vz)) throw new Error(`NaN player ${p.id}`);
         // (the fence holds the human; the CPU players are not fenced in: they are only checked against the net)
-        if (p.z * p.side < 0.39 || (p.human && (Math.abs(p.x) > 4.6 || Math.abs(p.z) > 9.2))) throw new Error(`player ${p.id} out of bounds ${p.x.toFixed(2)},${p.z.toFixed(2)}`);
+        if (p.z * p.side < 0.39 || Math.abs(p.x) > W / 2 - 0.29 || Math.abs(p.z) > HL - 0.29) throw new Error(`player ${p.id} out of bounds ${p.x.toFixed(2)},${p.z.toFixed(2)}`);
       }
       const b = m.ballPos();
-      if (b && (!Number.isFinite(b.x) || !Number.isFinite(b.y) || b.y < -0.01)) throw new Error('ball');
+      if (b && (!Number.isFinite(b.x) || !Number.isFinite(b.y) || !Number.isFinite(b.z) || b.y < 0)) throw new Error(`ball ${b.x},${b.y},${b.z}`);
+      // inside the glass while the ball is live, and also once it is dead unless it left over the top of a wall (it
+      // crossed the wall's plane above 2 m: the lowest wall top, the step, is at 2 m)
+      const outside = !!b && (Math.abs(b.x) > W / 2 + 0.01 || Math.abs(b.z) > HL + 0.01);
+      if (b && outside && !wasOut) {
+        if (m.phase === 'rally' || b.y < 2) throw new Error(`ball through the wall ${b.x.toFixed(2)},${b.y.toFixed(2)},${b.z.toFixed(2)} (${m.phase})`);
+      }
+      wasOut = outside;
     }
     if (m.phase !== 'over') stuck++;
   } catch (err) {
     bad++;
-    console.log(`partido ${i} (${dbl ? 'dobles' : 'individual'}, ayuda ${ctl.assist}): ${(err as Error).message}`);
+    console.log(`partido ${i} (ayuda ${ctl.assist}, ${ctl.mode}): ${(err as Error).message}`);
   }
 }
 console.log(`${N} partidos, ${points} puntos con pulgares al azar (${intents.attack} ataques y ${intents.block} bloqueos): ${bad} con fallos, ${stuck} atascados`);

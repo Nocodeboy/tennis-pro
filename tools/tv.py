@@ -23,7 +23,7 @@ srv = http.server.ThreadingHTTPServer(('127.0.0.1', PORT), functools.partial(Q, 
 threading.Thread(target=srv.serve_forever, daemon=True).start()
 ARGS = ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist']
 ST = """(() => { const pb = window.__pb, m = pb.match, bc = pb.bc, v = pb.view;
-  return { phase: m.phase, t: m.t, score: m.score.join('-'), shot: v.director.kind, cine: bc.cine ? bc.cine.kind + ':' + (bc.cine.stage || '') : null,
+  return { phase: m.phase, t: m.t, score: m.games.join('-') + ' ' + m.pointText(0) + '-' + m.pointText(1), shot: v.director.kind, cine: bc.cine ? bc.cine.kind + ':' + (bc.cine.stage || '') : null,
     replay: v.replay ? { cur: v.replay.cur - v.replay.t0, len: v.replay.t1 - v.replay.t0, done: v.replay.done } : null,
     after: bc.after ? { since: m.t - bc.after.tp, reacted: bc.after.reacted, victory: bc.after.victory } : null,
     shots: m.rally ? m.rally.shots : 0 }; })()"""
@@ -102,8 +102,8 @@ with sync_playwright() as p:
             got.add('victory'); snap(pg, '09-victory')
             break
         if 'replay2' in got and not victory_forced and st['phase'] == 'serve':
-            # jump to match point so the next point ends the match (debug only: the score, nothing else)
-            pg.evaluate("(() => { const m = window.__pb.match; m.score[0] = 10; m.score[1] = 4; m.serverTeam = 0; })()")
+            # jump to set point (5-2, 40-0) so the next point ends the match (debug only: the score, nothing else)
+            pg.evaluate("(() => { const m = window.__pb.match; m.games[0] = Math.max(0, m.rules.games - 1); m.games[1] = 2; m.points[0] = 3; m.points[1] = 0; m.serverTeam = 0; })()")
             victory_forced = True
         pg.evaluate("window.__pb.advance(0.1, 1/30, false)")
     print(json.dumps(pg.evaluate(ST)))

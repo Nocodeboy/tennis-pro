@@ -25,7 +25,7 @@ SCAN = """((secs) => { const pb = window.__pb; const out = []; let cur = null; l
     const m = pb.match; const ph = m.phase;
     if (ph === 'rally' && prev !== 'rally') cur = { from: +m.t.toFixed(2), shots: 0, kinds: {} };
     if (cur && m.rally) cur.shots = m.rally.shots;
-    if (cur && ph !== 'rally') { cur.to = +m.t.toFixed(2); cur.score = m.score.join('-'); out.push(cur); cur = null; }
+    if (cur && ph !== 'rally') { cur.to = +m.t.toFixed(2); cur.score = m.games.join('-') + ' ' + m.pointText(0) + '-' + m.pointText(1); out.push(cur); cur = null; }
     if (ph === 'over') break;
     prev = ph;
   }

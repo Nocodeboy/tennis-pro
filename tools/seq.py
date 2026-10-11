@@ -61,7 +61,7 @@ HARNESS = """(() => {
     },
     near() { const m = pb.match; const h = m.players.find((p) => p.human) || m.players[0]; return h.id; },
     far() { const m = pb.match; const h = m.players[S.near()]; const o = m.players.filter((p) => p.team !== h.team); return o[0].id; },
-    info() { const m = pb.match; return { t: +m.t.toFixed(3), phase: m.phase, score: m.score.join('-') }; },
+    info() { const m = pb.match; return { t: +m.t.toFixed(3), phase: m.phase, score: m.games.join('-') + ' ' + m.pointText(0) + '-' + m.pointText(1) }; },
     /** what each body is doing (for reading the video): swing and time to its contact, the loops' weights, speed, stance */
     state() { const m = pb.match, cs = pb.view.chars; return m.players.map((p, i) => { const c = cs[i]; const sw = c.swing;
       const lw = {}; for (const k in c.locoW || {}) if (c.locoW[k] > 0.05) lw[k] = +c.locoW[k].toFixed(2);

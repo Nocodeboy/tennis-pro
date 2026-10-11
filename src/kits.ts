@@ -70,7 +70,7 @@ export const RIVAL_KITS: Record<string, KitInfo> = {
     css: '#2c5e43',
     ink: '#ffffff',
   },
-  // the dink queen: plum fading to aubergine through halftone dots, a white wristband
+  // the wall specialist: plum fading to aubergine through halftone dots, a white wristband
   lola: {
     kit: {
       shirtHue: 290, shirtSat: 0.4, shirtLight: -0.18, shortsHue: 260, shortsLight: -0.02, paddle: 0xd9468f, paddleEdge: 0x2a1a2a,
@@ -102,7 +102,7 @@ export const RIVAL_KITS: Record<string, KitInfo> = {
     css: '#1b1c20',
     ink: '#e8702a',
   },
-  // at the kitchen line: petrol teal with dark side panels and a dotted print, auburn hair
+  // all touch at the net: petrol teal with dark side panels and a dotted print, auburn hair
   nuria: {
     kit: {
       shirtHue: 174, shirtSat: 0.6, shirtLight: -0.18, shortsHue: 180, shortsLight: -0.1, paddle: 0x18a090, paddleEdge: 0x0d3a3a,

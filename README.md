@@ -1,9 +1,10 @@
-# Pickleball · Pro Tour (prototipo de encargo)
+# Pádel · Pro Tour (prototipo de encargo)
 
-Juego de pickleball para web y móvil del estudio NocodeBoy, hecho por encargo. El nombre y la marca son provisionales: los pone el cliente y se cambian en `src/tour.ts`.
+Juego de pádel en 3D para web y móvil del estudio NocodeBoy, hecho por encargo. El nombre y la marca son provisionales: los pone el cliente y se cambian en `src/tour.ts` (y el título de la página en `build.mjs`).
 
-- **Estado y decisiones:** `docs/concepto.md`. Lo vigente está en las secciones del final; el detalle de cada versión, en `docs/notas-*.md`.
-- **Versión:** 0.10 (11 oct 2026). Se juega en individual y en dobles contra la máquina, y tiene un modo entrenamiento. El online está pendiente.
+- **Origen:** copia del juego de pickleball del estudio (`Nocodeboy/Pickleball@2f15030`, versión 0.10), convertida en pádel. Las notas de diseño del pickleball siguen en `docs/pickleball/` como referencia (la interfaz que se hereda: `notas-09-interfaz.md`).
+- **Versión:** 0.1 (11 oct 2026).
+- **Estado:** se juega siempre en dobles: tú y Martín Di Neno (tu pareja, la CPU) contra un cuadro de cuatro parejas de la máquina, de octavos a la final. Pista de 20 × 10 m con cristal y malla; la bola rebota en las paredes y se puede jugar después del bote. Puntuación de pádel (15-30-40, punto de oro o ventajas, un set corto con tie-break). Marcador de televisión con juegos y puntos, saque y segundo saque, punto de oro, iguales, tie-break y banners de falta, let y de cada forma de acabar el punto (a la red, pared directa, doble falta, por 3, por 4…). Textos en español e inglés. Sin online, sin modo individual y sin entrenamiento (se quitaron al pasar del pickleball).
 
 ## Compilar
 
@@ -17,23 +18,25 @@ npx tsc --noEmit -p .   # comprobación de tipos
 
 ## Estructura
 
-- `src/sim/`: simulación determinista. Vuelo de la bola en forma cerrada (`ball.ts`), reglas, movimiento y planes (`match.ts`), IA y golpes (`brain.ts`), y retos de entrenamiento (`drill.ts`).
-- `src/`: control (`input.ts`, `human.ts`), menús, interfaz y partido (`main.ts`), grafismo de TV (`broadcast.ts`), textos en español e inglés (`i18n.ts`), audio sintetizado (`audio.ts`) y marca (`tour.ts`).
+- `src/sim/`: simulación determinista. Pista, paredes y red (`court.ts`), vuelo de la bola y rebotes en cristal y malla (`ball.ts`), reglas, puntuación, movimiento y planes (`match.ts`), IA, golpes y el cuadro de parejas (`brain.ts`).
+- `src/`: control (`input.ts`, `human.ts`), menús, ajustes y flujo del partido (`main.ts`), grafismo de TV y marcador (`broadcast.ts`), por qué se ganó o perdió cada punto (`explain.ts`), textos en español e inglés (`i18n.ts`), audio sintetizado: pala, bote, cristal y malla (`audio.ts`), equipaciones (`kits.ts`) y marca, apellidos y cabezas de serie (`tour.ts`).
 - `src/render/`:
   - escena, luz y niveles de calidad: `view.ts`, `look.ts`;
-  - estadio: `stadium.ts`, `venue.ts`, `led.ts`, `crowd.ts`;
+  - estadio y pista: `stadium.ts`, `venue.ts`, `led.ts`, `crowd.ts`;
   - personajes: `chars.ts`, `keyposes.ts` y `body.ts`;
   - equipaciones, pala y bola: `outfit.ts`, `gear.ts`;
   - cámaras y repeticiones: `director.ts`, `replay.ts`.
 - `assets/`: el modelo del jugador (`chars/hero.json`) y las animaciones (`anims/`), convertidos con `tools/prep-character.mjs` y `tools/prep-clip.mjs`. Los originales (`art/raw`) no están en el repositorio.
-- `tools/`: bots y medidas. `bot.ts` y `bot-doubles.ts` miden la escalera con un pulgar simulado; en `review/` hay sondas, fuzz, retos y explicaciones; `poses.ts` mide las poses de los personajes, y hay scripts de captura con Playwright.
+- `tools/`: bots y capturas. `bot-doubles.ts` mide el cuadro con un pulgar simulado, `review/fuzz.ts` juega partidos con pulgares al azar, `poses.ts` mide las poses, y hay scripts de captura con Playwright (`screens.py`: menús, partido y final en un móvil vertical; `hud.py`: los indicadores en pantalla).
 
 ## Comprobaciones habituales
 
 ```bash
-npx tsx tools/bot.ts 24 1          # escalera individual, ayuda media
-npx tsx tools/bot-doubles.ts 12 1  # dobles
-npx tsx tools/review/fuzz.ts 40    # partidos con pulgares al azar: sin fallos ni atascos
-npx tsx tools/review/drills.ts 24 1  # retos de entrenamiento
-npx tsx tools/poses.ts 90          # medidas de las poses
+npx tsx tools/bot-doubles.ts 12 1          # el cuadro de parejas, ayuda media
+npx tsx tools/review/fuzz.ts 40            # partidos con pulgares al azar: sin fallos ni atascos
+python3 tools/screens.py /tmp/padel-screens  # capturas de menús, marcador y final (necesita dist/)
 ```
+
+## Para depurar en el navegador
+
+`window.__pb`: `start(i)` empieza el partido contra la pareja `i` del cuadro (sin la presentación de TV; `start(i, true)` con ella), `match` es el partido en juego, `autopilot()` hace que tu jugador juegue solo, y `manual` + `advance(seg)` paran el bucle y avanzan el partido a mano para capturas.

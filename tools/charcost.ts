@@ -1,5 +1,5 @@
 // What the characters cost: the time CharacterView.update takes per player and frame (µs: median, p90, p99, mean), in
-// a CPU match and a doubles match at 60 fps, without the measures of tools/poses.ts. CHARS=… times another chars.ts
+// two CPU padel matches (four players) at 60 fps, without the measures of tools/poses.ts. CHARS=… times another chars.ts
 // (before/after a change, run one after the other on the same machine; a desktop, not a phone).
 // Usage: npx tsx tools/charcost.ts [seconds = 90]
 
@@ -15,21 +15,17 @@ const SECS = Number(process.argv[2] ?? 90);
   const a = await C.loadCharAssets('', 'hero', C.CLIP_NAMES);
   const kit = { shirtHue: null, paddle: 0xffffff, paddleEdge: 0 };
   const all: number[] = [];
-  for (const doubles of [false, true]) {
-    const pair = PAIRS[1];
-    const cfg = doubles
-      ? [
-          { team: 0 as const, human: false, speed: HUMAN_SPEED, reaction: HUMAN_REACTION, look: 0 },
-          { team: 0 as const, human: false, speed: PARTNER.skill.speed, reaction: PARTNER.skill.reaction, look: 0 },
-          { team: 1 as const, human: false, speed: pair.a.skill.speed, reaction: pair.a.skill.reaction, look: 0 },
-          { team: 1 as const, human: false, speed: pair.b.skill.speed, reaction: pair.b.skill.reaction, look: 0 },
-        ]
-      : [
-          { team: 0 as const, human: false, speed: HUMAN_SPEED, reaction: HUMAN_REACTION, look: 0 },
-          { team: 1 as const, human: false, speed: RIVALS[2].skill.speed, reaction: RIVALS[2].skill.reaction, look: 0 },
-        ];
-    const m = new Match(cfg, { scoring: 'rally', to: 11 }, 777);
-    m.setControllers(doubles ? [new AIController(RIVALS[2].skill), new AIController(PARTNER.skill), new AIController(pair.a.skill), new AIController(pair.b.skill)] : [new AIController(RIVALS[3].skill), new AIController(RIVALS[2].skill)]);
+  // (padel is always doubles: two matches, two pairs of rivals)
+  for (const pi of [1, 2]) {
+    const pair = PAIRS[pi % PAIRS.length];
+    const cfg = [
+      { team: 0 as const, human: false, speed: HUMAN_SPEED, reaction: HUMAN_REACTION, look: 0 },
+      { team: 0 as const, human: false, speed: PARTNER.skill.speed, reaction: PARTNER.skill.reaction, look: 0 },
+      { team: 1 as const, human: false, speed: pair.a.skill.speed, reaction: pair.a.skill.reaction, look: 0 },
+      { team: 1 as const, human: false, speed: pair.b.skill.speed, reaction: pair.b.skill.reaction, look: 0 },
+    ];
+    const m = new Match(cfg, { games: 6, golden: true }, 777 + pi);
+    m.setControllers([new AIController(RIVALS[2].skill), new AIController(PARTNER.skill), new AIController(pair.a.skill), new AIController(pair.b.skill)]);
     m.start();
     const chars = m.players.map(() => new C.CharacterView(a, kit));
     const bp = { x: 0, y: 0, z: 0 };

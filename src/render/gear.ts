@@ -1,20 +1,21 @@
-// The gear: a pro's paddle and an outdoor ball, as real as a phone allows.
+// The gear: a pro's padel paddle and a padel ball, as real as a phone allows.
 //
-// Paddle: the real outline (elongated, standard or hybrid, about 40 × 19 cm with the handle), a 16 mm core with its
-// edge guard (the bevel round the rim and a band of it on both faces), a raw carbon or fibreglass face with its
-// graphics and an invented mark, the twill weave and grit as relief, a throat collar, a handle wrapped in overgrip and
-// a butt cap. One geometry per shape for every player; three draw calls a paddle, as before. The middle of the face
-// (the contact point the arm aims, 0.255 m up from the grip) is where it was.
+// Paddle: solid, no strings: a head about 26 cm wide (round, teardrop or diamond), 45.5 cm long with the handle,
+// 38 mm thick, its face drilled through with a staggered grid of 13 mm holes and the open heart of the bridge at the
+// throat, the frame round the rim in the guard's colour, a handle wrapped in overgrip, a butt cap and the wrist cord.
+// The face carries its graphics and an invented mark, over a carbon weave or fibreglass, with the grit as relief.
+// One geometry per shape for every player; three draw calls a paddle, as before. The middle of the face (the contact
+// point the arm aims, 0.255 m up from the grip) is where it was: the hand holds the handle 5 cm up from the butt.
 //
-// Ball: an outdoor ball's 40 round holes (laid out on the sphere, so they stay round at the poles), the moulding seam,
-// a small printed mark that shows it turning, the holes darker and recessed (relief, and no glow inside them). It keeps
-// its glow and its size, which make it readable on a phone.
+// Ball: optic yellow felt, the white seam's curve round it (it shows the ball turning), a little fuzz at its edge
+// against the light. It keeps a touch of glow and its drawn size, which make it readable on a phone.
 
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 /** How a player's paddle looks. Colours sRGB hex. */
 export interface PaddleLook {
+  /** the head: diamond (elongated, the balance high), round (standard) or teardrop (hybrid) */
   shape: 'elongated' | 'standard' | 'hybrid';
   /** raw carbon (dark, weave showing), fibreglass in the graphic's colour, or a light face */
   face: 'carbon' | 'glass' | 'light';
@@ -22,82 +23,244 @@ export interface PaddleLook {
   graphic: number;
   /** its thin line, the inset outline and the mark */
   graphic2: number;
-  /** the overgrip */
+  /** the overgrip (and the wrist cord) */
   grip: number;
 }
 
+/**
+ * The shapes (m, y up from the grip): the head's half width, where it is widest and its top; the butt and the top of
+ * the handle; how far the widest point sits up the head (0.5 an oval, more: the balance high)
+ */
 const SHAPES = {
-  // width, top of the face, length of the handle, corner radius at the top and at the throat (m)
-  elongated: { W: 0.188, top: 0.405, handle: 0.137, rT: 0.028, rB: 0.03 },
-  standard: { W: 0.2, top: 0.395, handle: 0.125, rT: 0.05, rB: 0.036 },
-  hybrid: { W: 0.195, top: 0.4, handle: 0.132, rT: 0.038, rB: 0.032 },
+  elongated: { hw: 0.128, mid: 0.29, top: 0.405, base: 0.118, high: 0.68 },
+  standard: { hw: 0.13, mid: 0.255, top: 0.405, base: 0.11, high: 0.5 },
+  hybrid: { hw: 0.13, mid: 0.27, top: 0.405, base: 0.113, high: 0.58 },
 };
 type Shape = keyof typeof SHAPES;
+/** the handle: from the butt to the throat, its half width at the throat; the thickness of the paddle */
+const BUTT = -0.05;
+const THROAT = 0.07;
+const NECK = 0.021;
+const THICK = 0.038;
+/** the holes: radius, spacing (staggered rows), how far in from the rim they start */
+const HOLE = { r: 0.0065, gap: 0.031, margin: 0.024 };
+/** the face texture spans this much more than the paddle, each side (its edge columns are the foam of the holes' walls) */
+const TEX_PAD = 0.012;
 
-interface PathLike {
-  moveTo(x: number, y: number): unknown;
-  lineTo(x: number, y: number): unknown;
-  quadraticCurveTo(cx: number, cy: number, x: number, y: number): unknown;
+/**
+ * The outline (counter-clockwise, from the right of the throat): two arms rise from the handle and open into the head,
+ * whose half width at height y is a superellipse widest at `mid` (the lower part of the head a little fuller for a
+ * round one, tapering for a diamond).
+ */
+function outlinePts(shape: Shape): [number, number][] {
+  const S = SHAPES[shape];
+  const out: [number, number][] = [];
+  const lo = S.mid - S.base;
+  const hi = S.top - S.mid;
+  const halfW = (y: number) => {
+    const d = y < S.mid ? (S.mid - y) / lo : (y - S.mid) / hi;
+    const p = y < S.mid ? 2.2 - (S.high - 0.5) * 2.4 : 2.4;
+    return S.hw * Math.pow(Math.max(0, 1 - Math.pow(Math.min(1, d), p)), 1 / p);
+  };
+  // (the arms leave the head where it is this far up from its base)
+  const join = S.base + lo * 0.32;
+  out.push([NECK, THROAT]);
+  // the right arm: a soft curve out from the neck to the head
+  for (let i = 1; i < 6; i++) {
+    const u = i / 6;
+    const y = THROAT + (join - THROAT) * u;
+    const w = NECK + (halfW(join) - NECK) * (u * u * (3 - 2 * u)) * 0.92 + (halfW(join) - NECK) * 0.08 * u;
+    out.push([w, y]);
+  }
+  const side = 26;
+  // the right side from the join to the top, the top's curve, the left side down
+  for (let i = 0; i <= side; i++) {
+    const u = i / side;
+    const y = join + (S.top - join) * (1 - Math.cos(u * Math.PI * 0.5));
+    out.push([halfW(Math.min(y, S.top - 1e-4)), y]);
+  }
+  for (let i = side; i >= 0; i--) {
+    const u = i / side;
+    const y = join + (S.top - join) * (1 - Math.cos(u * Math.PI * 0.5));
+    out.push([-halfW(Math.min(y, S.top - 1e-4)), y]);
+  }
+  for (let i = 5; i >= 1; i--) {
+    const u = i / 6;
+    const y = THROAT + (join - THROAT) * u;
+    const w = NECK + (halfW(join) - NECK) * (u * u * (3 - 2 * u)) * 0.92 + (halfW(join) - NECK) * 0.08 * u;
+    out.push([-w, y]);
+  }
+  out.push([-NECK, THROAT]);
+  return dedupe(out);
 }
-function outline(path: PathLike, W: number, y0: number, top: number, rT: number, rB: number) {
-  path.moveTo(-W / 2 + rB, y0);
-  path.lineTo(W / 2 - rB, y0);
-  path.quadraticCurveTo(W / 2, y0, W / 2, y0 + rB);
-  path.lineTo(W / 2, top - rT);
-  path.quadraticCurveTo(W / 2, top, W / 2 - rT, top);
-  path.lineTo(-W / 2 + rT, top);
-  path.quadraticCurveTo(-W / 2, top, -W / 2, top - rT);
-  path.lineTo(-W / 2, y0 + rB);
-  path.quadraticCurveTo(-W / 2, y0, -W / 2 + rB, y0);
-}
-
-/** the part of a non-indexed geometry drawn with one material index */
-function part(g: THREE.BufferGeometry, mi: number): THREE.BufferGeometry {
-  const out = new THREE.BufferGeometry();
-  for (const name of ['position', 'normal', 'uv']) {
-    const a = g.getAttribute(name) as THREE.BufferAttribute;
-    const parts: number[] = [];
-    for (const gr of g.groups) {
-      if (gr.materialIndex !== mi) continue;
-      for (let i = gr.start; i < gr.start + gr.count; i++) for (let k = 0; k < a.itemSize; k++) parts.push(a.array[i * a.itemSize + k]);
-    }
-    out.setAttribute(name, new THREE.Float32BufferAttribute(parts, a.itemSize));
+function dedupe(p: [number, number][]): [number, number][] {
+  const out: [number, number][] = [];
+  for (const q of p) {
+    const l = out[out.length - 1];
+    if (!l || Math.hypot(q[0] - l[0], q[1] - l[1]) > 1e-4) out.push(q);
   }
   return out;
 }
 
+/** inside a closed polygon (even-odd) */
+function inside(p: [number, number][], x: number, y: number): boolean {
+  let c = false;
+  for (let i = 0, j = p.length - 1; i < p.length; j = i++) {
+    const [xi, yi] = p[i];
+    const [xj, yj] = p[j];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) c = !c;
+  }
+  return c;
+}
+/** distance from a point to a closed polygon's edge */
+function edgeDist(p: [number, number][], x: number, y: number): number {
+  let d = Infinity;
+  for (let i = 0, j = p.length - 1; i < p.length; j = i++) {
+    const [ax, ay] = p[j];
+    const [bx, by] = p[i];
+    const ex = bx - ax;
+    const ey = by - ay;
+    const t = Math.max(0, Math.min(1, ((x - ax) * ex + (y - ay) * ey) / (ex * ex + ey * ey)));
+    d = Math.min(d, Math.hypot(x - ax - ex * t, y - ay - ey * t));
+  }
+  return d;
+}
+
+/** the open heart of the bridge: a rounded triangle between the arms, under the head */
+function heartPts(shape: Shape): [number, number][] {
+  const S = SHAPES[shape];
+  const lo = S.mid - S.base;
+  const yb = THROAT + 0.028;
+  const yt = S.base + lo * 0.2;
+  const w = 0.03;
+  const pts: [number, number][] = [];
+  const n = 14;
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    // a teardrop: point down at the neck, round at the top
+    const c = Math.cos(a);
+    const sn = Math.sin(a);
+    const y = (yb + yt) / 2 + ((yt - yb) / 2) * sn;
+    const k = (sn + 1) / 2;
+    pts.push([c * w * Math.pow(k, 0.7), y]);
+  }
+  return pts;
+}
+
+/** the holes' centres: staggered rows from the middle of the head, at least `margin` in from the rim, clear of the heart */
+function holeCentres(shape: Shape): [number, number][] {
+  const S = SHAPES[shape];
+  const out = outlinePts(shape);
+  const hy = Math.max(...heartPts(shape).map((p) => p[1]));
+  const res: [number, number][] = [];
+  const dy = HOLE.gap * 0.87;
+  for (let k = -12; k <= 12; k++) {
+    const y = S.mid + k * dy;
+    const off = (Math.abs(k) % 2) * HOLE.gap * 0.5;
+    for (let i = -6; i <= 6; i++) {
+      const x = i * HOLE.gap + off;
+      if (y < hy + HOLE.margin * 0.8) continue;
+      if (!inside(out, x, y) || edgeDist(out, x, y) < HOLE.margin) continue;
+      res.push([x, y]);
+    }
+  }
+  return res;
+}
+
+/** the triangles of one material group of a geometry, split by a test on each triangle's centroid (x, y) */
+function groupSplit(g: THREE.BufferGeometry, mi: number, test: (x: number, y: number) => boolean): [THREE.BufferGeometry, THREE.BufferGeometry] {
+  const names = ['position', 'normal', 'uv'] as const;
+  const a: Record<string, number[]> = { position: [], normal: [], uv: [] };
+  const b: Record<string, number[]> = { position: [], normal: [], uv: [] };
+  const p = g.getAttribute('position');
+  for (const gr of g.groups) {
+    if (gr.materialIndex !== mi) continue;
+    for (let t = gr.start; t < gr.start + gr.count; t += 3) {
+      const cx = (p.getX(t) + p.getX(t + 1) + p.getX(t + 2)) / 3;
+      const cy = (p.getY(t) + p.getY(t + 1) + p.getY(t + 2)) / 3;
+      const to = test(cx, cy) ? a : b;
+      for (const n of names) {
+        const at = g.getAttribute(n) as THREE.BufferAttribute;
+        for (let v = t; v < t + 3; v++) for (let k = 0; k < at.itemSize; k++) to[n].push(at.array[v * at.itemSize + k]);
+      }
+    }
+  }
+  const mk = (r: Record<string, number[]>) => {
+    const o = new THREE.BufferGeometry();
+    o.setAttribute('position', new THREE.Float32BufferAttribute(r.position, 3));
+    o.setAttribute('normal', new THREE.Float32BufferAttribute(r.normal, 3));
+    o.setAttribute('uv', new THREE.Float32BufferAttribute(r.uv, 2));
+    return o;
+  };
+  return [mk(a), mk(b)];
+}
+
 const geoCache = new Map<Shape, THREE.BufferGeometry>();
-/** the paddle along +y from the grip (y 0), face normal along +x; groups: face, guard (rim, collar, butt), grip */
+/**
+ * The paddle along +y from the grip (y 0), face normal along +x; groups: the face (both faces and the walls of the
+ * holes, which show the foam core), the guard (the frame round the rim, the collar, the butt cap), the grip (the
+ * overgrip and the wrist cord).
+ */
 function paddleGeometry(shape: Shape): THREE.BufferGeometry {
   const hit = geoCache.get(shape);
   if (hit) return hit;
   const S = SHAPES[shape];
-  const y0 = S.handle - 0.008;
-  const sh = new THREE.Shape();
-  outline(sh, S.W, y0, S.top, S.rT, S.rB);
-  const depth = 0.013;
-  const face = new THREE.ExtrudeGeometry(sh, { depth, bevelEnabled: true, bevelThickness: 0.0018, bevelSize: 0.0026, bevelSegments: 2, curveSegments: 8 });
-  // the faces' texture across the outline (u across, v from the throat to the top)
-  const p = face.getAttribute('position');
-  const uv = face.getAttribute('uv');
-  for (let i = 0; i < p.count; i++) uv.setXY(i, (p.getX(i) + S.W / 2) / S.W, (p.getY(i) - y0) / (S.top - y0));
-  face.translate(0, 0, -depth / 2);
-  face.rotateY(Math.PI / 2);
-  const caps = part(face, 0);
-  const rim = part(face, 1);
-  const cyl = (r0: number, r1: number, h: number, y: number, flat: number, open = false) => {
+  const ol = outlinePts(shape);
+  const sh = new THREE.Shape(ol.map(([x, y]) => new THREE.Vector2(x, y)));
+  for (const [cx, cy] of holeCentres(shape)) {
+    // (hexagons: round enough at 13 mm, and few triangles)
+    const pts: THREE.Vector2[] = [];
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 + Math.PI / 6;
+      pts.push(new THREE.Vector2(cx + Math.cos(a) * HOLE.r, cy + Math.sin(a) * HOLE.r));
+    }
+    sh.holes.push(new THREE.Path(pts));
+  }
+  sh.holes.push(new THREE.Path(heartPts(shape).map(([x, y]) => new THREE.Vector2(x, y))));
+  // (no bevel: at 50 holes a side it would triple the holes' walls, and the frame's band reads as the rounded rim)
+  const ex = new THREE.ExtrudeGeometry(sh, { depth: THICK, bevelEnabled: false, curveSegments: 4 });
+  const flat = ex.index ? ex.toNonIndexed() : ex;
+  if (flat !== ex) ex.dispose();
+  // the faces' texture across the outline (u across, v from the butt to the top)
+  const span = 2 * (S.hw + TEX_PAD);
+  const p = flat.getAttribute('position');
+  const uv = flat.getAttribute('uv');
+  for (let i = 0; i < p.count; i++) uv.setXY(i, (p.getX(i) + span / 2) / span, (p.getY(i) - BUTT) / (S.top - BUTT));
+  const [caps] = groupSplit(flat, 0, () => true);
+  // the sides: the rim on the outline (the guard) and the walls of the holes and of the heart (the foam: the
+  // texture's edge column, which is the core's colour)
+  const [walls, rim] = groupSplit(flat, 1, (x, y) => edgeDist(ol, x, y) > 0.003);
+  const wu = walls.getAttribute('uv');
+  for (let i = 0; i < wu.count; i++) wu.setX(i, 0.004);
+  const place = (gg: THREE.BufferGeometry) => gg.translate(0, 0, -THICK / 2).rotateY(Math.PI / 2);
+  for (const gg of [caps, walls, rim]) place(gg);
+  const cyl = (r0: number, r1: number, h: number, y: number, fx: number, fz: number, open = false) => {
     const c = new THREE.CylinderGeometry(r0, r1, h, 8, 1, open);
     c.rotateY(Math.PI / 8);
-    c.scale(flat, 1, 1);
+    c.scale(fx, 1, fz);
     c.translate(0, y, 0);
     return c.toNonIndexed();
   };
-  const collar = cyl(0.0186, 0.0178, 0.022, S.handle - 0.004, 0.86);
-  const butt = cyl(0.0188, 0.0188, 0.011, -0.0015, 0.82);
-  const handle = cyl(0.0166, 0.0172, S.handle, S.handle / 2, 0.78, true);
-  const guard = mergeGeometries([rim, collar, butt]);
-  const g = mergeGeometries([caps, guard!, handle], true)!;
-  face.dispose();
+  // (the handle with its overgrip: about 30 × 25 mm, the long side across the face)
+  const collar = cyl(0.0172, 0.0166, 0.018, THROAT - 0.006, 0.86, 1.06);
+  const butt = cyl(0.018, 0.018, 0.012, BUTT + 0.004, 0.84, 1.04);
+  const handle = cyl(0.0156, 0.0162, THROAT - BUTT, (THROAT + BUTT) / 2, 0.82, 1.02, true);
+  // the wrist cord: from the butt round the wrist (where the hand's pose puts the wrist in the paddle's frame: about
+  // 5 cm off the face's normal side and 4 cm under the grip; the forearm leaves it along (0.78, −0.62))
+  const loop: THREE.Vector3[] = [new THREE.Vector3(0, BUTT - 0.004, 0)];
+  const C = new THREE.Vector3(0.056, -0.046, 0);
+  const e1 = new THREE.Vector3(0.62, 0.78, 0).multiplyScalar(0.04);
+  const e2 = new THREE.Vector3(0, 0, 0.04);
+  for (let i = 0; i < 10; i++) {
+    const a = Math.PI + 0.35 + (i / 9) * (Math.PI * 2 - 0.7);
+    loop.push(C.clone().addScaledVector(e1, Math.cos(a)).addScaledVector(e2, Math.sin(a)));
+  }
+  const cord = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(loop, true), 16, 0.0026, 4, true).toNonIndexed();
+  const face = mergeGeometries([caps, walls])!;
+  const guard = mergeGeometries([rim, collar, butt])!;
+  const grip = mergeGeometries([handle, cord])!;
+  const g = mergeGeometries([face, guard, grip], true)!;
+  flat.dispose();
   geoCache.set(shape, g);
   return g;
 }
@@ -174,8 +337,8 @@ function weaveTexture(): THREE.Texture | null {
   x.putImageData(img, 0, 0);
   const t = new THREE.CanvasTexture(c);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  // (tows about 4 mm wide: a 12K-style weave that still shows in a close-up)
-  t.repeat.set(6, 8.5);
+  // (tows about 4 mm wide over the 28 × 46 cm the face texture spans: a 12K-style weave that still shows close up)
+  t.repeat.set(8, 13);
   weave = t;
   return t;
 }
@@ -212,74 +375,88 @@ function overgripTexture(): THREE.Texture | null {
   return t;
 }
 
-/** The face's art: base, the sweep and its line, the inset outline, the mark, and the edge guard's band round it. */
+/** The face's art: base, the sweep and its line, the inset outline, the mark, the frame's band round the rim. */
 function faceTexture(shape: Shape, look: PaddleLook, guard: number): THREE.Texture | null {
   const S = SHAPES[shape];
-  const y0 = S.handle - 0.008;
-  const Hf = S.top - y0;
+  const span = 2 * (S.hw + TEX_PAD);
+  const Hf = S.top - BUTT;
   const cv = canvas(256, 512);
   if (!cv) return null;
   const [c, x] = cv;
+  const ol = outlinePts(shape);
+  const trace = (k: number, dy = 0) => {
+    // the outline scaled about the middle of the head (k < 1: an inset line)
+    x.beginPath();
+    ol.forEach(([px, py], i) => {
+      const X = px * k;
+      const Y = S.mid + (py - S.mid) * k + dy;
+      if (i) x.lineTo(X, Y);
+      else x.moveTo(X, Y);
+    });
+    x.closePath();
+  };
   // draw in metres on the face: x across (0 in the middle), y up from the grip
-  x.setTransform(256 / S.W, 0, 0, -512 / Hf, 128, (512 * S.top) / Hf);
+  x.setTransform(256 / span, 0, 0, -512 / Hf, 128, (512 * S.top) / Hf);
   const base = look.face === 'carbon' ? 0x26282c : look.face === 'light' ? 0xe6e9ec : look.graphic;
   x.fillStyle = css(base);
-  x.fillRect(-S.W, y0 - 0.02, S.W * 2, Hf + 0.04);
+  x.fillRect(-span, BUTT - 0.02, span * 2, Hf + 0.04);
   // a soft sheen band across the carbon (the weave catches the light in stripes)
   if (look.face === 'carbon') {
-    const b = x.createLinearGradient(-S.W / 2, y0, S.W / 2, S.top);
+    const b = x.createLinearGradient(-S.hw, S.base, S.hw, S.top);
     b.addColorStop(0, 'rgba(255,255,255,0)');
     b.addColorStop(0.55, 'rgba(255,255,255,0.05)');
     b.addColorStop(1, 'rgba(255,255,255,0)');
     x.fillStyle = b;
-    x.fillRect(-S.W, y0 - 0.02, S.W * 2, Hf + 0.04);
+    x.fillRect(-span, BUTT, span * 2, Hf);
   }
   if (look.face === 'glass') {
-    const b = x.createLinearGradient(0, y0, 0, S.top);
+    const b = x.createLinearGradient(0, S.base, 0, S.top);
     b.addColorStop(0, 'rgba(0,0,0,0.28)');
     b.addColorStop(0.6, 'rgba(0,0,0,0)');
     b.addColorStop(1, 'rgba(255,255,255,0.08)');
     x.fillStyle = b;
-    x.fillRect(-S.W, y0 - 0.02, S.W * 2, Hf + 0.04);
+    x.fillRect(-span, BUTT, span * 2, Hf);
   }
-  // the sweep: a wide band rising across the lower half, and its thin line
+  // the sweep: a wide band rising across the lower half of the head, and its thin lines
   const sweep = look.face === 'glass' ? 0x14161a : look.graphic;
   const band = (yl: number, yr: number, w: number, col: string) => {
     x.fillStyle = col;
     x.beginPath();
-    x.moveTo(-S.W, yl);
-    x.lineTo(S.W, yr);
-    x.lineTo(S.W, yr + w);
-    x.lineTo(-S.W, yl + w);
+    x.moveTo(-span, yl);
+    x.lineTo(span, yr);
+    x.lineTo(span, yr + w);
+    x.lineTo(-span, yl + w);
     x.closePath();
     x.fill();
   };
-  band(y0 + 0.02, y0 + 0.13, 0.055, css(sweep));
-  band(y0 + 0.085, y0 + 0.195, 0.006, css(look.graphic2));
-  band(y0 + 0.1, y0 + 0.21, 0.0025, css(look.graphic2, 0.8));
-  // the inset outline, inside the guard
+  band(S.base + 0.0, S.base + 0.1, 0.06, css(sweep));
+  band(S.base + 0.07, S.base + 0.17, 0.006, css(look.graphic2));
+  band(S.base + 0.085, S.base + 0.185, 0.0025, css(look.graphic2, 0.8));
+  // the inset outline, inside the frame
   x.strokeStyle = css(look.graphic2, 0.9);
   x.lineWidth = 0.0012;
-  x.beginPath();
-  outline(x, S.W - 0.03, y0 + 0.015, S.top - 0.015, Math.max(0.01, S.rT - 0.012), Math.max(0.01, S.rB - 0.012));
+  trace(0.86);
   x.stroke();
-  // the mark, at the throat and small near the top
+  // the mark, big over the sweet spot's top and small at the throat
   x.fillStyle = css(look.face === 'light' ? look.graphic : 0xf2f2f2);
   x.save();
-  x.translate(0, y0 + 0.045);
+  x.translate(0, S.top - 0.045);
   markPath(x, 0.05);
   x.restore();
   x.fillStyle = css(look.graphic2);
   x.save();
-  x.translate(0, S.top - 0.035);
-  markPath(x, 0.022);
+  x.translate(0, THROAT + 0.02);
+  markPath(x, 0.018);
   x.restore();
-  // the edge guard's band on the face (about 7 mm in from the rim)
+  // the frame's band on the face (about 8 mm in from the rim)
   x.strokeStyle = css(guard);
-  x.lineWidth = 0.014;
-  x.beginPath();
-  outline(x, S.W, y0, S.top, S.rT, S.rB);
+  x.lineWidth = 0.016;
+  trace(1);
   x.stroke();
+  // the left edge column: the foam core the holes show (pale grey EVA)
+  x.setTransform(1, 0, 0, 1, 0, 0);
+  x.fillStyle = '#c9ccd0';
+  x.fillRect(0, 0, 3, 512);
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   t.anisotropy = 4;
@@ -331,28 +508,13 @@ export function paddleMesh(color: number, edge: number, look?: PaddleLook): THRE
 
 // ------------------------------------------------------------------ the ball
 
-/** where the 40 holes are: per half, one at the pole, 7 round it and 12 nearer the seam; the halves turned apart */
-function holes(): THREE.Vector3[] {
-  const out: THREE.Vector3[] = [];
-  const ring = (polar: number, n: number, off: number, south: boolean) => {
-    for (let i = 0; i < n; i++) {
-      const a = ((i + off) / n) * Math.PI * 2;
-      const t = south ? Math.PI - polar : polar;
-      out.push(new THREE.Vector3(-Math.cos(a) * Math.sin(t), Math.cos(t), Math.sin(a) * Math.sin(t)));
-    }
-  };
-  for (const s of [false, true]) {
-    ring(0, 1, 0, s);
-    ring(0.7, 7, s ? 0.5 : 0, s);
-    ring(1.27, 12, s ? 0.5 : 0.25, s);
-  }
-  return out;
-}
-
-/** the ball's colour and its relief (white outside the holes, black in them; also what glows) */
+/**
+ * The ball's felt: optic yellow, the fibres' grain, and the seam (a white curve of a tennis ball's shape: the two
+ * dumbbells' edge) that shows it turning. R G B: colour; a second, small map: the fuzz's relief (bump).
+ */
 function ballTextures(): { map: THREE.Texture; bump: THREE.Texture } | null {
-  const W = 512;
-  const H = 256;
+  const W = 256;
+  const H = 128;
   const cv = canvas(W, H);
   const cb = canvas(W / 2, H / 2);
   if (!cv || !cb) return null;
@@ -360,73 +522,45 @@ function ballTextures(): { map: THREE.Texture; bump: THREE.Texture } | null {
   const [c2, x2] = cb;
   const img = x.createImageData(W, H);
   const img2 = x2.createImageData(W / 2, H / 2);
-  const hs = holes();
-  const R = 0.092; // a hole's angular radius (about 7 mm across on a 74 mm ball)
-  // the printed mark: two on opposite sides, between the rings
-  const marks = [new THREE.Vector3(), new THREE.Vector3()];
-  marks[0].set(-Math.cos(0.3) * Math.sin(0.98), Math.cos(0.98), Math.sin(0.3) * Math.sin(0.98));
-  marks[1].set(-Math.cos(0.3 + Math.PI) * Math.sin(Math.PI - 0.98), Math.cos(Math.PI - 0.98), Math.sin(0.3 + Math.PI) * Math.sin(Math.PI - 0.98));
-  const frames = marks.map((m) => {
-    const e1 = new THREE.Vector3(0, 1, 0).cross(m).normalize();
-    const e2 = m.clone().cross(e1);
-    return { m, e1, e2 };
-  });
-  const base = [220, 255, 60];
+  let seed = 11;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  // the seam: the curve of a tennis ball (the classic parametrisation), sampled
+  const seam: THREE.Vector3[] = [];
+  const a = 0.44;
+  for (let i = 0; i < 160; i++) {
+    const t = (i / 160) * Math.PI * 2;
+    const v = new THREE.Vector3((1 - a) * Math.cos(t) + a * Math.cos(3 * t), (1 - a) * Math.sin(t) - a * Math.sin(3 * t), 2 * Math.sqrt(a * (1 - a)) * Math.sin(2 * t));
+    seam.push(v.normalize());
+  }
   const d = new THREE.Vector3();
-  // (each row only looks at the holes whose ring is near it)
-  const polar = hs.map((hc) => Math.acos(Math.max(-1, Math.min(1, hc.y))));
-  let rowTh = -1;
-  let cand: THREE.Vector3[] = hs;
-  const relief = (px: number, py: number, w: number, h: number) => {
+  const near = (px: number, py: number, w: number, h: number) => {
     const th = ((py + 0.5) / h) * Math.PI;
-    if (th !== rowTh) {
-      rowTh = th;
-      cand = hs.filter((_, k) => Math.abs(polar[k] - th) < R + 0.06);
-    }
     const ph = ((px + 0.5) / w) * Math.PI * 2;
     d.set(-Math.cos(ph) * Math.sin(th), Math.cos(th), Math.sin(ph) * Math.sin(th));
-    let near = -1;
-    for (const hc of cand) near = Math.max(near, d.dot(hc));
-    return { best: near > -1 ? Math.acos(Math.min(1, near)) : 9, th };
+    let best = 9;
+    for (const q of seam) best = Math.min(best, d.distanceToSquared(q));
+    return Math.sqrt(best);
   };
+  const base = [214, 236, 52];
   for (let j = 0; j < H; j++)
     for (let i = 0; i < W; i++) {
-      const { best, th } = relief(i, j, W, H);
-      let col = base.slice();
-      // the moulding seam round the middle
-      const seam = Math.abs(th - Math.PI / 2);
-      if (seam < 0.012) col = col.map((v, k) => v * (k === 2 ? 1 : 0.86));
-      // a hole: the wall in shadow inside, a light rim round it
-      if (best < R) {
-        const f = best / R;
-        const k = 0.36 + 0.2 * f * f;
-        col = [base[0] * k, base[1] * k, base[2] * k * 0.6];
-      } else if (best < R + 0.025) {
-        const f = 1 - (best - R) / 0.025;
-        col = col.map((v) => v + (255 - v) * 0.35 * f);
-      }
-      // the printed mark
-      for (const fr of frames) {
-        const dz = d.dot(fr.m);
-        if (dz < 0.9) continue;
-        const qx = d.dot(fr.e1) / 0.11;
-        const qy = d.dot(fr.e2) / 0.11;
-        const sx = qx - 0.22 * qy;
-        const ax = Math.abs(sx);
-        const dd = Math.max(Math.min(Math.abs(qy - 0.17 + 0.78 * ax) - 0.09, Math.abs(qy + 0.15 + 0.78 * ax) - 0.09), ax - 0.44);
-        if (dd < 0) col = [28, 32, 26];
-      }
+      const sd = near(i, j, W, H);
+      const fuzz = 0.9 + rnd() * 0.16;
+      let col = base.map((v) => v * fuzz);
+      // the seam: a white rubber line ~4 mm wide, a little furrow each side
+      if (sd < 0.045) col = [236, 238, 226];
+      else if (sd < 0.07) col = col.map((v) => v * 0.86);
       const o = (j * W + i) * 4;
-      img.data[o] = col[0];
-      img.data[o + 1] = col[1];
-      img.data[o + 2] = col[2];
+      img.data[o] = Math.min(255, col[0]);
+      img.data[o + 1] = Math.min(255, col[1]);
+      img.data[o + 2] = Math.min(255, col[2]);
       img.data[o + 3] = 255;
     }
   for (let j = 0; j < H / 2; j++)
     for (let i = 0; i < W / 2; i++) {
-      const { best, th } = relief(i, j, W / 2, H / 2);
-      let k = best < R ? 0.1 + 0.25 * Math.pow(best / R, 3) : 1;
-      if (Math.abs(th - Math.PI / 2) < 0.012) k *= 0.85;
+      const sd = near(i, j, W / 2, H / 2);
+      let k = 0.75 + rnd() * 0.25;
+      if (sd < 0.045) k = 0.55;
       const o = (j * (W / 2) + i) * 4;
       img2.data[o] = img2.data[o + 1] = img2.data[o + 2] = k * 255;
       img2.data[o + 3] = 255;
@@ -441,18 +575,30 @@ function ballTextures(): { map: THREE.Texture; bump: THREE.Texture } | null {
 }
 
 /**
- * The ball (radius r): optic yellow plastic, a little satin, with its own glow (neon plastic stays bright in the
- * shade; none in the holes).
+ * The ball (radius r): yellow felt, matte, with the fuzz brighter at its edge against the light (a sheen term) and a
+ * touch of its own glow (fluorescent dye stays bright in the shade).
  */
 export function ballMesh(r: number): THREE.Mesh {
   const t = ballTextures();
   const mat = new THREE.MeshStandardMaterial({
-    color: t ? 0xffffff : 0xdcff3c,
+    color: t ? 0xffffff : 0xd6ec34,
     map: t?.map ?? null,
-    roughness: 0.42,
-    emissive: 0x6a7d00,
-    emissiveIntensity: 0.45,
-    ...(t ? { bumpMap: t.bump, bumpScale: 2.5, emissiveMap: t.bump } : {}),
+    roughness: 0.92,
+    emissive: 0x5d6e00,
+    emissiveIntensity: 0.5,
+    ...(t ? { bumpMap: t.bump, bumpScale: 1.2 } : {}),
   });
-  return new THREE.Mesh(new THREE.SphereGeometry(r, 24, 16), mat);
+  mat.onBeforeCompile = (s) => {
+    // the felt's fuzz: lit fibres stand out at the silhouette
+    s.fragmentShader = s.fragmentShader.replace(
+      '#include <opaque_fragment>',
+      `{
+        float rimF = pow( 1.0 - saturate( dot( normal, geometryViewDir ) ), 2.5 );
+        outgoingLight += diffuseColor.rgb * rimF * 0.35;
+      }
+      #include <opaque_fragment>`,
+    );
+  };
+  mat.customProgramCacheKey = () => 'pb-felt';
+  return new THREE.Mesh(new THREE.SphereGeometry(r, 20, 14), mat);
 }

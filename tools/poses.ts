@@ -121,7 +121,7 @@ function makeRun(a: CharAssets, mode: string, i: number): Run {
         { team: 1, human: false, speed: pair.a.skill.speed, reaction: pair.a.skill.reaction, look: 0 },
         { team: 1, human: false, speed: pair.b.skill.speed, reaction: pair.b.skill.reaction, look: 0 },
       ],
-      { scoring: 'rally', to: 11 },
+      { games: 6, golden: true },
       seed,
     );
     m.setControllers([new AIController(RIVALS[2].skill), new AIController(PARTNER.skill), new AIController(pair.a.skill), new AIController(pair.b.skill)]);
@@ -129,19 +129,24 @@ function makeRun(a: CharAssets, mode: string, i: number): Run {
     const chars = m.players.map(() => new CharacterView(a, kit));
     return { m, chars, gate: () => true, tick() {}, after() {}, label: `dobles ${pair.a.name}+${pair.b.name}` };
   }
-  const rv = RIVALS[(i + 1) % RIVALS.length];
+  // (padel is always two a side: the human, or a CPU player, with the partner against a pair)
+  const rv = PAIRS[(i + 1) % PAIRS.length];
+  const four = (human: boolean) =>
+    new Match(
+      [
+        { team: 0, human, speed: HUMAN_SPEED, reaction: HUMAN_REACTION, look: 0 },
+        { team: 0, human: false, speed: PARTNER.skill.speed, reaction: PARTNER.skill.reaction, look: 0 },
+        { team: 1, human: false, speed: rv.a.skill.speed, reaction: rv.a.skill.reaction, look: 0 },
+        { team: 1, human: false, speed: rv.b.skill.speed, reaction: rv.b.skill.reaction, look: 0 },
+      ],
+      { games: 6, golden: true },
+      seed,
+    );
   if (mode === 'human') {
     const lv = Object.values(HUMANS)[i % 3];
     const bot = new ThumbBot(lv, 1, seed + 17);
-    const m = new Match(
-      [
-        { team: 0, human: true, speed: HUMAN_SPEED, reaction: HUMAN_REACTION, look: 0 },
-        { team: 1, human: false, speed: rv.skill.speed, reaction: rv.skill.reaction, look: rv.look },
-      ],
-      { scoring: 'rally', to: 11 },
-      seed,
-    );
-    m.setControllers([bot.ctl as unknown as Controller, new AIController(rv.skill)]);
+    const m = four(true);
+    m.setControllers([bot.ctl as unknown as Controller, new AIController(PARTNER.skill), new AIController(rv.a.skill), new AIController(rv.b.skill)]);
     bot.attach(m);
     m.start();
     const chars = m.players.map(() => new CharacterView(a, kit));
@@ -151,21 +156,14 @@ function makeRun(a: CharAssets, mode: string, i: number): Run {
       gate: (k) => !m.players[k].human || bot.ctl.willSwing(m, m.players[k]),
       tick: () => bot.tick(m),
       after: () => bot.events(m.events),
-      label: `humano(${Object.keys(HUMANS)[i % 3]}) vs ${rv.name}`,
+      label: `humano(${Object.keys(HUMANS)[i % 3]}) vs ${rv.a.name}+${rv.b.name}`,
     };
   }
-  const m = new Match(
-    [
-      { team: 0, human: false, speed: HUMAN_SPEED, reaction: HUMAN_REACTION, look: 0 },
-      { team: 1, human: false, speed: rv.skill.speed, reaction: rv.skill.reaction, look: rv.look },
-    ],
-    { scoring: 'rally', to: 11 },
-    seed,
-  );
-  m.setControllers([new AIController(RIVALS[(i + 3) % RIVALS.length].skill), new AIController(rv.skill)]);
+  const m = four(false);
+  m.setControllers([new AIController(RIVALS[(i + 3) % RIVALS.length].skill), new AIController(PARTNER.skill), new AIController(rv.a.skill), new AIController(rv.b.skill)]);
   m.start();
   const chars = m.players.map(() => new CharacterView(a, kit));
-  return { m, chars, gate: () => true, tick() {}, after() {}, label: `cpu vs ${rv.name}` };
+  return { m, chars, gate: () => true, tick() {}, after() {}, label: `cpu vs ${rv.a.name}+${rv.b.name}` };
 }
 
 (async () => {

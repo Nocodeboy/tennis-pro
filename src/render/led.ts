@@ -210,10 +210,11 @@ export function screenCanvas(): { canvas: HTMLCanvasElement; tex: THREE.CanvasTe
 }
 
 /**
- * Repaints the video board and the LED score with the names, the score and who serves. `intro`: the match is being
- * presented (the board shows who plays whom instead of the score).
+ * Repaints the video board and the LED score with the teams' names, their games in the set, the points of the game
+ * being played ("0" "15" "30" "40" "AD", or the tie-break's count) and who serves. `intro`: the match is being presented
+ * (the board shows who plays whom instead of the score).
  */
-export function drawScreen(b: { canvas: HTMLCanvasElement; tex: THREE.CanvasTexture }, left: string, right: string, sl: number, sr: number, serving: 0 | 1 | null, footer: string, intro = false) {
+export function drawScreen(b: { canvas: HTMLCanvasElement; tex: THREE.CanvasTexture }, left: string, right: string, games: [number, number], points: [string, string], serving: 0 | 1 | null, footer: string, intro = false) {
   const x = b.canvas.getContext('2d')!;
   const w = b.canvas.width;
   // ---- the video board (1024 × 384)
@@ -231,7 +232,6 @@ export function drawScreen(b: { canvas: HTMLCanvasElement; tex: THREE.CanvasText
   x.fillStyle = '#1b2533';
   x.fillRect(48, 167, w - 96, 3);
   const names = [left, right];
-  const scores = [sl, sr];
   if (intro) {
     // who plays whom
     x.fillStyle = INK;
@@ -249,12 +249,19 @@ export function drawScreen(b: { canvas: HTMLCanvasElement; tex: THREE.CanvasText
   for (let i = 0; i < (intro ? 0 : 2); i++) {
     x.textAlign = 'left';
     x.fillStyle = WHITE;
-    fitText(x, names[i], 84, 700, HEAD_FONT, 600);
+    fitText(x, names[i], 76, 700, HEAD_FONT, 560);
     x.fillText(names[i], 96, rowY[i]);
+    // the games (white) and, in a box of their own, the points of the game (ball yellow)
     x.textAlign = 'right';
+    x.fillStyle = WHITE;
+    x.font = `700 104px ${HEAD_FONT}`;
+    x.fillText(String(games[i]), w - 238, rowY[i] + 4);
+    x.fillStyle = '#16202c';
+    x.fillRect(w - 214, rowY[i] - 50, 168, 100);
     x.fillStyle = BALL;
-    x.font = `700 118px ${HEAD_FONT}`;
-    x.fillText(String(scores[i]), w - 70, rowY[i] + 4);
+    x.textAlign = 'center';
+    fitText(x, points[i], 96, 700, HEAD_FONT, 150);
+    x.fillText(points[i], w - 130, rowY[i] + 4);
     if (serving === i) {
       x.beginPath();
       x.arc(62, rowY[i], 13, 0, Math.PI * 2);
@@ -269,7 +276,7 @@ export function drawScreen(b: { canvas: HTMLCanvasElement; tex: THREE.CanvasText
   x.textAlign = 'center';
   fitText(x, footer, 38, 700, HEAD_FONT, w - 120);
   x.fillText(footer, w / 2, h - 36);
-  // ---- the score as an LED message (1024 × 128, drawn stretched as the atlas rows)
+  // ---- the score as an LED message (1024 × 128, drawn stretched as the atlas rows): "NAME 3 · 40 – 15 · 2 NAME"
   x.save();
   x.translate(0, h);
   x.beginPath();
@@ -283,11 +290,12 @@ export function drawScreen(b: { canvas: HTMLCanvasElement; tex: THREE.CanvasText
   x.fillRect(0, ROW_H - 7, rw, 3);
   x.fillRect(0, 4, rw, 3);
   x.textBaseline = 'middle';
-  const a = `${left} ${sl}`;
-  const bb = `${sr} ${right}`;
-  fitText(x, `${a} – ${bb}`, 72, 700, HEAD_FONT, rw * 0.7);
+  const a = `${left} ${games[0]}`;
+  const mid = `  ${points[0]} – ${points[1]}  `;
+  const bb = `${games[1]} ${right}`;
+  fitText(x, a + mid + bb, 72, 700, HEAD_FONT, rw * 0.78);
   const wa = x.measureText(a).width;
-  const wd = x.measureText(' – ').width;
+  const wd = x.measureText(mid).width;
   const wb = x.measureText(bb).width;
   let cx = (rw - wa - wd - wb) / 2;
   x.textAlign = 'left';
@@ -295,7 +303,7 @@ export function drawScreen(b: { canvas: HTMLCanvasElement; tex: THREE.CanvasText
   x.fillText(a, cx, ROW_H * 0.54);
   cx += wa;
   x.fillStyle = BALL;
-  x.fillText(' – ', cx, ROW_H * 0.54);
+  x.fillText(mid, cx, ROW_H * 0.54);
   cx += wd;
   x.fillStyle = WHITE;
   x.fillText(bb, cx, ROW_H * 0.54);

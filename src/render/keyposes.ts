@@ -489,6 +489,12 @@ function restArms(r: Rig, k: Kin, g = REST) {
  * The server, before the wind-up: the ball held in the free hand in front of the body at the waist (the arm bent,
  * the palm up), the paddle down by the right side, its head low and its face to the net, ready to go back.
  */
+/**
+ * The serve: the free hand lets the ball go this long before the contact (s). It falls from the hand, bounces once
+ * and is met on its way up at the contact height (view.ts draws that flight; match.ts, SERVE_WINDUP: the wind-up is
+ * 0.87 s).
+ */
+export const SERVE_DROP = 0.8;
 export const SERVE_SET = {
   drop: 0.025,
   back: 0.025,
@@ -900,11 +906,11 @@ export function refineClips(template: THREE.Object3D, clips: Record<string, THRE
         return r.grab();
       }),
     );
-    // the serve from there: the paddle goes back from the set pose into the clip's swing; the ball stays in the
-    // free hand, in front, until it is let go (BALL_DROP before the contact), then the free arm stays in front of the
+    // the padel serve from there: the free hand lets the ball go as the paddle starts back (SERVE_DROP before the
+    // contact: it bounces once and is met on the way up, below the waist), then the free arm stays in front of the
     // body and comes in after the contact (the clip flung it out to the side, the ball held at shoulder height)
     const K = 0.87;
-    const drop = K - 0.35;
+    const drop = Math.max(0.02, K - SERVE_DROP);
     const times = timesOf(serve.duration);
     const P = SERVE_SET.palm;
     const keys: FreeKey[] = [

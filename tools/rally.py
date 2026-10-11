@@ -14,7 +14,7 @@ threading.Thread(target=srv.serve_forever, daemon=True).start()
 ARGS = ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist']
 ST = """(() => { const m = window.__pb.match; const me = m.players[0]; const tg = m.targetFor(0);
   return { phase: m.phase, last: m.rally && m.rally.last ? m.rally.last.id : -1, plan: me.plan ? me.plan.t - m.t : null,
-    tg: tg ? { t: tg.t - m.t, d: Math.hypot(me.x - tg.fx, me.z - tg.fz) } : null, score: m.score.join('-') }; })()"""
+    tg: tg ? { t: tg.t - m.t, d: Math.hypot(me.x - tg.fx, me.z - tg.fz) } : null, score: m.games.join('-') + ' ' + m.pointText(0) + '-' + m.pointText(1) }; })()"""
 with sync_playwright() as p:
     b = p.chromium.launch(args=ARGS)
     pg = b.new_page(viewport={'width': 390, 'height': 760}, device_scale_factor=1, has_touch=True, is_mobile=True)

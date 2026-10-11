@@ -1,14 +1,15 @@
-// Why the point was won or lost, in one short line with a number from the point itself (how high the dink crossed
-// the net, how far long the drive went, how late the player set off and how far the ball was), and, when the same
-// mistake keeps coming back, a short tip between points (Coach).
+// Why the point was won or lost, in one short line with a number from the point itself (how far under the tape the
+// ball met the net, how late the player set off and how far the ball was), in padel's terms: the net, out over the
+// walls, straight into their glass, a double fault, «por 3» and «por 4», a winner; and, when the same mistake keeps
+// coming back, a short tip between points (Coach).
 //
 // No DOM: it reads the match's events and, once a frame, the match (where the players are, the suggested circle), so
 // the bots can measure it (tools/review/explain.ts). Nothing here changes the match.
 
 import { bounce, groundTime, posAt, type Seg } from './sim/ball';
-import { HL, LINE, NET_C, NVZ, R, W, inHalf, inServiceCourt, netHeight } from './sim/court';
+import { AT_NET, HL, LINE, NET_C, R, SERVICE, inHalf, inServiceCourt, netHeight } from './sim/court';
 import { CPU_LUNGE, HUMAN_FEET, SUGGEST, footStep, type Feet, type Match } from './sim/match';
-import type { MatchEvent, ShotKind, Timing } from './sim/types';
+import type { MatchEvent, ServeFault, ShotKind, Timing } from './sim/types';
 import { lang, t } from './i18n';
 
 type HitEvent = Extract<MatchEvent, { type: 'hit' }>;
@@ -59,8 +60,6 @@ interface Track {
   going: boolean;
   /** distance to the latest circle when its moment came (or when the point ended) */
   endD: number | null;
-  /** m inside the kitchen while a volley was coming (plan.oops) */
-  oops: number;
 }
 
 /** The explanation of a point: the line (an i18n key and its values, and the text) and the pattern behind it. */
@@ -76,7 +75,7 @@ export interface Why {
 
 const SEE = SUGGEST.see;
 const SOFT = new Set<ShotKind>(['dink', 'drop', 'auto']);
-const ATTACK = new Set<ShotKind>(['speedup', 'smash']);
+const ATTACK = new Set<ShotKind>(['speedup', 'smash', 'vibora', 'bandeja']);
 
 const dec = (v: number, n = 1) => {
   const s = v.toFixed(n);
@@ -94,6 +93,10 @@ export class Explainer {
   private hits: HitRec[] = [];
   private bounces: { x: number; z: number; good: boolean; first: boolean; hit: number }[] = [];
   private nets: { x: number; y: number; tape: boolean; hit: number }[] = [];
+  /** the glass and mesh the ball met, by shot */
+  private walls: { surface: 'glass' | 'mesh'; hit: number }[] = [];
+  /** the last serve fault (a double fault is explained by the second one) */
+  private fault: ServeFault | null = null;
   private tracks: Track[] = [];
   /**
    * The other side's players who planned to play our shot: whether they could reach it, the spot and moment of the
@@ -114,6 +117,7 @@ export class Explainer {
     this.hits = [];
     this.bounces = [];
     this.nets = [];
+    this.walls = [];
     this.tracks = [];
     this.tried = [];
     this.mateTry = null;
@@ -178,7 +182,6 @@ export class Explainer {
         } else if (vt < 0.5 && tr.going && d > 0.3) tr.going = false;
       }
       if (ref && tr.endD === null && m.t >= ref.t - 1e-6) tr.endD = Math.hypot(ref.fx - p.x, ref.fz - p.z);
-      if (p.plan?.oops) tr.oops = Math.max(tr.oops, NVZ + LINE - Math.abs(p.z));
     }
   }
 
@@ -196,6 +199,12 @@ export class Explainer {
         return null;
       case 'net':
         if (this.hits.length) this.nets.push({ x: e.x, y: e.y, tape: e.tape, hit: this.hits.length - 1 });
+        return null;
+      case 'wall':
+        if (this.hits.length) this.walls.push({ surface: e.surface, hit: this.hits.length - 1 });
+        return null;
+      case 'fault':
+        this.fault = e.fault;
         return null;
       case 'point': {
         let w: Why | null = null;
@@ -247,7 +256,7 @@ export class Explainer {
     if (p.team !== my) {
       // the ball comes to us: follow what each human player does about it
       for (const q of m.players)
-        if (q.team === my && q.human) this.tracks.push({ pid: q.id, hit: this.hits.length - 1, t0: rec.t, x0: q.x, z0: q.z, vx0: q.vx, vz0: q.vz, first: null, last: null, start: null, going: false, endD: null, oops: 0 });
+        if (q.team === my && q.human) this.tracks.push({ pid: q.id, hit: this.hits.length - 1, t0: rec.t, x0: q.x, z0: q.z, vx0: q.vx, vz0: q.vz, first: null, last: null, start: null, going: false, endD: null });
     }
   }
 
@@ -258,7 +267,7 @@ export class Explainer {
   private name(pid: number) {
     return this.names[pid] ?? '?';
   }
-  /** "your dink" / "Bruno's dink" (Spanish: "tu dejada" / "la dejada de Bruno") */
+  /** "your chiquita" / "Galván's smash" (Spanish: "tu chiquita" / "el remate de Galván") */
   private shot(m: Match, h: HitRec): string {
     // (a block is a dink or a drop with the tap's intent: named as what the player did)
     const k = h.intent === 'block' ? 'block' : h.kind;
@@ -277,32 +286,25 @@ export class Explainer {
     const L = hits[hits.length - 1];
     const li = hits.length - 1;
     switch (e.reason) {
-      case 'serveOut':
-      case 'serveKitchen':
+      case 'doubleFault':
         return this.serveFault(m, e, L, li);
       case 'net':
       case 'out':
+      case 'wall':
         return this.error(m, e, L, li, my);
-      case 'kitchen': {
-        const pid = e.fault ?? L.pid;
-        const f = e.feet ?? { x: m.players[pid].x, z: m.players[pid].z };
-        const inside = Math.max(0.01, NVZ + LINE - Math.abs(f.z));
-        if (this.isMe(m, pid)) return this.line('x.kitchenMe', { d: fmtLen(inside) }, 'kitchen', { inside });
-        return this.line('x.kitchen', { name: this.name(pid) }, null, { inside });
-      }
       case 'twoBounce': {
         const pid = e.fault ?? L.pid;
-        const key = e.rally <= 1 ? 'x.twoReturn' : 'x.twoThird';
-        return this.line(this.isMe(m, pid) ? key + 'Me' : key, { name: this.name(pid) }, null, { rally: e.rally });
+        return this.line(this.isMe(m, pid) ? 'x.twoReturnMe' : 'x.twoReturn', { name: this.name(pid) }, this.isMe(m, pid) ? 'return' : null, { rally: e.rally });
       }
-      case 'letGo': {
-        const tr = this.trackOf(li, m);
-        const d = tr?.oops ?? 0;
-        if (d > 0) return this.line('x.letGo', { d: fmtLen(d) }, 'kitchen', { inside: d });
-        return this.line('x.letGoNo', {}, 'kitchen', {});
+      case 'exit':
+      case 'back': {
+        // «por 3» (out of the court over the walls after bouncing) or «por 4» (back over the net)
+        const k = e.reason === 'exit' ? 'x.exit' : 'x.back';
+        return this.line(L.team === my ? k : k + 'Them', { S: this.shot(m, L) }, null, { reason: e.reason, kind: L.kind, speed: L.speed });
       }
       case 'winner':
       case 'miss':
+      case 'letGo':
         return L.team === my ? this.ourWinner(m, e, L, li) : this.theirWinner(m, e, L, li, my);
     }
     return null;
@@ -322,7 +324,7 @@ export class Explainer {
     if (me && (h.timing === 'early' || h.timing === 'late')) return { key: h.timing === 'early' ? 'xc.early' : 'xc.late', vars: {}, tag: 'release', data: { timing: h.timing } };
     if (me && h.kind !== 'serve' && !inHalf(h.tx, h.tz, recvSide)) return { key: 'xc.aimOut', vars: {}, tag: 'aimOut', data: { tx: h.tx, tz: h.tz } };
     if (me && out && edge !== null && edge < 0.3) return { key: 'xc.edge', vars: { d: fmtLen(Math.max(0.01, edge)) }, tag: 'edge', data: { edge } };
-    if ((h.kind === 'speedup' || h.kind === 'drive') && h.y < NET_C - 0.05 && hz < 4.5)
+    if ((h.kind === 'speedup' || h.kind === 'drive') && h.y < NET_C - 0.05 && hz < AT_NET)
       return { key: me ? 'xc.lowMe' : 'xc.low', vars: { ...nm, d: fmtLen(h.y) }, tag: me ? 'netLow' : null, data: { y: h.y, hz } };
     if (h.avail !== null && h.avail < 0.45) return { key: me ? 'xc.rushMe' : 'xc.rush', vars: { ...nm, s: fmtSec(h.avail) }, tag: null, data: { avail: h.avail } };
     if (h.vin >= 14) return { key: me ? 'xc.fastMe' : 'xc.fast', vars: { ...nm, v: fmtKmh(h.vin) }, tag: null, data: { vin: h.vin } };
@@ -332,29 +334,21 @@ export class Explainer {
     return null;
   }
 
-  /** How a ball went out: long or wide, and by how much (from its bounce). */
-  private outOf(b: { x: number; z: number }): { way: 'long' | 'wide'; by: number } {
-    const long = Math.abs(b.z) - HL - LINE;
-    const wide = Math.abs(b.x) - W / 2 - LINE;
-    return long >= wide ? { way: 'long', by: Math.max(0.01, long) } : { way: 'wide', by: Math.max(0.01, wide) };
-  }
-
-  /** A ball into the net or out (the faulting player's last shot). */
+  /** A ball into the net, out over the walls or straight into their glass (the faulting player's last shot). */
   private error(m: Match, e: PointEvent, L: HitRec, li: number, my: 0 | 1): Why | null {
     const pid = e.fault ?? L.pid;
     const h = L.pid === pid ? L : [...this.hits].reverse().find((x) => x.pid === pid) ?? L;
+    const hi = this.hits.indexOf(h);
     const recvSide = (h.team === 0 ? -1 : 1) as 1 | -1;
     let outcome: { key: string; vars: Record<string, string>; data: Why['data']; tag: string | null };
     if (e.reason === 'net') {
-      const n = this.nets.find((x) => x.hit === li && !x.tape) ?? this.nets[this.nets.length - 1];
+      const n = this.nets.find((x) => x.hit === hi && !x.tape) ?? this.nets[this.nets.length - 1];
       const below = n ? Math.max(0.01, netHeight(n.x) + R - n.y) : 0.01;
       outcome = { key: 'net', vars: { d: fmtLen(below) }, data: { below }, tag: SOFT.has(h.kind) ? 'netSoft' : null };
-    } else {
-      const b = this.bounces.find((x) => x.hit === li && x.first && !x.good) ?? this.bounces[this.bounces.length - 1];
-      if (!b) return null;
-      const o = this.outOf(b);
-      outcome = { key: o.way, vars: { d: fmtLen(o.by) }, data: { way: o.way, by: o.by, bx: b.x, bz: b.z }, tag: o.way === 'long' ? 'outLong' : 'outWide' };
-    }
+    } else if (e.reason === 'wall') {
+      const w = this.walls.find((x) => x.hit === hi);
+      outcome = { key: w?.surface === 'mesh' ? 'mesh' : 'glass', vars: {}, data: { surface: w?.surface ?? 'glass' }, tag: 'long' };
+    } else outcome = { key: 'out', vars: {}, data: {}, tag: 'long' };
     const mine = this.isMe(m, pid);
     // an error by the other side: did our shot before it force it?
     if (h.team !== my) {
@@ -363,10 +357,9 @@ export class Explainer {
       if (prev && prev.speed >= 14 && ATTACK.has(prev.kind)) return this.line('x.forced', { S: this.shot(m, prev), name: this.name(pid), v: fmtKmh(prev.speed) }, null, { ...outcome.data, speed: prev.speed });
       if (prev && h.y < 0.35 && !SOFT.has(prev.kind)) return this.line('x.forcedFeet', { S: this.shot(m, prev), name: this.name(pid), d: fmtLen(h.y) }, null, { ...outcome.data, y: h.y });
     }
-    // (a ball out: how far inside the line it went out over was the aim)
-    const way = outcome.data.way;
-    const edge = way === 'long' ? HL + LINE - Math.abs(h.tz) : way === 'wide' ? W / 2 + LINE - Math.abs(h.tx) : null;
-    const c = this.cause(m, h, recvSide, e.reason === 'out', edge, way === 'long');
+    // (aimed close to the back glass: how far inside it the aim was)
+    const edge = e.reason === 'net' ? null : HL - Math.abs(h.tz);
+    const c = this.cause(m, h, recvSide, e.reason !== 'net', edge, e.reason !== 'net');
     if (c) {
       const o = t('xo.' + outcome.key, outcome.vars);
       const tag = mine ? c.tag ?? outcome.tag : null;
@@ -375,27 +368,22 @@ export class Explainer {
     return this.line('x.' + outcome.key, { S: this.shot(m, h), ...outcome.vars }, mine ? outcome.tag : null, outcome.data);
   }
 
+  /** A double fault: what the second serve did (into the net, out of the box, the mesh after the bounce). */
   private serveFault(m: Match, e: PointEvent, L: HitRec, li: number): Why | null {
     const pid = e.fault ?? L.pid;
-    const b = this.bounces.find((x) => x.hit === li && x.first && !x.good);
-    if (!b) return null;
+    const me = this.isMe(m, pid);
     const side = (L.team === 0 ? -1 : 1) as 1 | -1;
     const half = (m.rally?.serveHalf ?? 1) as 1 | -1;
+    const b = this.bounces.find((x) => x.hit === li && x.first);
     let o: { key: string; vars: Record<string, string>; data: Why['data'] };
-    const az = Math.abs(b.z);
-    if (e.reason === 'serveKitchen') o = { key: 'short', vars: { d: fmtLen(Math.max(0.01, NVZ + LINE - az)) }, data: { short: NVZ + LINE - az } };
-    else if (Math.abs(b.x) <= W / 2 + LINE && az <= HL + LINE && b.x * half < -LINE) o = { key: 'side', vars: {}, data: { side: true, bx: b.x } };
-    else {
-      const out = this.outOf(b);
-      o = { key: out.way, vars: { d: fmtLen(out.by) }, data: { way: out.way, by: out.by } };
-    }
-    const me = this.isMe(m, pid);
+    if (this.fault === 'serveNet') o = { key: 'net', vars: {}, data: { fault: 'serveNet' } };
+    else if (this.fault === 'serveFence') o = { key: 'mesh', vars: {}, data: { fault: 'serveFence' } };
+    else if (b && !b.good && b.z * side > 0 && Math.abs(b.z) > SERVICE + LINE) o = { key: 'long', vars: { d: fmtLen(Math.max(0.01, Math.abs(b.z) - SERVICE - LINE)) }, data: { long: Math.abs(b.z) - SERVICE } };
+    else if (b && !b.good && b.z * side > 0) o = { key: 'side', vars: {}, data: { side: true, bx: b.x } };
+    else o = { key: 'glass', vars: {}, data: { fault: 'serveOut' } };
     const sub = { S: this.shot(m, L), ...o.vars };
     if (me && !inServiceCourt(L.tx, L.tz, side, half)) return this.line('x.cause', { C: t('xc.aimOut'), O: t('xo.' + o.key, o.vars) }, 'serve', { ...o.data, aimOut: true });
     if (me && L.timing === 'early') return this.line('x.cause', { C: t('xc.serveRing'), O: t('xo.' + o.key, o.vars) }, 'serve', { ...o.data, timing: L.timing });
-    // (long or wide: aimed close to that line)
-    const edge = o.key === 'long' ? HL + LINE - Math.abs(L.tz) : o.key === 'wide' ? W / 2 + LINE - Math.abs(L.tx) : null;
-    if (me && edge !== null && edge >= 0 && edge < 0.3) return this.line('x.cause', { C: t('xc.edge', { d: fmtLen(Math.max(0.01, edge)) }), O: t('xo.' + o.key, o.vars) }, 'serve', { ...o.data, edge });
     return this.line('x.serve.' + o.key, sub, me ? 'serve' : null, o.data);
   }
 
@@ -445,7 +433,7 @@ export class Explainer {
     const tape = this.nets.find((x) => x.hit === li && x.tape);
     if (tape) return this.line('x.tape', { S: this.shot(m, L) }, null, { tape: true });
     // 1) our previous shot sat up and they attacked it
-    const attacked = ATTACK.has(L.kind) || (L.kind === 'drive' && L.y > NET_C + 0.15 && Math.abs(L.at[L.pid]?.z ?? L.z) < 3.6);
+    const attacked = ATTACK.has(L.kind) || (L.kind === 'drive' && L.y > NET_C + 0.15 && Math.abs(L.at[L.pid]?.z ?? L.z) < AT_NET);
     if (prev && prev.team === my && attacked) {
       const meP = this.isMe(m, prev.pid);
       if (prev.kind === 'lob' && L.kind === 'smash')
@@ -483,12 +471,12 @@ export class Explainer {
     const a = L.at[rcv];
     const who = { me: meR, name: this.name(rcv) };
     const data = { d: near.d, dt: near.dt, rx: a.x, rz: a.z, speed: L.speed, kind: L.kind };
-    const atNet = (z: number) => Math.abs(z) < 3.6;
+    const atNet = (z: number) => Math.abs(z) < AT_NET;
     if (L.kind === 'lob' && atNet(a.z)) {
       const both = m.doubles && m.players.every((p) => p.team !== my || atNet(L.at[p.id].z));
       return this.line(both ? 'x.lobUs' : meR ? 'x.lobMe' : 'x.lob', { name: opp, who: who.name }, meR ? 'lobbed' : null, data);
     }
-    if (SOFT.has(L.kind) && Math.abs(a.z) > 4.3) return this.line(meR ? 'x.shortMe' : 'x.short', { S: this.shot(m, L), who: who.name, d: fmtLen(Math.abs(a.z)) }, null, data);
+    if (SOFT.has(L.kind) && Math.abs(a.z) > SERVICE) return this.line(meR ? 'x.shortMe' : 'x.short', { S: this.shot(m, L), who: who.name, d: fmtLen(Math.abs(a.z)) }, null, data);
     // (fast and close: no time to react; fast and far, the distance is the story)
     if (L.speed >= 14 && near.dt < 0.6 && near.d <= 1.5) return this.line('x.fast', { S: this.shot(m, L), v: fmtKmh(L.speed), s: fmtSec(near.dt) }, null, data);
     const dir = near.land && atNet(a.z) ? this.direction(L, near.land) : null;
@@ -552,7 +540,7 @@ export class Explainer {
     if (tape) return this.line('x.tape', { S: this.shot(m, L) }, null, { tape: true });
     const meL = this.isMe(m, L.pid);
     // their previous shot sat up and we attacked it
-    const attacked = ATTACK.has(L.kind) || (L.kind === 'drive' && L.y > NET_C + 0.15 && Math.abs(L.at[L.pid]?.z ?? L.z) < 3.6);
+    const attacked = ATTACK.has(L.kind) || (L.kind === 'drive' && L.y > NET_C + 0.15 && Math.abs(L.at[L.pid]?.z ?? L.z) < AT_NET);
     if (prev && prev.team !== L.team && attacked && SOFT.has(prev.kind) && prev.clear !== null && prev.clear >= 0.3)
       return this.line(meL ? 'w.upMe' : 'x.upDink', { S: this.shot(m, prev), name: this.name(L.pid), d: fmtLen(prev.clear) }, null, { clear: prev.clear });
     // against whoever of them went for it, or else the one it went closest past
@@ -574,9 +562,9 @@ export class Explainer {
     const tried = this.tried.find((x) => x.pid === rcv && x.hit === li);
     const data = { d: near.d, dt: near.dt, rx: a.x, rz: a.z, speed: L.speed, kind: L.kind, tried: !!tried };
     const S = this.shot(m, L);
-    const atNet = (z: number) => Math.abs(z) < 3.6;
+    const atNet = (z: number) => Math.abs(z) < AT_NET;
     if (L.kind === 'lob' && atNet(a.z)) return this.line('w.lob', { S, name }, null, data);
-    if (SOFT.has(L.kind) && Math.abs(a.z) > 4.3) return this.line('w.short', { S, name, d: fmtLen(Math.abs(a.z)) }, null, data);
+    if (SOFT.has(L.kind) && Math.abs(a.z) > SERVICE) return this.line('w.short', { S, name, d: fmtLen(Math.abs(a.z)) }, null, data);
     if (near.d <= 0.7 && near.dt < 0.7) return this.line('w.body', { S, name }, null, data);
     if (L.speed >= 14 && near.dt < 0.6) return this.line('w.fast', { S, v: fmtKmh(L.speed), name, s: fmtSec(near.dt) }, null, data);
     const dir = near.land && atNet(a.z) ? this.direction(L, near.land) : null;
@@ -600,7 +588,7 @@ export const COACH = {
   gap: 5,
   again: 14,
 };
-const FEW = new Set(['serve', 'kitchen', 'aimOut', 'release']);
+const FEW = new Set(['serve', 'return', 'aimOut', 'release']);
 /** which tip each pattern gets (several patterns share one) */
 const TIP: Record<string, string> = {
   dinkHigh: 'tipx.dinkHigh',
@@ -612,12 +600,11 @@ const TIP: Record<string, string> = {
   late: 'tipx.late',
   still: 'tipx.still',
   short: 'tipx.short',
-  outLong: 'tipx.outLong',
-  outWide: 'tipx.outWide',
+  long: 'tipx.long',
   edge: 'tipx.edge',
   aimOut: 'tipx.aimOut',
   serve: 'tipx.serve',
-  kitchen: 'tipx.kitchen',
+  return: 'tipx.return',
   release: 'tipx.release',
   lobShort: 'tipx.lobShort',
   lobbed: 'tipx.lobbed',

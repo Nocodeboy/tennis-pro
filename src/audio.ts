@@ -223,43 +223,85 @@ export class Audio {
   }
 
   /**
-   * The paddle meeting the ball: a hollow plastic "pock" on a composite face. Its pitch, brightness and weight follow
-   * the shot (a dink is a soft tap, a drive a crisp pock, a smash a crack with a thump) and how fast it leaves.
-   * `pan`: where on screen (−1 … 1); `far`: 0 … 1 for the far end (a little quieter and duller).
+   * The padel paddle meeting the ball: a solid «pock» (a pressurised felt ball on a foam-cored, perforated face), lower
+   * and rounder than pickleball's hollow plastic click. Its pitch, brightness and weight follow the shot (a chiquita or
+   * a dejada is a soft, muffled touch; a drive a full pock; a bandeja a sliced, brushed one; a remate or a víbora a
+   * crack with a thump) and how fast it leaves. `pan`: where on screen (−1 … 1); `far`: 0 … 1 for the far end.
    */
   paddle(kind: string, speed: number, pan = 0, far = 0, perfect = false) {
     if (!this.ctx || !this.sfxOn) return;
     const slow = this.replayMode ? 0.78 : 1;
-    const n = Math.min(1, Math.max(0, (speed - 5) / 15));
+    const n = Math.min(1, Math.max(0, (speed - 5) / 18));
     const o = this.out(pan * 0.6);
     const dist = 1 - far * 0.35;
     const j = 1 + (Math.random() - 0.5) * 0.06;
+    // (the body of every contact: a short low thump of the foam core under the face)
+    const body = (f: number, v: number, dur = 0.06) => this.tone(f * slow, dur, 'sine', v * dist, 0, f * 0.55 * slow, o);
     if (kind === 'dink' || kind === 'drop' || kind === 'auto') {
-      const f = 860 * j * slow;
-      this.tone(f, 0.045, 'triangle', 0.085 * dist, 0, f * 0.7, o);
-      this.tone(f * 1.9, 0.02, 'sine', 0.025 * dist, 0, f * 1.4, o);
-      this.noiseBurst(0.028, 'bandpass', 1800 * slow, 1100, 0.05 * dist, 2.4, 0, o);
-    } else if (kind === 'smash' || kind === 'speedup') {
-      const f = (1380 + n * 260) * j * slow;
-      this.noiseBurst(0.012, 'highpass', 5200, 3000, 0.16 * dist, 0.7, 0, o);
-      this.tone(f, 0.055, 'triangle', (0.17 + n * 0.06) * dist, 0, f * 0.58, o);
-      this.tone(f * 2.3, 0.03, 'sine', 0.05 * dist, 0, f * 1.6, o);
-      this.noiseBurst(0.07, 'bandpass', 3400 * slow, 1500, 0.2 * dist, 1.5, 0, o);
-      if (kind === 'smash') this.tone(150 * slow, 0.16, 'sine', 0.14 * dist, 0, 70, o);
+      // a soft touch: muffled, short, the felt more than the face
+      const f = 560 * j * slow;
+      this.tone(f, 0.05, 'triangle', 0.075 * dist, 0, f * 0.7, o);
+      body(230, 0.06, 0.05);
+      this.noiseBurst(0.03, 'lowpass', 1500 * slow, 700, 0.05 * dist, 1.2, 0, o);
+    } else if (kind === 'smash' || kind === 'vibora' || kind === 'speedup') {
+      const f = (900 + n * 220) * j * slow;
+      this.noiseBurst(0.014, 'highpass', 4200, 2600, 0.13 * dist, 0.7, 0, o);
+      this.tone(f, 0.06, 'triangle', (0.15 + n * 0.06) * dist, 0, f * 0.55, o);
+      this.tone(f * 2.05, 0.03, 'sine', 0.04 * dist, 0, f * 1.5, o);
+      this.noiseBurst(0.07, 'bandpass', 2600 * slow, 1100, 0.17 * dist, 1.4, 0, o);
+      body(kind === 'speedup' ? 200 : 150, kind === 'speedup' ? 0.1 : 0.17, kind === 'speedup' ? 0.07 : 0.15);
+      // the víbora's slice: a brush of the face across the felt
+      if (kind === 'vibora') this.noiseBurst(0.09, 'bandpass', 5200 * slow, 2400, 0.06 * dist, 2.2, 0.004, o);
+    } else if (kind === 'bandeja') {
+      // controlled, sliced: a rounder pock with the brush of the cut
+      const f = (760 + n * 180) * j * slow;
+      this.tone(f, 0.06, 'triangle', 0.12 * dist, 0, f * 0.6, o);
+      body(190, 0.09);
+      this.noiseBurst(0.08, 'bandpass', 4600 * slow, 2200, 0.05 * dist, 2, 0.003, o);
+      this.noiseBurst(0.03, 'bandpass', 1900 * slow, 1000, 0.08 * dist, 1.6, 0, o);
     } else {
-      // drives, returns, serves, lobs: the classic pock, brighter and louder the harder it is hit
+      // drives, returns, serves, lobs, volleys: the full pock, brighter and louder the harder it is hit
       const lob = kind === 'lob';
-      const f = (1060 + n * 380 - (lob ? 120 : 0)) * j * slow;
-      const v = (0.1 + n * 0.14) * dist;
-      this.noiseBurst(0.01, 'highpass', 4200, 2600, v * 0.5, 0.7, 0, o);
-      this.tone(f, lob ? 0.07 : 0.05, 'triangle', v, 0, f * 0.62, o);
-      this.tone(f * 2.1, 0.025, 'sine', v * 0.35, 0, f * 1.4, o);
-      this.noiseBurst(0.035, 'bandpass', (2500 + n * 900) * slow, 1500, v * 0.85, 2.2, 0, o);
-      if (n > 0.6) this.tone(210 * slow, 0.07, 'sine', 0.05 * n * dist, 0, 110, o);
+      const f = (700 + n * 300 - (lob ? 80 : 0)) * j * slow;
+      const v = (0.1 + n * 0.12) * dist;
+      this.noiseBurst(0.01, 'highpass', 3600, 2200, v * 0.4, 0.7, 0, o);
+      this.tone(f, lob ? 0.075 : 0.06, 'triangle', v, 0, f * 0.6, o);
+      this.tone(f * 2.0, 0.025, 'sine', v * 0.28, 0, f * 1.4, o);
+      this.noiseBurst(0.04, 'bandpass', (1800 + n * 700) * slow, 1000, v * 0.75, 1.8, 0, o);
+      body(210 + n * 40, 0.06 + n * 0.05);
     }
     if (perfect && !this.replayMode) {
       this.tone(1568, 0.09, 'sine', 0.06, 0.02, undefined, o);
       this.tone(2093, 0.14, 'sine', 0.05, 0.07, undefined, o);
+    }
+  }
+
+  /**
+   * The ball meets a wall. The glass: a deep, short thud of the thick panel (a low knock with a little ring of the
+   * glass on top). The mesh: a metallic rattle of the wire panel that shivers for a moment. `k`: 0 … 1 how hard.
+   */
+  wall(surface: 'glass' | 'mesh', k: number, pan = 0, far = 0) {
+    if (!this.ctx || !this.sfxOn) return;
+    if (!this.limit('wall', 0.05)) return;
+    const s = Math.min(1, Math.max(0.15, k));
+    const slow = this.replayMode ? 0.8 : 1;
+    const o = this.out(pan * 0.7);
+    const dist = 1 - far * 0.4;
+    const j = 1 + (Math.random() - 0.5) * 0.08;
+    if (surface === 'glass') {
+      const v = (0.08 + s * 0.14) * dist;
+      // the knock of the panel: a low sine that drops, a muffled noise body, a faint ring of the glass
+      this.tone(118 * j * slow, 0.16 + s * 0.06, 'sine', v, 0, 62 * slow, o);
+      this.tone(240 * j * slow, 0.07, 'triangle', v * 0.45, 0, 150 * slow, o);
+      this.noiseBurst(0.06, 'lowpass', 900 * slow, 260, v * 0.9, 0.9, 0, o);
+      this.tone(2650 * j * slow, 0.12, 'sine', v * 0.07, 0.004, 2580 * slow, o);
+    } else {
+      const v = (0.05 + s * 0.09) * dist;
+      // the wire: a bright clank, then a short rattle of the panel against its frame
+      this.noiseBurst(0.02, 'highpass', 3800, 2400, v * 0.8, 0.8, 0, o);
+      this.noiseBurst(0.26 + s * 0.1, 'bandpass', 1600 * slow, 700, v * 0.9, 3.5, 0, o);
+      for (let i = 0; i < 5; i++) this.tone((520 + Math.random() * 380) * slow, 0.035, 'square', v * 0.22 * (1 - i * 0.15), i * 0.028 + Math.random() * 0.01, 300 * slow, o);
+      this.tone(140 * slow, 0.08, 'sine', v * 0.5, 0, 90 * slow, o);
     }
   }
 
@@ -481,17 +523,17 @@ export class Audio {
     if (!this.ctx || !this.sfxOn) return;
     switch (name) {
       case 'pop': {
-        // the pickleball "pock": a hollow plastic ball on a composite paddle. Harder hit = brighter and louder.
+        // the padel "pock": a felt ball on a foam-cored paddle. Harder hit = brighter and louder.
         const v = 0.1 + n * 0.16;
-        const f = 1050 + n * 380 + Math.random() * 60;
+        const f = 720 + n * 300 + Math.random() * 50;
         this.tone(f, 0.05, 'triangle', v, 0, f * 0.62);
         this.tone(f * 2.1, 0.025, 'sine', v * 0.35, 0, f * 1.4);
         this.noiseBurst(0.035, 'bandpass', 2600 + n * 900, 1500, v * 0.9, 2.2);
         break;
       }
       case 'soft':
-        // a dink: a muted tap
-        this.tone(820 + Math.random() * 40, 0.045, 'triangle', 0.09, 0, 560);
+        // a chiquita: a muted touch
+        this.tone(560 + Math.random() * 30, 0.05, 'triangle', 0.09, 0, 400);
         this.noiseBurst(0.03, 'bandpass', 1900, 1200, 0.06, 2);
         break;
       case 'smash':

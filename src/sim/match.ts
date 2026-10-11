@@ -19,7 +19,12 @@ import type { MatchEvent, Plan, Player, PointReason, Rules, ServeFault, ShotKind
 
 /** Spin each kind of shot carries: topspin drives, sliced volleys, bandejas, víboras and chiquitas. */
 export const SPIN: Record<ShotKind, number> = { serve: -0.2, return: 0.2, drive: 0.6, speedup: 0.2, smash: 0.25, bandeja: -0.55, vibora: -0.75, lob: 0.35, dink: -0.3, drop: -0.6, auto: -0.35 };
-const SOFT = new Set<ShotKind>(['dink', 'drop', 'auto']);
+const SOFT = new Set<ShotKind>(['dink', 'drop']);
+/**
+ * A hard shot gone wrong (Match.launch) carries up to this × (0.3 + 1) × (1 − q) m long: on a 10 m half a deep drive
+ * of a poor contact lands in the back glass on the fly (a fault), a short one only sits up.
+ */
+const LONG = 2.0;
 
 export interface Controller {
   /** The server: a shot when ready, null to keep waiting (the human aiming, the AI's routine). */
@@ -278,6 +283,12 @@ export const POACH = { chance: 0.5 };
  * instant (docs/concepto.md, «Control y simulación 0.7»).
  */
 export const CPU_LUNGE = { time: 0.25, min: 0 };
+/**
+ * CPU players choose among the contacts they can make (planContact): one with less than `want` s to spare costs `cost`
+ * per second short. Padel has more choice than pickleball (volley it, let it bounce, let it come off the glass), and
+ * without this they went for the earliest volley at full stretch and missed one in eleven balls.
+ */
+export const PLAN_SPARE = { want: 0.2, cost: 4 };
 function lungeAt(lunge: number, dt: number): number {
   if (CPU_LUNGE.time <= 0) return lunge;
   return lunge * Math.max(0, Math.min(1, CPU_LUNGE.min + ((1 - CPU_LUNGE.min) * dt) / CPU_LUNGE.time));
@@ -566,7 +577,6 @@ export class Match {
     this.deadSeg = null;
     this.targets.length = 0;
     this.locks.length = 0;
-    this.placed.length = 0;
     this.phase = 'serve';
     this.servePending = true;
     this.windup = null;
@@ -921,17 +931,16 @@ export class Match {
     const u = this.rng.next();
     let clear = spec.clear;
     if (soft) {
-      // a poor soft shot mostly floats up and carries long (a ball the other side can volley and
-      // attack); only a really poor one, or one scooped off the floor, dies in the tape. A poor block of a hard ball
-      // sends its pace back: it flies up and long. The automatic reset is aimed deep and high already: a poor one
-      // sits up rather than carrying further.
+      // a poor soft shot mostly floats up and carries long (a ball the other side can volley and attack); only a
+      // really poor one, or one scooped off the floor, dies in the tape. A poor block of a hard ball sends its pace
+      // back: it flies up and long.
       const vin = this.rally ? velAt(this.rally.seg, t, this.pv2) : null;
-      // (the automatic reset and the human's block, a tap, are plain blocks: they take more of the pace off)
+      // (the human's block, a tap, is a plain block: it takes more of the pace off)
       const rebound = vin ? (Math.max(0, Math.hypot(vin.x, vin.z) - 10) / 10) * (spec.timing === 'auto' || spec.intent === 'block' ? 0.5 : 1) : 0;
       if (!popped && this.rng.chance(bad * bad * 0.3 + (from.y < 0.3 ? bad * 0.25 : 0) + bad * rebound * 0.5)) clear -= 0.2 + u * 0.1;
       else {
         clear += bad * (0.05 + u * 1.3) * (1 + rebound * 0.6) + (popped ? 0.35 + u * 0.45 : 0);
-        tz += recvSide * (bad * (0.2 + u) * (spec.kind === 'auto' ? 0.8 : 2.4) * (1 + rebound * 2) + (popped && spec.kind !== 'auto' ? 0.9 + u * 0.9 : 0));
+        tz += recvSide * (bad * (0.2 + u) * 2.4 * (1 + rebound * 2) + (popped ? 0.9 + u * 0.9 : 0));
       }
     } else if (spec.kind === 'lob') {
       clear -= bad * u * 1.6; // short and low: a smash waiting to happen
@@ -939,13 +948,14 @@ export class Match {
       // how far a lob carries is hard to judge: a deep one can sail out
       tz += recvSide * this.rng.gauss() * (0.32 + bad * 0.7);
     } else {
-      // a hard swing gone wrong: off a low ball it mostly sails, off a high one it may be hit down into the net
+      // a hard swing gone wrong: off a low ball it mostly sails (long: on a 10 m half a deep one carries into the back
+      // glass on the fly, LONG), off a high one it may be hit down into the net
       const low = from.y < 0.6;
       // a drive hit up from below the tape close to the net: gone wrong, it sits up for the volleyer
       const up = spec.kind === 'drive' && from.y < NET_C && Math.abs(from.z) < AT_NET;
       if (this.rng.chance(low ? 0.72 : 0.62)) {
         clear += bad * u * 0.5 + (up ? bad * (0.2 + u * 0.8) : 0);
-        tz += recvSide * bad * (0.3 + u) * 1.5;
+        tz += recvSide * bad * (0.3 + u) * LONG;
       } else clear -= bad * (low ? 0.12 + u * 0.4 : 0.06 + u * 0.3);
       // under pressure a drive is pushed rather than hit: higher and slower (an attack off a high ball is not)
       if (popped && spec.kind === 'drive') {
@@ -953,13 +963,18 @@ export class Match {
         pace *= 1.3;
       }
     }
-    // off the frame (ShotSpec.shank): a soft shot dies in the net, a swing goes into it or sails long
+    // off the frame (ShotSpec.shank): a soft shot dies in the net; a swing goes into it, or flies straight into the
+    // glass (the back glass, or the side glass when it was pulled across): the padel error
     const shanked = !!spec.shank && this.rng.chance(spec.shank);
     if (shanked) {
-      if (soft || this.rng.chance(0.5)) clear = Math.min(clear, 0) - 0.15 - u * 0.25;
-      else {
+      if (soft || this.rng.chance(0.45)) clear = Math.min(clear, 0) - 0.15 - u * 0.25;
+      else if (this.rng.chance(0.65)) {
         clear += 0.3 + u * 0.6;
-        tz += recvSide * (2.2 + u * 2);
+        tz = recvSide * (HL + 0.4 + u * 1.6);
+      } else {
+        clear += 0.2 + u * 0.4;
+        tx = (Math.sign(tx - from.x) || 1) * (W / 2 + 0.5 + u);
+        tz = recvSide * Math.min(HL - 1, Math.max(3, Math.abs(tz) * 0.7));
       }
     }
     // a target behind the net-side of the receiver's half still lands on their side
@@ -1019,24 +1034,34 @@ export class Match {
 
   /**
    * Where the hitter's team goes after his shot (padel habits; the two move as one, both up or both back):
-   *  · the server comes in to the net behind his serve (his partner is there already);
-   *  · a lob that goes over them, or a chiquita at their feet, is the moment to take the net;
-   *  · up at the net they stay up after a volley or an overhead;
-   *  · from the back, a drive keeps them back.
+   *  · the server comes in to the net behind his serve (his partner is there already); the returner stays back;
+   *  · a good globo over a pair at the net, or a chiquita at their feet, is the moment to take the net;
+   *  · up at the net they stay up after a volley or an overhead (a bandeja is played to keep it);
+   *  · a drive from around the service line is an approach; from the back, a drive keeps them back.
    * The receiving team's depth follows the ball coming at them (cover: a lob over them sends both back).
    */
   private afterHit(p: Player, spec: ShotSpec) {
     const r = this.rally!;
     const mv = this.controllers[p.id].mover;
-    this.placed[p.id] = false;
-    const atNet = Math.abs(p.z) < AT_NET;
+    const rng = this.rng;
+    const za = Math.abs(p.z);
+    const atNet = za < AT_NET;
     const k = spec.kind;
-    if (r.shots === 1) p.depth = this.rng.chance(0.4 + 0.6 * mv.netRush) ? 2 : 1;
-    else if (k === 'lob') p.depth = spec.q > 0.6 && this.rng.chance(mv.netRush) ? 2 : atNet ? 1 : 0;
-    else if (k === 'dink' || k === 'drop') p.depth = atNet || this.rng.chance(mv.netRush) ? 2 : 1;
-    else if (k === 'smash' || k === 'bandeja' || k === 'vibora' || k === 'speedup') p.depth = atNet ? 2 : Math.max(1, p.depth) as 1 | 2;
+    // the other pair is up at the net (or on its way there)
+    const oppNet = this.team(this.other(p.team)).some((o) => Math.abs(o.z + o.vz * 0.4) < AT_NET + 0.4);
+    if (r.shots === 1) p.depth = rng.chance(0.5 + 0.5 * mv.netRush) ? 2 : 1;
+    // the return: back, unless a good low one lets the returner follow it in
+    else if (r.shots === 2 && k !== 'lob') p.depth = spec.q > 0.75 && rng.chance(mv.netRush * 0.3) ? 2 : 0;
+    // a good globo over a pair at the net is how the net is taken; a lob from the net (or a poor one) keeps them where
+    // they are
+    else if (k === 'lob') p.depth = atNet ? 2 : oppNet && spec.q > 0.6 && rng.chance(0.35 + 0.55 * mv.netRush) ? 2 : 0;
+    // a chiquita (or a dejada) from the back: in behind it
+    else if (k === 'dink' || k === 'drop') p.depth = atNet || rng.chance(0.35 + 0.6 * mv.netRush) ? 2 : 0;
+    // overheads and volleys keep the net (a bandeja from deep is played to get back there)
+    else if (k === 'smash' || k === 'bandeja' || k === 'vibora' || k === 'speedup') p.depth = atNet || za < SERVICE + 0.5 ? 2 : 0;
     else if (atNet) p.depth = 2;
-    else p.depth = Math.abs(p.z) < DEPTH_Z[1] + 0.6 && this.rng.chance(mv.netRush * 0.5) ? 2 : 0;
+    // a drive from around the service line is an approach; from the back it keeps them back
+    else p.depth = za < SERVICE + 0.5 && rng.chance(0.3 + 0.6 * mv.netRush) ? 2 : 0;
     p.homeZ = p.side * DEPTH_Z[p.depth];
     p.homeX = Math.max(-2.6, Math.min(2.6, spec.tx * 0.3));
     // the partner moves with the hitter
@@ -1188,8 +1213,6 @@ export class Match {
   private chased: boolean[] = [];
   /** CPU players waiting on their spot (they only move again when it is more than FEET.idle away) */
   private settled: boolean[] = [];
-  /** singles: the CPU player's waiting spot was chosen by its controller (Controller.place): no shading to the ball */
-  private placed: boolean[] = [];
   private letGo: boolean[] = [];
 
   /** the path worked out for the rally's current stretch (Match.path) */
@@ -1520,6 +1543,9 @@ export class Match {
           if (volley && Math.abs(fz) < AT_NET) cost -= 0.4 + Math.max(0, bp.y - 0.95) * 1.2;
           // at the back, a ball that comes off the glass is the easy one (slower, at a comfortable height)
           if (offGlass && !volley) cost -= 0.15;
+          // CPU: a contact they only just make is a gamble (a stretch, a near miss): a little later, or after the
+          // bounce, is the one a player picks when there is one (PLAN_SPARE)
+          if (cpu) cost += Math.max(0, PLAN_SPARE.want - (avail - need)) * PLAN_SPARE.cost;
           // from here: prefer the comfortable side of the body and the nearest point
           if (fromHere) cost = Math.abs(bp.y - 0.95) * 0.8 + (bp.y < 0.3 ? 1 : 0) + dist * 0.6 + (hand === -1 ? 0.1 : 0) + (t - this.t) * 0.6;
           if (overhead) cost -= 0.2;
@@ -1553,8 +1579,12 @@ export class Match {
     if (!manual) {
       const coming = r.last && r.last.team !== p.team;
       if (r.shots === 1 && coming) p.depth = p.id === this.receiverId ? 0 : 1;
-      else if (coming && r.bounces === 0 && g.z * p.side > DEPTH_Z[1] - 0.3 && (r.last!.lastHit?.kind === 'lob' || r.seg.y > 3)) p.depth = 0;
-      else if (nextToHuman) p.depth = q.depth;
+      else if (coming && r.bounces === 0 && g.z * p.side > DEPTH_Z[1] - 0.3 && (r.last!.lastHit?.kind === 'lob' || r.seg.y > 3)) {
+        // a lob over them: both back, unless the partner takes it over the head in front of the service line (a
+        // bandeja, a víbora): then they hold the net together
+        const own = this.owner >= 0 && this.owner !== p.id ? this.players[this.owner].plan : null;
+        p.depth = own && own.volley && Math.abs(own.fz) < SERVICE ? 2 : 0;
+      } else if (nextToHuman) p.depth = q.depth;
     }
     const c = Math.max(-1.6, Math.min(1.6, g.x * 0.4));
     const half = [2.2, 2.1, 2.0][p.depth];
@@ -1851,25 +1881,49 @@ export class Match {
     this.serverTeam = this.players[this.serverId].team;
   }
 
+  /**
+   * The dead ball (after the point) off the floor and the walls, every event up to t1. The events are searched from the
+   * start of its own stretch, not from the last step: a stretch that begins mid-step (the point ended at a wall or a
+   * bounce) can meet the floor before the step is over, and the ball must not sink through it or through the glass.
+   */
   private deadBounces(t1: number) {
-    const s = this.deadSeg!;
-    const w = wallTime(s);
-    if (w && w.t <= t1 && w.t > this.t - 1e-6 && w.t < groundTime(s)) {
-      const surface = this.surfaceOf(s, w);
-      if (surface !== 'open') {
-        this.deadSeg = wallBounce(s, w, surface);
+    for (let i = 0; i < 6; i++) {
+      const s = this.deadSeg!;
+      if (s.roll) {
+        // rolling: it stops at the glass (inside the court)
+        const p0 = posAt(s, s.t0, this.pv2);
+        const w = Math.abs(p0.x) > W / 2 || Math.abs(p0.z) > HL ? null : wallTime(s);
+        if (w && w.t <= t1) {
+          const p = posAt(s, w.t);
+          this.deadSeg = { ...seg(w.t, { x: p.x, y: R, z: p.z }, { x: 0, y: 0, z: 0 }), roll: true, k: 1 };
+        }
         return;
       }
-    }
-    const tg = groundTime(s);
-    if (tg <= t1 && tg > this.t - 1e-6) {
-      const v = velAt(s, tg);
-      if (Math.abs(v.y) > 0.6) this.deadSeg = bounce(s, tg);
-      else {
-        // rolling to a stop
-        const p = posAt(s, tg);
-        this.deadSeg = { ...seg(tg, { x: p.x, y: R, z: p.z }, { x: v.x * 0.6, y: 0, z: v.z * 0.6 }), roll: true };
+      const tg = groundTime(s);
+      // (outside the court, over the top of a wall: no more walls, it drops to the ground out there)
+      const p0 = posAt(s, s.t0, this.pv2);
+      const outside = Math.abs(p0.x) > W / 2 || Math.abs(p0.z) > HL;
+      const w = outside ? null : wallTime(s);
+      if (w && w.t <= t1 && w.t < tg) {
+        const surface = this.surfaceOf(s, w);
+        if (surface === 'open') {
+          // over the top: on its way out of the court (a stretch that starts just past the wall)
+          const p = posAt(s, w.t);
+          const v = velAt(s, w.t);
+          const dx = w.axis === 'x' ? w.sign * 2 * R : 0;
+          const dz = w.axis === 'z' ? w.sign * 2 * R : 0;
+          this.deadSeg = seg(w.t, { x: p.x + dx, y: p.y, z: p.z + dz }, v, s.spin, s.k, s.g);
+          continue;
+        }
+        this.deadSeg = wallBounce(s, w, surface);
+        continue;
       }
+      if (tg > t1) return;
+      const v = velAt(s, tg);
+      const p = posAt(s, tg);
+      if (Math.abs(v.y) > 0.6) this.deadSeg = bounce(s, tg);
+      // rolling to a stop
+      else this.deadSeg = { ...seg(tg, { x: p.x, y: R, z: p.z }, { x: v.x * 0.6, y: 0, z: v.z * 0.6 }), roll: true };
     }
   }
 

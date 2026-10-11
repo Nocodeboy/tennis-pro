@@ -13,8 +13,6 @@ export const ICON = {
   pause: svg('<rect x="6" y="4.5" width="4.2" height="15" rx="1"/><rect x="13.8" y="4.5" width="4.2" height="15" rx="1"/>', true),
   /** the tournament draw: two brackets that meet */
   draw: svg('<path d="M3 4.5h5v6H3M3 13.5h5v6H3M8 7.5h5v9H8M13 12h8"/>'),
-  /** training: a target */
-  target: svg('<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1" fill="currentColor"/>'),
   /** how to play */
   help: svg('<circle cx="12" cy="12" r="9"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.6 2.3c-.7.4-1.2.9-1.2 1.7v.6"/><circle cx="12" cy="17.2" r=".4" fill="currentColor"/>'),
   /** settings: two sliders */
@@ -26,15 +24,8 @@ export const ICON = {
   trophy: svg('<path d="M8 4h8v5.5a4 4 0 0 1-8 0zM8 6H5.5v1A3 3 0 0 0 8 10M16 6h2.5v1A3 3 0 0 1 16 10M12 13.5v3.5M9 20h6M10 17h4"/>'),
   person: svg('<circle cx="12" cy="8" r="4"/><path d="M4 21c1.4-4.2 4.4-6.2 8-6.2s6.6 2 8 6.2z"/>', true),
   star: svg('<path d="M12 3.2l2.7 5.5 6 .9-4.35 4.25 1.03 6L12 17l-5.38 2.85 1.03-6L3.3 9.6l6-.9z"/>', true),
-  ball: svg('<circle cx="12" cy="12" r="8.5"/><circle cx="9" cy="9" r="1" fill="currentColor"/><circle cx="14.5" cy="8.5" r="1" fill="currentColor"/><circle cx="12" cy="13" r="1" fill="currentColor"/><circle cx="8" cy="14.5" r="1" fill="currentColor"/><circle cx="15.5" cy="14.5" r="1" fill="currentColor"/>'),
+  ball: svg('<circle cx="12" cy="12" r="8.5"/><path d="M4.6 7.6c3.2 1.4 4.6 4 4.6 4.4s-1.4 3-4.6 4.4M19.4 7.6c-3.2 1.4-4.6 4-4.6 4.4s1.4 3 4.6 4.4"/>'),
 } as const;
-
-/** n filled stars out of max (the training's grades) */
-export function starsSvg(n: number, max = 3): string {
-  let s = '';
-  for (let i = 0; i < max; i++) s += `<span class="${i < n ? 'on' : 'off'}">${ICON.star}</span>`;
-  return `<span class="dstars" role="img" aria-label="${n}/${max}">${s}</span>`;
-}
 
 /** a difficulty meter: five bars, the first `n` lit */
 export function levelBars(n: number, max = 5, label = ''): string {

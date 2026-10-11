@@ -211,7 +211,7 @@ export function bounce(s: Seg, t: number): Seg {
   const v = velAt(s, t);
   const vh = Math.hypot(v.x, v.z);
   const vn = Math.max(0, -v.y);
-  const ey = BOUNCE_Y - 0.015 * Math.max(0, vn - 6);
+  const ey = BOUNCE_Y - 0.005 * Math.max(0, vn - 6);
   const wr = s.spin * SPIN_SURF;
   const jRoll = (ALPHA * (vh - wr)) / (1 + ALPHA);
   const jMax = MU * (1 + ey) * vn;

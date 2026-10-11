@@ -44,7 +44,7 @@ def run(name, vp, mobile):
         # rally: keep returning with drags; take shots along the way
         shots = 0
         for i in range(26):
-            st = pg.evaluate("(() => { const m = window.__pb.match; if (!m) return null; const h = m.humanPlan(); return { phase: m.phase, e: h ? h.plan.t - m.t : null, t: m.t, score: m.score.join('-') }; })()")
+            st = pg.evaluate("(() => { const m = window.__pb.match; if (!m) return null; const h = m.humanPlan(); return { phase: m.phase, e: h ? h.plan.t - m.t : null, t: m.t, score: m.games.join('-') + ' ' + m.pointText(0) + '-' + m.pointText(1) }; })()")
             if st and st['phase'] == 'rally' and st['e'] is not None and 0.35 < st['e'] < 1.6:
                 pg.mouse.move(cx, cy)
                 pg.mouse.down()
@@ -68,7 +68,7 @@ def run(name, vp, mobile):
                 pg.mouse.up()
             pg.wait_for_timeout(250)
         pg.screenshot(path=f'{OUT}/{name}-5-later.png')
-        st = pg.evaluate("(() => { const m = window.__pb.match; return m ? { score: m.score, stats: m.stats, phase: m.phase } : null; })()")
+        st = pg.evaluate("(() => { const m = window.__pb.match; return m ? { games: m.games, points: [m.pointText(0), m.pointText(1)], stats: m.stats, phase: m.phase } : null; })()")
         print(name, st)
         for l in logs[-12:]:
             print('  ', l)

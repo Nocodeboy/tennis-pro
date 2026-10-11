@@ -5,7 +5,7 @@
 // prefers-reduced-motion the shots hold still (no flights, orbits or zooms).
 
 import * as THREE from 'three';
-import { HL, W } from '../sim/court';
+import { HL, W, WALL, sideTop } from '../sim/court';
 
 export interface CamPose {
   pos: THREE.Vector3;
@@ -62,6 +62,17 @@ const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
 export const INTRO_KEYS = [0, 1.7, 3.2, 5.2];
 /** vertical field of view (deg) that shows `h` metres at `d` metres */
 const fovFor = (h: number, d: number) => THREE.MathUtils.radToDeg(2 * Math.atan(h / 2 / Math.max(0.5, d)));
+
+/**
+ * A camera within `band` m of a wall of the cage (either side of it) and below its top is moved in off it, onto the
+ * court: the frame and the glass a few centimetres from the lens fill the screen. (The stands' cameras are further out,
+ * the gameplay camera is high over the near wall.)
+ */
+function clearOfCage(p: THREE.Vector3, band = 0.6) {
+  const hw = W / 2;
+  if (Math.abs(p.z) < HL + band && Math.abs(Math.abs(p.x) - hw) < band && p.y < sideTop(Math.min(HL, Math.abs(p.z))) + 0.3) p.x = Math.sign(p.x) * (hw - band);
+  if (Math.abs(p.x) < hw + band && Math.abs(Math.abs(p.z) - HL) < band && p.y < WALL.topH + 0.3) p.z = Math.sign(p.z) * (HL - band);
+}
 
 export class Director {
   /** no flights, orbits or zooms (prefers-reduced-motion): shots are cuts and hold still */
@@ -126,9 +137,12 @@ export class Director {
     const portrait = ctx.aspect < 0.8;
     const g = ctx.game;
     // (it opens on the stadium: from high over the near corner's stands, across the court to the far stands, the
-    // boxes and the ring of floodlights under the roof, and cranes down onto the far team)
+    // boxes and the ring of floodlights under the roof, and cranes down over the side wall into the cage, onto the far
+    // team; across the net inside the cage to the near team, and up and back over the near wall to the gameplay
+    // camera)
+    const inX = (x: number) => Math.max(-W / 2 + 1.2, Math.min(W / 2 - 1.2, x));
     this.path = new THREE.CatmullRomCurve3(
-      [new THREE.Vector3(-7.5, 10.5, 15.5 * sd), new THREE.Vector3(far.x + 7, 3.4, far.z + sd * 4.6), new THREE.Vector3(near.x - 4.2, 2.1, near.z - sd * 4.6), g.pos.clone()],
+      [new THREE.Vector3(-7.5, 10.5, 15.5 * sd), new THREE.Vector3(inX(far.x + 3.6), 2.7, far.z + sd * 4.8), new THREE.Vector3(inX(near.x - 3.4), 2.0, near.z - sd * 4.4), g.pos.clone()],
       false,
       'centripetal',
     );
@@ -360,9 +374,9 @@ export class Director {
           pos.set(look.x * 0.4 + s.camSide * 1.4, portrait ? 7.2 : 5.0, -ctx.side * (HL + 6.2));
           fov = portrait ? 50 : 34;
         } else {
-          // low by the net post on the receiving side, looking along the tape (the net cord)
-          pos.set(s.camSide * (W / 2 + (portrait ? 2.4 : 1.4)), portrait ? 1.5 : 1.1, -hs * (portrait ? 3.2 : 1.8));
-          fov = portrait ? 56 : 42;
+          // low by the net post on the receiving side, inside the cage against the side mesh, looking along the tape
+          pos.set(s.camSide * (W / 2 - 0.35), portrait ? 1.6 : 1.15, -hs * (portrait ? 2.6 : 1.5));
+          fov = portrait ? 62 : 46;
         }
         break;
       }
@@ -386,6 +400,8 @@ export class Director {
       look = look.lerpVectors(this.from.look, look, k);
       fov = lerp(this.from.fov, fov, k);
     }
+    // never in the cage's walls: a TV camera right by the glass or the mesh steps in off it
+    if (s.kind !== 'play') clearOfCage(pos);
     out.fov = fov;
     this.cur.pos.copy(pos);
     this.cur.look.copy(look);

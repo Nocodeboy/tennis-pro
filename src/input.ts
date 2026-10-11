@@ -2,14 +2,14 @@
 //   left  · a floating stick where the thumb lands moves the player
 //   right · press, drag to aim, release to swing
 // The right thumb has three gestures (docs/notas-08-ataque.md):
-//   · a slow drag places the ball (dink, drive, lob by where it points), as before;
-//   · a flick, the finger lifting while it still moves fast towards the far end, is an attack (a speed-up, or a smash
-//     over the head): at the opponent's body by default, or where the drag pointed before the stroke, bent by the
-//     stroke's angle;
-//   · a tap, a short press with hardly any drag, is a block or reset: a soft ball into the kitchen.
+//   · a slow drag places the ball (chiquita, drive, lob by where it points; a ball over the head: a bandeja);
+//   · a flick, the finger lifting while it still moves fast towards the far end, is an attack (a volley, or a smash
+//     or a víbora over the head): at the opponent's body by default, or where the drag pointed before the stroke,
+//     bent by the stroke's angle;
+//   · a tap, a short press with hardly any drag, is a block or reset: a soft ball at their feet.
 // Mouse: drag anywhere to aim and swing (a flick of the mouse attacks too; the right button is an attack press); WASD
-// or the arrows move. Keyboard aim: hold Space, tap the arrows to move the target a zone at a time (↓ a dink into the
-// kitchen, ↑ deep, ↑↑ a lob, ← → across), let go of Space to swing (a quick tap of Space alone is a block); hold F
+// or the arrows move. Keyboard aim: hold Space, tap the arrows to move the target a zone at a time (↓ a chiquita just
+// over the net, ↑ deep, ↑↑ a lob, ← → across), let go of Space to swing (a quick tap of Space alone is a block); hold F
 // instead of Space for an attack (← → move it across). While Space or F is held the arrows aim and only WASD moves.
 //
 // Release times are judged as the player saw them: the finger lifts on what the screen showed a few frames ago, and

@@ -1,41 +1,43 @@
-// The centre court of a pro tour's finals, at night: the regulation surface with its painted lines and a tournament
-// net, LED boards round the court, the umpire's chair, the players' benches, the TV cameras, the line judges and the
-// photographers, and the stadium round it all (stadium.ts): a bowl of stands full of people, the boxes, the roof with
-// its ring of floodlights and two video boards, under a dark night sky.
+// The centre court of a pro tour's finals, at night: a padel court of blue artificial grass with its white service
+// lines inside the glass and wire cage (cage.ts), the net and its posts at the side walls, a dark floor round the
+// cage with LED boards behind the far end and along the sides, the umpire's chair and the players' benches by the net
+// doors, the TV cameras and the photographers, and the stadium round it all (stadium.ts): a bowl of stands full of
+// people, the boxes, the roof with its ring of floodlights and two video boards, under a dark night sky.
 //
 // Built for a phone: everything that does not move is merged by material (the bowl and its steel in one mesh, the
-// court's furniture in another that casts shadows, everything that glows in a third: led.ts), the crowd is one
-// instanced mesh, the floodlights' glare another, and the soft contact darkening at the foot of walls, posts and boards
-// is baked into one decal mesh (no screen-space AO pass).
+// court's furniture in another that casts shadows, everything that glows in a third: led.ts; the cage in three), the
+// crowd is one instanced mesh, the floodlights' glare another, and the soft contact darkening at the foot of walls,
+// posts and boards is baked into one decal mesh (no screen-space AO pass).
 
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { HL, L, NET_C, NET_S, NVZ, POST_X, W, netHeight } from '../sim/court';
+import { HL, L, NET_C, NET_S, POST_X, SERVICE, W, netHeight } from '../sim/court';
+import { buildCage, type Cage } from './cage';
 import { crowdMesh, type Crowd } from './crowd';
 import { EmissiveBuilder, HEAD_FONT, LED, LED_ASPECT, drawScreen, emissiveMaterial, ledAtlas, screenCanvas } from './led';
-import { BOWL, Solid, buildStadium, outline, solidMaterial, videoBoards, type Spot } from './stadium';
-import { acrylicDetail, aoTexture, courtPaint, surface } from './textures';
+import { Solid, buildStadium, outline, solidMaterial, videoBoards, type Spot } from './stadium';
+import { aoTexture, courtPaint, surface, turfDetail } from './textures';
 
-export const AREA_W = 9.14;
-export const AREA_L = 18.29;
-const BOARD_Z = AREA_L / 2 + 1.0;
-const BOARD_X = AREA_W / 2 + 1.0;
-/** the painted surface inside the boards (court, kitchen and surround) and the size of one tile of its sand grain */
-const SURF_W = AREA_W + 2;
-const SURF_L = AREA_L + 2;
-const TILE = 1.5;
+/** the LED boards round the cage: behind the far back wall, and along the sides (out from the side walls) */
+const BOARD_Z = HL + 2.3;
+const BOARD_X = W / 2 + 1.75;
+/** the floor painted round the cage (the court and a dark surround), and the size of one tile of the turf's grain */
+const SURF_W = W + 2 * 2.3;
+const SURF_L = L + 2 * 2.7;
+const TILE = 1.2;
 
-/** a tour court's colours: the court and the kitchen in two blues, a dark slate surround */
+/** a tour court's colours: the blue grass, a dark navy surround outside the cage, the white lines */
 export const PAINT = {
-  court: 0x285592,
-  kitchen: 0x30639f,
-  apron: 0x2a3746,
+  court: 0x2361aa,
+  apron: 0x161e2b,
   line: 0xf4f6f2,
 };
 
 export interface Venue {
   group: THREE.Group;
   net: THREE.Group;
+  /** the glass and wire cage (impacts) */
+  cage: Cage;
   /** the dynamic canvas (the video boards and the score on the LED boards): the view redraws the score on it */
   board: { canvas: HTMLCanvasElement; tex: THREE.CanvasTexture };
   /** the spectators (see crowd.ts) */
@@ -69,16 +71,18 @@ const CLOTH: [number, number, number] = [0.9, 0, 0];
 export function buildVenue(tier: 'high' | 'medium' | 'low'): Venue {
   const g = new THREE.Group();
   // ---------- the court surface ----------
-  // the court, kitchen and surround as one surface: its own paint (wear, marks, coats) over a tiled sand grain
-  const det = acrylicDetail(tier === 'low' ? 256 : 512, 11);
+  // the court and the surround as one surface: its own colour (the rolls of turf, wear) over a tiled grass grain
+  const det = turfDetail(tier === 'low' ? 256 : 512, 11);
   det.detail.channel = det.normal.channel = 1;
-  const paint = courtPaint({ sw: SURF_W, sl: SURF_L, cw: W, cl: L, nvz: NVZ, apron: PAINT.apron, court: PAINT.court, kitchen: PAINT.kitchen, px: tier === 'low' ? 256 : 384, seed: 5 });
+  const paint = courtPaint({ sw: SURF_W, sl: SURF_L, cw: W, cl: L, service: SERVICE, apron: PAINT.apron, court: PAINT.court, px: tier === 'low' ? 192 : 320, seed: 5 });
   const surf = new THREE.Mesh(surfaceGeometry(), courtMaterial(paint, det.detail, det.normal));
   surf.receiveShadow = true;
   g.add(surf);
   g.add(courtLines(det.normal));
   const logos = apronLogos(det.normal);
   g.add(logos.mesh);
+  const cage = buildCage();
+  g.add(cage.group);
 
   // ---------- the stadium (one solid mesh), and everything that glows (one emissive mesh) ----------
   const solid = new Solid();
@@ -90,33 +94,35 @@ export function buildVenue(tier: 'high' | 'medium' | 'low'): Venue {
   const staff: Spot[] = [];
   const ao: Decal[] = [];
 
-  // ---------- the net (the posts stand still; the net, its tape and cords sway when hit) ----------
+  // ---------- the net (the posts stand still at the side walls; the net, its tape and cords sway when hit) ----------
   const net = new THREE.Group();
   for (const sx of [-1, 1]) {
-    // tournament posts: square graphite, on a wheeled base
-    props.box(at(sx * POST_X, (NET_S + 0.08) / 2, 0), 0.075, NET_S + 0.08, 0.075, 0x1b1e24, GRAPHITE);
-    props.box(at(sx * (POST_X + 0.06), 0.035, 0), 0.32, 0.07, 0.5, 0x1b1e24, GRAPHITE);
-    props.box(at(sx * POST_X, NET_S + 0.09, 0), 0.09, 0.02, 0.09, 0x2a2e36, GRAPHITE);
+    // round black posts against the side mesh, the winder on the outside
+    const x = sx * (POST_X - 0.04);
+    props.geo(new THREE.CylinderGeometry(0.04, 0.04, NET_S + 0.06, 10).translate(x, (NET_S + 0.06) / 2, 0), 0x16181c, GRAPHITE);
+    props.box(at(x, NET_S + 0.065, 0), 0.1, 0.02, 0.1, 0x22252b, GRAPHITE);
+    props.box(at(x + sx * 0.06, 0.62, 0), 0.06, 0.12, 0.05, 0x22252b, GRAPHITE);
   }
-  const seg = 32;
-  const ng = new THREE.PlaneGeometry(POST_X * 2, 1, seg, 1);
+  const seg = 40;
+  const ng = new THREE.PlaneGeometry(POST_X * 2 - 0.16, 1, seg, 1);
   const pos = ng.attributes.position as THREE.BufferAttribute;
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i);
-    pos.setY(i, pos.getY(i) > 0 ? netHeight(Math.min(Math.abs(x), W / 2)) - 0.035 : 0.06);
+    pos.setY(i, pos.getY(i) > 0 ? netHeight(Math.min(Math.abs(x), W / 2)) - 0.035 : 0.03);
   }
   ng.computeVertexNormals();
   const netMesh = new THREE.Mesh(ng, netMaterial());
   netMesh.renderOrder = 1;
   net.add(netMesh);
-  // white vinyl headband (follows the sag) and the centre strap, one mesh; the cord along the bottom
+  // white headband (follows the sag) and the centre strap, one mesh; the cord along the bottom
   const tapeMat = new THREE.MeshStandardMaterial({ color: 0xf6f6f2, roughness: 0.45 });
   const pts: THREE.Vector3[] = [];
   const bottom: THREE.Vector3[] = [];
+  const end = POST_X - 0.06;
   for (let i = 0; i <= seg; i++) {
-    const x = -POST_X + (i / seg) * POST_X * 2;
+    const x = -end + (i / seg) * end * 2;
     pts.push(new THREE.Vector3(x, netHeight(Math.min(Math.abs(x), W / 2)) - 0.01, 0));
-    bottom.push(new THREE.Vector3(x, 0.06, 0));
+    bottom.push(new THREE.Vector3(x, 0.03, 0));
   }
   const tapeGeo = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 64, 0.026, 6).scale(1, 1, 0.45);
   const strapGeo = new THREE.BoxGeometry(0.05, NET_C, 0.012).translate(0, NET_C / 2, 0);
@@ -126,11 +132,18 @@ export function buildVenue(tier: 'high' | 'medium' | 'low'): Venue {
   const cord = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(bottom), 8, 0.008, 4), new THREE.MeshStandardMaterial({ color: 0x15171b, roughness: 0.8 }));
   net.add(cord);
   g.add(net);
-  for (const sx of [-1, 1]) ao.push({ x: sx * (POST_X + 0.06), z: 0, len: 0.55, depth: 0.7, ry: 0, side: 0, a: 0.55, off: 0 });
-  ao.push({ x: 0, z: 0, len: POST_X * 2, depth: 0.22, ry: 0, side: 1, a: 0.16, off: 0 }, { x: 0, z: 0, len: POST_X * 2, depth: 0.22, ry: 0, side: -1, a: 0.16, off: 0 });
+  for (const sx of [-1, 1]) ao.push({ x: sx * (POST_X - 0.04), z: 0, len: 0.4, depth: 0.4, ry: 0, side: 0, a: 0.5, off: 0 });
+  ao.push({ x: 0, z: 0, len: POST_X * 2, depth: 0.2, ry: 0, side: 1, a: 0.14, off: 0 }, { x: 0, z: 0, len: POST_X * 2, depth: 0.2, ry: 0, side: -1, a: 0.14, off: 0 });
+  // the cage's foot: the infill and the shade along the glass and the mesh, inside and out
+  for (const s of [1, -1]) {
+    ao.push({ x: 0, z: s * HL, len: W, depth: 0.5, ry: 0, side: -s as 1 | -1, a: 0.32, off: 0 });
+    ao.push({ x: 0, z: s * (HL + 0.04), len: W + 0.1, depth: 0.6, ry: 0, side: s as 1 | -1, a: 0.4, off: 0 });
+    ao.push({ x: s * (W / 2), z: 0, len: L, depth: 0.42, ry: Math.PI / 2, side: s as 1 | -1, a: 0.26, off: 0 });
+    ao.push({ x: s * (W / 2 + 0.04), z: 0, len: L + 0.1, depth: 0.55, ry: Math.PI / 2, side: -s as 1 | -1, a: 0.36, off: 0 });
+  }
 
-  // ---------- LED boards round the court (the near end stays open towards the camera; a gap at the net on the sides
-  // for the umpire, the benches and the TV camera) ----------
+  // ---------- LED boards round the cage (none at the near end: the gameplay camera looks over it; a gap on the sides
+  // at the net for the umpire, the benches and the TV camera) ----------
   const BH = 0.9;
   const BT = LED_ASPECT * (BH - 0.08);
   let bi = 0;
@@ -145,28 +158,27 @@ export function buildVenue(tier: 'high' | 'medium' | 'low'): Venue {
     ao.push({ x, z, len, depth: 0.6, ry, side: 1, a: 0.5, off: 0.12 }, { x, z, len, depth: 0.45, ry, side: -1, a: 0.42, off: 0.12 });
   };
   // the far end: three boards facing the near end
-  for (let i = 0; i < 3; i++) addBoard(-3.72 + i * 3.72, -BOARD_Z, 3.66, 0);
+  for (let i = 0; i < 3; i++) addBoard(-4.02 + i * 4.02, -BOARD_Z, 3.96, 0);
   // the sides: two boards each side of the net gap, facing in
-  for (const sx of [-1, 1])
-    for (const zc of [-8.1, -4.03, 4.03, 8.1]) addBoard(sx * BOARD_X, zc, 4.02, (sx * -Math.PI) / 2);
+  for (const sx of [-1, 1]) for (const zc of [-9.2, -5.1, 5.1, 9.2]) addBoard(sx * BOARD_X, zc, 4.0, (sx * -Math.PI) / 2);
 
-  // ---------- the umpire's chair at the net, the players' benches beside it ----------
+  // ---------- the umpire's chair at the net, the players' benches by the doors ----------
   {
-    const x = -(POST_X + 1.35);
-    for (const lx of [-0.28, 0.28]) for (const lz of [-0.28, 0.28]) props.box(at(x + lx, 0.75, lz), 0.05, 1.5, 0.05, 0x1b1e24, GRAPHITE);
-    props.box(at(x, 1.5, 0), 0.72, 0.06, 0.72, 0x23272e, GRAPHITE);
-    props.box(at(x, 1.9, 0), 0.48, 0.07, 0.46, 0x111317, PLASTIC);
-    props.box(at(x - 0.25, 2.2, 0), 0.05, 0.56, 0.48, 0x111317, PLASTIC);
-    props.box(at(x + 0.36, 1.82, 0), 0.04, 0.6, 0.72, 0x14365c, PAINTED);
+    const x = -(BOARD_X + 0.2);
+    for (const lx of [-0.28, 0.28]) for (const lz of [-0.28, 0.28]) props.box(at(x + lx, 0.85, lz), 0.05, 1.7, 0.05, 0x1b1e24, GRAPHITE);
+    props.box(at(x, 1.7, 0), 0.72, 0.06, 0.72, 0x23272e, GRAPHITE);
+    props.box(at(x, 2.1, 0), 0.48, 0.07, 0.46, 0x111317, PLASTIC);
+    props.box(at(x - 0.25, 2.4, 0), 0.05, 0.56, 0.48, 0x111317, PLASTIC);
+    props.box(at(x + 0.36, 2.02, 0), 0.04, 0.6, 0.72, 0x14365c, PAINTED);
     // the ladder behind it
-    for (const lz of [-0.2, 0.2]) props.box(at(x - 0.55, 0.78, lz, 0, 0, -0.38), 0.05, 1.7, 0.05, 0x1b1e24, GRAPHITE);
-    for (let i = 0; i < 4; i++) props.box(at(x - 0.78 + i * 0.13, 0.25 + i * 0.36, 0), 0.06, 0.03, 0.4, 0x2a2e36, GRAPHITE);
+    for (const lz of [-0.2, 0.2]) props.box(at(x - 0.55, 0.88, lz, 0, 0, -0.38), 0.05, 1.9, 0.05, 0x1b1e24, GRAPHITE);
+    for (let i = 0; i < 4; i++) props.box(at(x - 0.8 + i * 0.13, 0.25 + i * 0.4, 0), 0.06, 0.03, 0.4, 0x2a2e36, GRAPHITE);
     ao.push({ x, z: 0, len: 1.2, depth: 1.2, ry: 0, side: 0, a: 0.5, off: 0 });
-    staff.push({ x: x + 0.02, y: 1.93, z: 0, yaw: Math.PI / 2, v: 0.5, kind: 2 });
-    // the benches, a towel and the bottles on each
+    staff.push({ x: x + 0.02, y: 2.13, z: 0, yaw: Math.PI / 2, v: 0.5, kind: 2 });
+    // the benches outside the doors, a towel and the bottles on each
     for (const sz of [-1, 1]) {
-      const bx = -BOARD_X - 1.15;
-      const bz = sz * 1.75;
+      const bx = -BOARD_X - 0.55;
+      const bz = sz * 3.0;
       props.box(at(bx, 0.23, bz), 0.46, 0.46, 1.7, 0x18202c, PAINTED);
       props.box(at(bx - 0.22, 0.68, bz), 0.06, 0.48, 1.7, 0x18202c, PAINTED);
       props.box(at(bx + 0.02, 0.48, bz - sz * 0.3), 0.36, 0.04, 0.42, 0xeeeeea, CLOTH);
@@ -191,41 +203,26 @@ export function buildVenue(tier: 'high' | 'medium' | 'low'): Venue {
     ao.push({ x, z, len: 0.8, depth: 0.8, ry: 0, side: 0, a: 0.45, off: 0 });
   };
   for (const sx of [-1, 1]) {
-    camera(sx * 4.3, -BOARD_Z - 1.35, 0, 0);
+    // behind the far end, looking through the glass
+    camera(sx * 5.2, -BOARD_Z - 1.0, 0, 0);
     // (the near end's out of the gameplay camera's frame, in the corners: they show in the TV's reverse angles)
-    camera(sx * 6.3, BOARD_Z + 1.6, Math.PI - sx * 0.5, 0);
-    // (in front of the near end's stand, wide apart: the gameplay camera looks between them)
-    camera(sx * 3.0, BOWL.az - 0.6, Math.PI, 0);
+    camera(sx * 6.4, HL + 1.6, Math.PI - sx * 0.5, 0);
   }
   // the side camera on its platform across from the umpire
-  props.box(at(BOARD_X + 1.4, 0.2, 0), 1.1, 0.4, 1.2, 0x23272e, PAINTED);
-  camera(BOARD_X + 1.3, 0, -Math.PI / 2, 0.4);
-  ao.push({ x: BOARD_X + 1.4, z: 0, len: 1.6, depth: 1.7, ry: 0, side: 0, a: 0.5, off: 0 });
+  props.box(at(BOARD_X + 0.75, 0.2, 0), 1.1, 0.4, 1.2, 0x23272e, PAINTED);
+  camera(BOARD_X + 0.65, 0, -Math.PI / 2, 0.4);
+  ao.push({ x: BOARD_X + 0.75, z: 0, len: 1.6, depth: 1.7, ry: 0, side: 0, a: 0.5, off: 0 });
 
-  // ---------- line judges in the corners, photographers behind the ends ----------
-  const chair = (x: number, z: number, ry: number) => {
-    props.box(at(x, 0.45, z, ry), 0.42, 0.05, 0.42, 0x15171b, PLASTIC);
-    props.box(at(x - Math.sin(ry) * 0.2, 0.7, z - Math.cos(ry) * 0.2, ry), 0.42, 0.45, 0.04, 0x15171b, PLASTIC);
-    for (const lx of [-0.18, 0.18]) for (const lz of [-0.18, 0.18]) props.box(at(x + lx, 0.22, z + lz), 0.03, 0.44, 0.03, 0x2a2e36, GRAPHITE);
-    ao.push({ x, z, len: 0.7, depth: 0.7, ry: 0, side: 0, a: 0.4, off: 0 });
-  };
-  for (const sz of [-1, 1])
-    for (const sx of [-1, 1]) {
-      const x = sx * (BOARD_X - 0.55);
-      const z = sz * (BOARD_Z - 0.42);
-      const ry = (-sx * Math.PI) / 2;
-      chair(x, z, ry);
-      staff.push({ x, y: 0.48, z, yaw: ry, v: 0.6, kind: 2 });
-    }
+  // ---------- photographers behind the far end and in the near corners ----------
   for (const [x, z] of [
-    [-2.6, -1],
-    [-1.25, -1],
-    [1.1, -1],
-    [2.5, -1],
-    [-3.4, 1],
-    [3.5, 1],
+    [-3.0, -1],
+    [-1.4, -1],
+    [1.3, -1],
+    [2.9, -1],
+    [-4.6, 1],
+    [4.6, 1],
   ]) {
-    const zz = z * (BOARD_Z + 0.75);
+    const zz = z < 0 ? -(BOARD_Z + 0.75) : HL + 0.9;
     props.box(at(x, 0.15, zz), 0.32, 0.3, 0.32, 0x1b1e24, PLASTIC);
     staff.push({ x, y: 0.32, z: zz, yaw: z < 0 ? 0 : Math.PI, v: 0.4, kind: 2 });
   }
@@ -256,6 +253,7 @@ export function buildVenue(tier: 'high' | 'medium' | 'low'): Venue {
   return {
     group: g,
     net,
+    cage,
     board: screen,
     crowd,
     ledTime: em.time,
@@ -394,23 +392,23 @@ function surfaceGeometry(): THREE.BufferGeometry {
 }
 
 /**
- * The acrylic: the court's paint (colour, wear in alpha) times the sand grain of the tile (R), its roughness (G) a
- * little lower where it is worn (polished by shoes), and the grain's normal map. A tour court is freshly coated: a
- * satin finish that catches a soft sheen of the floodlights.
+ * The artificial grass: the court's colour (wear in alpha) times the grain of the fibres (R), matte (G, a touch
+ * smoother where the pile is flattened), and the grain's normal map. Grass has a soft sheen at a grazing angle (the
+ * fibres catch the light along their length): a little of it, so the far half of the court picks up the floodlights.
  */
 function courtMaterial(paint: THREE.Texture, detail: THREE.Texture, normal: THREE.Texture): THREE.MeshStandardMaterial {
-  const m = new THREE.MeshStandardMaterial({ map: paint, roughnessMap: detail, normalMap: normal, normalScale: new THREE.Vector2(0.3, 0.3), roughness: 0.58, metalness: 0 });
+  const m = new THREE.MeshStandardMaterial({ map: paint, roughnessMap: detail, normalMap: normal, normalScale: new THREE.Vector2(0.55, 0.55), roughness: 0.82, metalness: 0 });
   m.onBeforeCompile = (s) => {
     s.fragmentShader = s.fragmentShader
       .replace(
         '#include <map_fragment>',
         `vec4 pbPaint = texture2D( map, vMapUv );
         vec4 pbDet = texture2D( roughnessMap, vRoughnessMapUv );
-        diffuseColor.rgb *= pbPaint.rgb * ( 0.88 + 0.24 * pbDet.r );`,
+        diffuseColor.rgb *= pbPaint.rgb * ( 0.8 + 0.4 * pbDet.r );`,
       )
-      .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = roughness * pbDet.g * ( 1.0 - 0.2 * pbPaint.a );');
+      .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = roughness * pbDet.g * ( 1.0 - 0.12 * pbPaint.a );');
   };
-  m.customProgramCacheKey = () => 'pb-court';
+  m.customProgramCacheKey = () => 'pb-turf';
   return m;
 }
 
@@ -447,20 +445,22 @@ function netMaterial(): THREE.MeshLambertMaterial {
 }
 
 /**
- * The painted lines, one mesh: each line is a quad a little wider than the line, and the edge is drawn by the pixel's
- * own footprint (analytic anti-aliasing), so a 5 cm line stays clean at the far baseline with or without MSAA.
+ * The lines, one mesh: each line is a quad a little wider than the line, and the edge is drawn by the pixel's own
+ * footprint (analytic anti-aliasing), so a 5 cm line stays clean at the far service line with or without MSAA.
  */
 function courtLines(normal: THREE.Texture): THREE.Mesh {
   const lw = 0.05;
+  // the service lines across the court (the line is in: its outer edge is the service line's distance), and the
+  // centre service line from the net to 20 cm past each of them (FIP); no other lines (the walls are the court's ends
+  // and sides)
+  const sv = SERVICE - lw / 2;
+  const c0 = lw / 2;
+  const c1 = SERVICE + 0.2;
   const lines: [number, number, number, number][] = [
-    [lw, L + lw, -W / 2, 0],
-    [lw, L + lw, W / 2, 0],
-    [W, lw, 0, -HL],
-    [W, lw, 0, HL],
-    [W, lw, 0, -NVZ],
-    [W, lw, 0, NVZ],
-    [lw, HL - NVZ, 0, (HL + NVZ) / 2],
-    [lw, HL - NVZ, 0, -(HL + NVZ) / 2],
+    [W, lw, 0, -sv],
+    [W, lw, 0, sv],
+    [lw, c1 - c0, 0, (c0 + c1) / 2],
+    [lw, c1 - c0, 0, -(c0 + c1) / 2],
   ];
   const m = 0.04;
   const P: number[] = [];
@@ -491,8 +491,8 @@ function courtLines(normal: THREE.Texture): THREE.Mesh {
   geo.setAttribute('uv1', new THREE.Float32BufferAttribute(U, 2));
   geo.setAttribute('aEdge', new THREE.Float32BufferAttribute(E, 4));
   geo.setIndex(I);
-  // (line paint is smoother than the acrylic: a little sheen at a glancing angle)
-  const mat = new THREE.MeshStandardMaterial({ color: PAINT.line, roughness: 0.46, metalness: 0, normalMap: normal, normalScale: new THREE.Vector2(0.2, 0.2), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+  // (white turf glued into the blue: a little brighter at a glancing angle)
+  const mat = new THREE.MeshStandardMaterial({ color: PAINT.line, roughness: 0.62, metalness: 0, normalMap: normal, normalScale: new THREE.Vector2(0.2, 0.2), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
   mat.onBeforeCompile = (s) => {
     s.vertexShader = s.vertexShader.replace('#include <common>', '#include <common>\nattribute vec4 aEdge;\nvarying vec4 vEdge;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvEdge = aEdge;');
     s.fragmentShader = s.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec4 vEdge;').replace(
@@ -513,8 +513,9 @@ function courtLines(normal: THREE.Texture): THREE.Mesh {
 }
 
 /**
- * The tournament's name painted on the surround behind each baseline, as on a tour court: upright for the camera at
- * that end. One mesh, one small canvas (white paint that lets the acrylic show through a little).
+ * The tournament's name on the surround behind each back wall, outside the glass, as on a tour court: the near one at
+ * the foot of the gameplay frame, the far one through the far glass, both upright for the gameplay camera. One mesh,
+ * one small canvas (white, the floor's grain showing through a little).
  */
 function apronLogos(normal: THREE.Texture): { mesh: THREE.Mesh; redraw: () => void } {
   const c = document.createElement('canvas');
@@ -546,23 +547,24 @@ function apronLogos(normal: THREE.Texture): { mesh: THREE.Mesh; redraw: () => vo
   draw();
   const w = 4.2;
   const d = w * (c.height / c.width);
-  const z = HL + 0.42 + d / 2 + 0.25;
+  const z = HL + 0.45 + d / 2;
   const P: number[] = [];
   const U: number[] = [];
   const U1: number[] = [];
   const I: number[] = [];
   for (const side of [1, -1]) {
     const k = P.length / 3;
-    // corners (x, z) and their uv; the text's top points away from the camera at that end (towards the net)
+    // corners (x, z) and their uv; both read upright from the gameplay camera's end (+z): the far one is seen through
+    // the far glass
     for (const [cx, cz, u, v] of [
       [-w / 2, -d / 2, 0, 1],
       [w / 2, -d / 2, 1, 1],
       [w / 2, d / 2, 1, 0],
       [-w / 2, d / 2, 0, 0],
     ]) {
-      P.push(cx * side, 0.004, side * z + cz * side);
+      P.push(cx, 0.004, side * z + cz);
       U.push(u, v);
-      U1.push((cx * side) / TILE, (side * z + cz * side) / TILE);
+      U1.push(cx / TILE, (side * z + cz) / TILE);
     }
     I.push(k, k + 2, k + 1, k, k + 3, k + 2);
   }
@@ -636,7 +638,7 @@ function decals(list: Decal[]): THREE.Mesh {
   return mesh;
 }
 
-/** Repaints the video boards and the LED score. */
-export function drawBoard(b: Venue['board'], left: string, right: string, sl: number, sr: number, serving: 0 | 1 | null, footer: string, intro = false) {
-  drawScreen(b, left, right, sl, sr, serving, footer, intro);
+/** Repaints the video boards and the LED score (games in the set, points in the game). */
+export function drawBoard(b: Venue['board'], left: string, right: string, games: [number, number], points: [string, string], serving: 0 | 1 | null, footer: string, intro = false) {
+  drawScreen(b, left, right, games, points, serving, footer, intro);
 }

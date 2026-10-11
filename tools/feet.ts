@@ -1,5 +1,5 @@
-// CPU footwork, measured (docs/concepto.md, «Gráficos y simulación 0.5»): CPU against CPU at 60 Hz, singles Reina
-// against Nuria and doubles Marta and Lola against Nuria and Reina, the first rally of each traced for plots.
+// CPU footwork, measured (docs/pickleball/concepto.md, «Gráficos y simulación 0.5»): CPU against CPU at 60 Hz, padel
+// Martín and Fede against Agustín and Arturo, the first rally of each traced for plots.
 // Usage: npx tsx tools/feet.ts [trace.json] [matches = 6] · FEET='{"optimism":0.05}' tries other footwork values.
 //  · accel: p50 / p95 / max of |a| while moving (m/s²) · topspeed: p95 of the speed (m/s)
 //  · statue: share of rally time standing still (|v| < 0.02 m/s)
@@ -9,7 +9,7 @@
 //  · split: share of the other side's contacts after which the player slows down (or is still) within 0.3 s
 //  · late: plans the player could make that ended with the feet too far from the ball at the contact
 import { writeFileSync } from 'node:fs';
-import { AIController, PAIRS, RIVALS, PARTNER } from '../src/sim/brain';
+import { AIController, PAIRS, PARTNER } from '../src/sim/brain';
 import { FEET, Match } from '../src/sim/match';
 import type { Player } from '../src/sim/types';
 if (process.env.FEET) Object.assign(FEET, JSON.parse(process.env.FEET));
@@ -18,10 +18,10 @@ const out = process.argv[2] ?? '/tmp/pb-feet.json';
 const N = Number(process.argv[3] ?? 6);
 const q = (a: number[], p: number) => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(p * s.length))]; };
 type Tr = { t: number; x: number; z: number; vx: number; vz: number }[];
-function run(kind: 'singles' | 'doubles', seed: number) {
-  const sk = kind === 'singles' ? [RIVALS[4], RIVALS[3]] : [PARTNER, PAIRS[1].a, PAIRS[3].a, PAIRS[3].b];
-  const teams = kind === 'singles' ? [0, 1] : [0, 0, 1, 1];
-  const m = new Match(sk.map((r, i) => ({ team: teams[i] as 0 | 1, human: false, speed: r.skill.speed, reaction: r.skill.reaction, look: r.look })), { scoring: 'rally', to: 11 }, seed);
+function run(seed: number) {
+  const sk = [PARTNER, PAIRS[1].a, PAIRS[3].a, PAIRS[3].b];
+  const teams = [0, 0, 1, 1];
+  const m = new Match(sk.map((r, i) => ({ team: teams[i] as 0 | 1, human: false, speed: r.skill.speed, reaction: r.skill.reaction, look: r.look })), { games: 3, golden: true }, seed);
   m.setControllers(sk.map((r) => new AIController(r.skill)));
   m.start();
   const tr: Tr[] = m.players.map(() => []);
@@ -57,12 +57,12 @@ let cpuPlans = 0, cpuLate = 0;
   };
 }
 const res: Record<string, unknown> = {};
-for (const kind of ['singles', 'doubles'] as const) {
+for (const kind of ['doubles'] as const) {
   const acc: number[] = [], top: number[] = [], straight: number[] = [];
   let still = 0, frames = 0, cuts = 0, dither = 0, splitN = 0, splitY = 0, rallyT = 0;
   let firstTrace: Tr[] | null = null;
   for (let i = 0; i < N; i++) {
-    const { tr, hits } = run(kind, 500 + i * 101);
+    const { tr, hits } = run(500 + i * 101);
     if (!firstTrace) firstTrace = tr.map((a) => a.slice(0, 60 * 40));
     tr.forEach((a, pid) => {
       for (let j = 1; j < a.length; j++) {
@@ -104,7 +104,7 @@ for (const kind of ['singles', 'doubles'] as const) {
         const i0 = me.findIndex((s) => s.t >= h.t);
         if (i0 < 0) continue;
         const hitterTeam = h.pid; void hitterTeam;
-        if ((kind === 'singles' && h.pid === pid) || (kind === 'doubles' && Math.floor(h.pid / 2) === Math.floor(pid / 2))) continue;
+        if (Math.floor(h.pid / 2) === Math.floor(pid / 2)) continue;
         splitN++;
         const v0 = Math.hypot(me[i0].vx, me[i0].vz);
         let minV = v0;

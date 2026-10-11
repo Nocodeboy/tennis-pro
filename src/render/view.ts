@@ -9,7 +9,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { installLook, vignette } from './look';
 import { minFlight, posAt, seg, shotByClearance, type Vec3 } from '../sim/ball';
-import { HL, NVZ, R, W } from '../sim/court';
+import { HL, R, SERVICE, W, backSurface, sideSurface } from '../sim/court';
 import { LUNGE, SPIN, type Match } from '../sim/match';
 import type { Player, PointReason, ShotKind } from '../sim/types';
 import { BALL_DROP, CLIP_NAMES, CharacterView, PADDLE_POSE, loadCharAssets, type CharAssets, type Kit } from './chars';
@@ -25,7 +25,7 @@ import { buildVenue, drawBoard, type Venue } from './venue';
 export type Tier = 'high' | 'medium' | 'low';
 
 const REDUCED = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
-const BALL_SCALE = 1.45; // a little bigger than life so it reads on a phone
+const BALL_SCALE = 1.6; // a little bigger than life so it reads on a phone (the court is 20 m long)
 /**
  * The key light (still called the sun here): the floodlights at the near left of the roof's ring, high up and a
  * little behind the broadcast camera. Both players are seen on their lit side (the near one from behind, the far one
@@ -41,9 +41,9 @@ const SUN_AZ = 326;
  */
 const RIM_ELEV = 27;
 const RIM_AZ = 166;
-/** what the shadow map covers: the court inside the boards and the stands beside it */
-const BOARD_HALF_X = 11.8;
-const BOARD_HALF_Z = 10.5;
+/** what the shadow map covers: the cage and the boards round it */
+const BOARD_HALF_X = 7.4;
+const BOARD_HALF_Z = 12.6;
 
 interface Aim {
   x: number;
@@ -57,11 +57,23 @@ interface Aim {
 
 /**
  * The indicators' colours, one meaning each (the HUD uses the same): lime = you / in reach, gold = perfect (only the
- * timing), red = the kitchen (a fault), grey = out. The aim by the kind of shot: soft (dink, drop) cyan, the plain
- * shots white, the lob violet, the attacks orange; an aim that lands out is grey.
+ * timing), red = a fault (the return of serve volleyed), grey = out. The aim by the kind of shot: soft (chiquita,
+ * dejada) cyan, the drives and the volleys yellow, the lob violet, the overheads (remate, bandeja, víbora) orange; an
+ * aim that lands out is grey.
  */
 export const HUE = { lime: 0xdcff3c, gold: 0xffd23a, red: 0xff4a3a, out: 0x9aa3ad, white: 0xffffff, attack: 0xff9a3c } as const;
-const KIND_HUE: Partial<Record<ShotKind, number>> = { dink: 0x5af0e8, drop: 0x5af0e8, lob: 0xc49aff, speedup: 0xff9a3c, smash: 0xff9a3c };
+const KIND_HUE: Partial<Record<ShotKind, number>> = {
+  dink: 0x5af0e8,
+  drop: 0x5af0e8,
+  drive: 0xffe14a,
+  return: 0xffe14a,
+  speedup: 0xffe14a,
+  auto: 0xffe14a,
+  lob: 0xc49aff,
+  smash: 0xff9a3c,
+  bandeja: 0xff9a3c,
+  vibora: 0xff9a3c,
+};
 export function aimHue(kind: ShotKind, ok: boolean): number {
   return ok ? KIND_HUE[kind] ?? HUE.white : HUE.out;
 }
@@ -77,6 +89,8 @@ const TIER_PX: Record<Tier, number> = { high: 2, medium: 1.75, low: 1 };
 const EXPOSURE = 0.66;
 installLook();
 
+/** gravity (m/s²) for the serve's drop and bounce, drawn by the view */
+const G = 9.81;
 /** a broadcast camera's shutter: a fast ball draws a streak this long in time */
 const SHUTTER = 1 / 40;
 /** the ball is never drawn smaller than this (CSS px across) */
@@ -137,11 +151,6 @@ export class View {
   private aimLine: THREE.Line;
   private aimPts = new Float32Array(48 * 3);
   private serveBox: THREE.Mesh;
-  private kitchenWarn: THREE.Mesh;
-  /** the kitchen line lit where it stops the player (Match.lineHold), and how lit it is now (it fades out) */
-  private lineCue: THREE.Mesh;
-  private lineCueA = 0;
-  private markT = -1;
   private netWobble = 0;
   private particles: Particles;
   private fx = new FxList(400);
@@ -156,15 +165,20 @@ export class View {
   private spinAxis = new THREE.Vector3();
   private spinQ = new THREE.Quaternion();
   private pull = new THREE.Vector3();
-  /** the serve: where the ball left the free hand */
-  private drop: { at: number; x: number; y: number; z: number } | null = null;
+  /** the serve: where the ball left the free hand, and whether it has bounced yet */
+  private drop: { at: number; x: number; y: number; z: number; bounced: boolean } | null = null;
   private targetRing: THREE.Mesh;
   private targetDot: THREE.Mesh;
   viewSide: 1 | -1 = 1;
   orbit = false;
   private orbitT = 0;
-  /** camera: distance behind the net, height and the point it looks at (portrait p*, landscape l*) */
-  cam = { pd: 21.5, ph: 13.2, pl: 0.4, pf: 40, ld: 17.8, lh: 8.4, ll: 1.2, lf: 31 };
+  /**
+   * camera: distance behind the net, height, the point it looks at (m from the net, towards the camera) and the field
+   * of view (portrait p*, landscape l*). High over the near end's stands, behind the near back wall (it fades: see
+   * cage.ts): the whole court from glass to glass in the frame, the far players as big as they can be. Portrait: the
+   * far back wall's mesh under the top of the frame, a player against the side wall at the near end inside its edge.
+   */
+  cam = { pd: 23, ph: 13, pl: 0.25, pf: 46, ld: 22.75, lh: 11, ll: 0, lf: 34 };
   /** does this player swing at the coming ball? (the human only when pressing) */
   swingGate: (p: Player) => boolean = () => true;
   /** the human's swing leaves balls going out alone (assisted swing, not holding the aim) */
@@ -190,12 +204,17 @@ export class View {
   private camOut: CamPose = { pos: new THREE.Vector3(), look: new THREE.Vector3(), fov: 40 };
   private ctx: DirCtx = { aspect: 1, game: this.game, side: 1, players: [], ball: null };
   private ballV = new THREE.Vector3();
-  /** sounds the view hears: a replayed hit or bounce, the dead ball bouncing away, sneakers on a hard stop */
+  /**
+   * sounds the view hears: a replayed hit or bounce, a ball bouncing that the sim does not report (the dead ball
+   * bouncing away, the serve's bounce before the contact), sneakers on a hard stop
+   */
   onReplayEvent: ((e: RecEvent) => void) | null = null;
   onDeadBounce: ((speed: number, x: number, z: number) => void) | null = null;
   onSqueak: ((pid: number, strength: number, x: number, z: number) => void) | null = null;
   private feet: { vx: number; vz: number; x: number; z: number; brake: number; cool: number }[] = [];
   private deadVy = 0;
+  /** the ball as drawn last frame (the walls' impacts are read from it: see watchWalls) */
+  private wallPrev = { x: 0, y: 0, z: 0, vx: 0, vz: 0, ok: false };
 
   constructor(private canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
@@ -224,7 +243,7 @@ export class View {
     sc.updateMatrixWorld();
     const inv = sc.matrixWorldInverse;
     const bb = new THREE.Box3();
-    for (const x of [-BOARD_HALF_X, BOARD_HALF_X]) for (const y of [0, 3.2]) for (const z of [-BOARD_HALF_Z, BOARD_HALF_Z]) bb.expandByPoint(this.tmp.set(x, y, z).applyMatrix4(inv));
+    for (const x of [-BOARD_HALF_X, BOARD_HALF_X]) for (const y of [0, 4.1]) for (const z of [-BOARD_HALF_Z, BOARD_HALF_Z]) bb.expandByPoint(this.tmp.set(x, y, z).applyMatrix4(inv));
     sc.left = bb.min.x - 0.3;
     sc.right = bb.max.x + 0.3;
     sc.bottom = bb.min.y - 0.3;
@@ -298,27 +317,8 @@ export class View {
       this.scene.add(m);
       return m;
     };
-    this.serveBox = plane(W / 2, HL - NVZ, HUE.lime, 0.12);
-    this.kitchenWarn = plane(W, NVZ, HUE.red, 0.22);
-    // the kitchen line lit in front of the player while it holds him back: the line itself in lime and a soft glow
-    // on the floor on his side of it (a barrier, not a fault), fading at both ends
-    const fade = document.createElement('canvas');
-    fade.width = 64;
-    fade.height = 32;
-    const fx = fade.getContext('2d')!;
-    const img = fx.createImageData(64, 32);
-    for (let y = 0; y < 32; y++)
-      for (let x = 0; x < 64; x++) {
-        const u = x / 63;
-        const across = Math.min(1, Math.min(u, 1 - u) / 0.28);
-        const along = y < 3 ? 1 : 0.5 * Math.pow(1 - (y - 3) / 28, 1.6);
-        const a = Math.round(255 * along * across * across * (3 - 2 * across));
-        img.data.set([a, a, a, 255], (y * 64 + x) * 4);
-      }
-    fx.putImageData(img, 0, 0);
-    this.lineCue = plane(1.8, 0.5, HUE.lime, 0);
-    (this.lineCue.material as THREE.MeshBasicMaterial).alphaMap = new THREE.CanvasTexture(fade);
-    this.lineCue.renderOrder = 3;
+    // the receiver's diagonal service box: from the net to the service line, the centre line to the side wall
+    this.serveBox = plane(W / 2, SERVICE, HUE.lime, 0.12);
     this.particles = new Particles(500);
     this.scene.add(this.particles.points);
     this.resize();
@@ -504,6 +504,49 @@ export class View {
   netFx() {
     this.netWobble = 1;
   }
+  /** A ball met a wall: the glass flashes and keeps a fading mark, the mesh shakes, a puff of dust off the glass. */
+  wallFx(x: number, y: number, z: number, surface: 'glass' | 'mesh', speed: number) {
+    this.venue.cage.impact(x, y, z, surface, speed);
+    if (surface !== 'glass' || speed < 6) return;
+    // (a few grains of the infill the ball carried, off the glass towards the court)
+    const nx = Math.abs(x) > W / 2 - 0.3 ? -Math.sign(x) : 0;
+    const nz = nx ? 0 : -Math.sign(z);
+    for (let i = 0; i < 4; i++) {
+      const a = Math.random() * Math.PI * 2;
+      this.fx.add({ x, y, z, vx: nx * 1.2 + Math.cos(a) * 0.5, vy: Math.sin(a) * 0.5, vz: nz * 1.2 + Math.cos(a + 1) * 0.5, life: 0.35, s0: 0.05, s1: 0.16, r: 0.9, g: 0.95, b: 1, a: 0.18, grav: 0, drag: 4 });
+    }
+  }
+  /**
+   * The walls' impacts, read from the ball as drawn (live, dead or replayed: one rule for all): next to a wall, and
+   * its speed into that wall turned round since the last frame.
+   */
+  private watchWalls(dt: number) {
+    const w = this.wallPrev;
+    if (!this.ball.visible || dt <= 0) {
+      w.ok = false;
+      return;
+    }
+    const b = this.ball.position;
+    if (w.ok) {
+      const vx = (b.x - w.x) / dt;
+      const vz = (b.z - w.z) / dt;
+      const near = 0.45;
+      const sp = Math.hypot(w.vx, w.vz);
+      if (Math.abs(b.x) > W / 2 - near && Math.sign(w.vx) === Math.sign(b.x) && Math.sign(vx) !== Math.sign(w.vx) && Math.abs(w.vx) > 1) {
+        const s = sideSurface(Math.abs(b.z), b.y);
+        if (s !== 'open') this.wallFx(Math.sign(b.x) * W / 2, b.y, b.z, s, sp);
+      } else if (Math.abs(b.z) > HL - near && Math.sign(w.vz) === Math.sign(b.z) && Math.sign(vz) !== Math.sign(w.vz) && Math.abs(w.vz) > 1) {
+        const s = backSurface(b.y);
+        if (s !== 'open') this.wallFx(b.x, b.y, Math.sign(b.z) * HL, s, sp);
+      }
+      w.vx = vx;
+      w.vz = vz;
+    } else w.vx = w.vz = 0;
+    w.x = b.x;
+    w.y = b.y;
+    w.z = b.z;
+    w.ok = true;
+  }
   /** the ball left a paddle: the character keeps the contact point for the follow-through */
   onHit(pid: number, x: number, y: number, z: number, t: number, hand: 1 | -1) {
     this.chars[pid]?.onHit(x, y, z, t, hand);
@@ -630,8 +673,7 @@ export class View {
       else if (!e.tape) this.netWobble = 1;
       this.onReplayEvent?.(e);
     }
-    for (const m of [this.landRing, this.footRing, this.targetRing, this.targetDot, this.aimRing, this.serveBox, this.kitchenWarn, this.lineCue]) m.visible = false;
-    this.lineCueA = 0;
+    for (const m of [this.landRing, this.footRing, this.targetRing, this.targetDot, this.aimRing, this.serveBox]) m.visible = false;
     this.aimLine.visible = false;
   }
   private qf = [0, 0, 0, 1];
@@ -742,6 +784,9 @@ export class View {
     this.crowd.focus(shot === 'play' ? 0 : shot === 'frame' || shot === 'react' || shot === 'victory' ? 1 : 0.6);
     this.crowd.update(dt);
     this.venue.ledTime.value = (this.venue.ledTime.value + dt) % 3600;
+    this.venue.cage.update(dt);
+    // (a replay runs slower than the screen: the ball's speed on its own clock)
+    this.watchWalls(this.replay ? dt * replaySpeed(this.replay, this.replay.cur) : dt);
     this.updateCamera(dt, m);
     if (this.netWobble > 0) {
       this.netWobble = Math.max(0, this.netWobble - dt * 2.2);
@@ -763,20 +808,34 @@ export class View {
 
   private updateBall(m: Match, dt: number) {
     let b = m.ballPos(this.bp);
-    // before the serve the ball sits in the server's free hand; in the wind-up it drops from it onto the paddle
+    // before the serve the ball sits in the server's free hand; in the wind-up the hand lets it go, it bounces once
+    // and is met on its way up below the waist (the padel serve)
     if (!b && m.phase === 'serve') {
       const w = m.windup;
       const h = this.chars[w ? w.pid : m.server().id]?.ballInHand(this.tmp);
       const rel = w ? w.at - BALL_DROP : Infinity;
       if (w && m.t >= rel) {
-        // falling: from where the hand let it go to the contact, as a free fall (y drops with the square of time)
         let d = this.drop;
-        if (!d || d.at !== w.at) d = this.drop = { at: w.at, x: h?.x ?? w.x, y: h ? h.y - 0.02 : w.y + 0.6, z: h?.z ?? w.z };
-        const u = Math.min(1, (m.t - rel) / BALL_DROP);
-        b = { x: d.x + (w.x - d.x) * u, y: d.y + (w.y - d.y) * u * u, z: d.z + (w.z - d.z) * u };
+        if (!d || d.at !== w.at) d = this.drop = { at: w.at, x: h?.x ?? w.x, y: h ? h.y - 0.02 : w.y + 0.4, z: h?.z ?? w.z, bounced: false };
+        const t = m.t - rel;
+        const T = BALL_DROP;
+        // the fall from the hand to the floor (in t1, a free fall), then the bounce up to the contact (t2 = T − t1)
+        // under real gravity: its speed off the floor is what reaches the contact height at the contact
+        const t1 = Math.min(T - 0.2, Math.max(0.25, Math.sqrt((2 * Math.max(0.05, d.y - R)) / G)));
+        const t2 = T - t1;
+        const g1 = (2 * Math.max(0.05, d.y - R)) / (t1 * t1);
+        const v2 = (w.y - R + 0.5 * G * t2 * t2) / t2;
+        const u = Math.min(1, t / T);
+        // (across: from the hand to the contact, a little in front of the server: the bounce on the way)
+        const y = t < t1 ? d.y - 0.5 * g1 * t * t : R + v2 * (t - t1) - 0.5 * G * (t - t1) * (t - t1);
+        b = { x: d.x + (w.x - d.x) * u, y: Math.max(R, y), z: d.z + (w.z - d.z) * u };
+        if (t >= t1 && !d.bounced) {
+          d.bounced = true;
+          this.onDeadBounce?.(g1 * t1, b.x, b.z);
+        }
       } else if (h) {
         b = { x: h.x, y: h.y - 0.02, z: h.z };
-        if (w) this.drop = { at: w.at, x: b.x, y: b.y, z: b.z };
+        if (w) this.drop = { at: w.at, x: b.x, y: b.y, z: b.z, bounced: false };
       }
     }
     this.ball.visible = !!b;
@@ -851,7 +910,7 @@ export class View {
     // (a slow breath on the markers that ask you to do something; none with reduced motion)
     const breathe = (speed: number, amp: number) => (REDUCED ? 1 : 1 + amp * Math.sin(time * speed));
     const mat = (o: THREE.Mesh) => o.material as THREE.MeshBasicMaterial;
-    for (const o of [this.landRing, this.footRing, this.targetRing, this.targetDot, this.kitchenWarn]) o.visible = false;
+    for (const o of [this.landRing, this.footRing, this.targetRing, this.targetDot]) o.visible = false;
     const incoming = !!me && !!r && m.phase === 'rally' && !!r.last && r.last.team !== me.team;
     const plan = incoming ? me!.plan : null;
     // where the coming ball will bounce on the human's side (a small mark; the full indicators only)
@@ -877,9 +936,9 @@ export class View {
         this.targetRing.scale.setScalar(near && !this.attackCue ? 1 : breathe(7, 0.1));
       }
     }
-    // the reach state, at the feet: lime in reach, red a volley from the kitchen (a fault), grey a ball going out
-    // that the assisted swing leaves alone, orange a ball to attack (nothing while the ball is out of reach: the
-    // spot shows where to go)
+    // the reach state, at the feet: lime in reach, red a fault (the return of serve taken out of the air), grey a ball
+    // going out that the assisted swing leaves alone, orange a ball to attack (nothing while the ball is out of reach:
+    // the spot shows where to go)
     if (incoming && plan) {
       this.footRing.visible = true;
       this.footRing.position.set(me!.x, 0.016, me!.z);
@@ -887,33 +946,13 @@ export class View {
       mat(this.footRing).color.setHex(plan.oops ? HUE.red : leave ? HUE.out : this.attackCue ? HUE.attack : HUE.lime);
       this.footRing.scale.setScalar(this.attackCue && !plan.oops && !leave ? breathe(9, 0.06) : 1);
       mat(this.footRing).opacity = leave ? 0.6 : 0.85;
-      // standing in the kitchen with a volley coming: light the kitchen red
-      if (plan.oops) {
-        this.kitchenWarn.visible = true;
-        this.kitchenWarn.position.set(0, 0.012, (me!.side * NVZ) / 2);
-        mat(this.kitchenWarn).opacity = REDUCED ? 0.24 : 0.2 + 0.06 * Math.sin(time * 10);
-      }
     }
-    // the kitchen line holding the player back (he pushes on and the ball will not bounce in): the stretch of line in
-    // front of him lights up lime at once and fades out once he stops pushing (no pulse: it informs, it is no alarm;
-    // on a phone without vibration it is the only sign)
-    const dtm = this.markT < 0 ? 0 : Math.min(0.1, Math.max(0, time - this.markT));
-    this.markT = time;
-    const held = !!me && m.phase === 'rally' && m.lineHold(me.id);
-    if (held) {
-      // (the strip's top edge, the line, is towards the net: turned for the end he plays from)
-      this.lineCue.position.set(Math.max(-W / 2 + 0.9, Math.min(W / 2 - 0.9, me!.x)), 0.016, me!.side * (NVZ + 0.25 - 0.03));
-      this.lineCue.rotation.z = me!.side > 0 ? 0 : Math.PI;
-    }
-    this.lineCueA = held ? Math.min(1, this.lineCueA + dtm / 0.08) : Math.max(0, this.lineCueA - dtm / 0.3);
-    this.lineCue.visible = this.lineCueA > 0.01;
-    mat(this.lineCue).opacity = 0.9 * this.lineCueA;
     // the box to serve to (minimal: while aiming the serve)
     const srv = m.phase === 'serve' ? m.server() : null;
     this.serveBox.visible = !!srv && srv.human && (!this.minimal || !!this.aim);
     if (srv && srv.human) {
       const half = -m.serveX(srv.team);
-      this.serveBox.position.set((half * W) / 4, 0.012, (-srv.side * (NVZ + HL)) / 2);
+      this.serveBox.position.set((half * W) / 4, 0.012, (-srv.side * SERVICE) / 2);
       mat(this.serveBox).opacity = REDUCED ? 0.13 : 0.11 + 0.03 * Math.sin(time * 4);
     }
     const a = this.aim;
@@ -944,16 +983,17 @@ export class View {
     }
   }
 
-  /** names for the video board: [near player, far player] */
+  /** names for the video board: [near team, far team] */
   boardNames: [string, string] = ['YOU', 'CPU'];
   boardFooter = 'PRO TOUR FINALS';
   private updateBoard(m: Match) {
     // (while the match is presented the video board shows who plays whom)
     const intro = this.director.kind === 'intro';
-    const key = `${m.score[0]}-${m.score[1]}-${m.serverTeam}-${this.boardNames.join()}-${this.boardFooter}-${intro}`;
+    const pts: [string, string] = [m.pointText(0), m.pointText(1)];
+    const key = `${m.games[0]}-${m.games[1]}-${pts.join()}-${m.serverTeam}-${this.boardNames.join()}-${this.boardFooter}-${intro}`;
     if (key === this.boardKey) return;
     this.boardKey = key;
-    drawBoard(this.venue.board, this.boardNames[0], this.boardNames[1], m.score[0], m.score[1], m.serverTeam, this.boardFooter, intro);
+    drawBoard(this.venue.board, this.boardNames[0], this.boardNames[1], m.games, pts, m.serverTeam, this.boardFooter, intro);
   }
 
   /** debug captures: a fixed camera (position and the point it looks at) */
@@ -973,7 +1013,7 @@ export class View {
       this.orbitT += dt * 0.08;
       const a = this.orbitT;
       // (an ellipse inside the bowl, over the front rows: the stands all round behind the court)
-      this.camera.position.set(Math.sin(a) * 12.5, 7.2, Math.cos(a) * 16.5);
+      this.camera.position.set(Math.sin(a) * 13.5, 8, Math.cos(a) * 18.5);
       this.camera.lookAt(0, 0.8, 0);
       return;
     }

@@ -1,15 +1,15 @@
-"""The on-screen indicators, measured: captures of the typical moments of a match (the serve, aiming it, a ball
-coming, aiming in the rally with the stick, the release, the hit, the point and its "Tap to continue", the kitchen line
-holding the player back, a kitchen volley, doubles, the pause) and, for every
-indicator on screen, how much of it there is. Each indicator is hidden in turn and the frame drawn again: the pixels
+"""The on-screen indicators, measured: captures of the typical moments of a padel match (the serve, aiming it, a ball
+coming, aiming in the rally with the stick, the release, the hit, the point and its "Tap to continue", the next serve,
+the pause) and, for every indicator on screen, how much of it there is. Each indicator is hidden in turn and the frame drawn again: the pixels
 that change are its ink; the convex hull of that ink is its footprint (what it encloses: a thin ring around the ball
 still takes the space inside it). Also how much of it lies over the players and whether it touches the ball.
 
 The match is the same on every run (Math.random is seeded, the DOM timers, CSS animations and performance.now follow
 the match's clock), so two builds can be compared moment by moment.
 
-Usage: python3 tools/hud.py [dist_dir = dist] [out_dir] [width = 390] [height = 760] [singles|doubles] [port = 8795]
+Usage: python3 tools/hud.py [dist_dir = dist] [out_dir] [width = 390] [height = 760] [pair = 1] [port = 8795]
        [motion = no-preference|reduce] [indicators = min|full (Settings; default: the game's)]
+(padel is always doubles: the fifth argument is the pair of the draw played; the old «singles|doubles» reads as 1)
 Writes out_dir/<moment>.png and out_dir/metrics.json."""
 import os, sys, threading, functools, http.server, json
 import numpy as np
@@ -20,7 +20,8 @@ ROOT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file
 OUT = sys.argv[2] if len(sys.argv) > 2 else '/tmp/pb-hud'
 W = int(sys.argv[3]) if len(sys.argv) > 3 else 390
 H = int(sys.argv[4]) if len(sys.argv) > 4 else 760
-MODE = sys.argv[5] if len(sys.argv) > 5 else 'singles'
+PAIR = int(sys.argv[5]) if len(sys.argv) > 5 and sys.argv[5].isdigit() else 1
+MODE = 'doubles'
 PORT = int(sys.argv[6]) if len(sys.argv) > 6 else 8795
 MOTION = sys.argv[7] if len(sys.argv) > 7 else 'no-preference'
 HUD = sys.argv[8] if len(sys.argv) > 8 else ''
@@ -69,8 +70,6 @@ BOT = r"""(() => {
   i.move = () => {
     const m = pb.match;
     if (!m || window.__hold) return { x: 0, y: 0 };
-    // (debug: the thumb pushes straight at the net, the kitchen line stops him)
-    if (window.__pushNet) return { x: 0, y: -1 };
     const me = m.players[0], tg = m.targetFor(0);
     if (!tg) return { x: 0, y: 0 };
     const dx = tg.fx - me.x, dz = tg.fz - me.z, d = Math.hypot(dx, dz);
@@ -83,7 +82,7 @@ BOT = r"""(() => {
 ST = r"""(() => { const m = window.__pb.match; const me = m.players[0]; const tg = m.targetFor(0); const r = m.rally;
   return { phase: m.phase, t: m.t, last: r && r.last ? r.last.team : -1, bounces: r ? r.bounces : 0, shots: r ? r.shots : 0,
     plan: me.plan ? { t: me.plan.t - m.t, oops: me.plan.oops, volley: me.plan.volley } : null,
-    tg: tg ? { t: tg.t - m.t, d: Math.hypot(me.x - tg.fx, me.z - tg.fz) } : null, score: m.score.join('-'), z: me.z }; })()"""
+    tg: tg ? { t: tg.t - m.t, d: Math.hypot(me.x - tg.fx, me.z - tg.fz) } : null, score: m.games.join('-') + ' ' + m.call(), z: me.z }; })()"""
 
 # where the players and the ball are on screen
 GEO = r"""(() => { const pb = window.__pb, v = pb.view, m = pb.match;
@@ -104,6 +103,7 @@ GROUPS = {
     'toast': {'css': '#toast'},
     'tapOn': {'css': '.tap-on'},
     'scorebug': {'css': '#hud .tvbug'},
+    'state': {'css': '#hud .tv-state'},
     'pause': {'css': '#pauseBtn'},
     'call': {'css': '.tv-call'},
     'tv': {'css': '.tv-strap, .tv-card, .tv-replay, .tv-skip'},
@@ -112,8 +112,6 @@ GROUPS = {
     'reach': {'mesh': ['footRing', 'reachMark']},
     'aim': {'mesh': ['aimRing', 'aimLine', 'aimMark']},
     'serveBox': {'mesh': ['serveBox']},
-    'kitchen': {'mesh': ['kitchenWarn']},
-    'lineHold': {'mesh': ['lineCue']},
 }
 
 def grab(pg):
@@ -211,7 +209,7 @@ with sync_playwright() as p:
     pg.on('pageerror', lambda e: logs.append(f'PAGEERROR: {e}'))
     pg.goto(f'http://127.0.0.1:{PORT}/index.html?lang=es', timeout=180000)
     pg.wait_for_function('document.querySelector(".menu-col")', timeout=90000)
-    start = 'window.__pb.startDoubles(1)' if MODE == 'doubles' else 'window.__pb.start(1)'
+    start = f'window.__pb.startDoubles({PAIR})'
     # (the attract match ran in real time behind the menu: the random numbers start again here, the same every run;
     # the perfect hit's white flash runs on the real clock and is left out)
     pg.add_style_tag(content='#flash { display: none !important; }')
@@ -236,7 +234,7 @@ with sync_playwright() as p:
     got = set()
     guard = 0
     prev = None
-    while guard < 1400 and len(got) < 7:
+    while guard < 1400 and len(got) < 5:
         guard += 1
         st = pg.evaluate(ST)
         if st['phase'] == 'rally' and st['last'] == 1 and st['tg'] and st['tg']['d'] > 1.3 and 'spot' not in got:
@@ -271,26 +269,6 @@ with sync_playwright() as p:
             # the pause can be cut short from 0.6 s: "Tap to continue"
             step(0.5)
             measure(pg, '06b-tap')
-        elif MODE == 'singles' and 'serve2' in got and 'line' not in got and st['phase'] == 'rally' and st['shots'] >= 1:
-            # the thumb keeps pushing at the net: the kitchen line holds the player back (and lights up)
-            got.add('line')
-            pg.evaluate("window.__pushNet = true")
-            for _ in range(80):
-                if pg.evaluate("window.__pb.match.phase !== 'rally' || window.__pb.match.lineHold(0)"):
-                    break
-                step(0.05, 1 / 120)
-            if pg.evaluate("window.__pb.match.lineHold(0)"):
-                step(0.1, 1 / 120)
-                measure(pg, '07a-line')
-            pg.evaluate("window.__pushNet = false")
-        elif MODE == 'singles' and 'line' in got and 'kitchen' not in got and st['phase'] == 'rally' and st['last'] == 1 and st['bounces'] == 0 and st['shots'] >= 3 and st['tg'] and st['tg']['t'] > 0.5:
-            # debug: the human steps into the kitchen and stays there, a volley coming
-            pg.evaluate("(() => { const m = window.__pb.match, me = m.players[0]; me.x = 0.4; me.z = me.side * 1.2; me.vx = me.vz = 0; window.__hold = true; })()")
-            step(0.12)
-            if pg.evaluate(ST)['plan'] and pg.evaluate(ST)['plan']['oops']:
-                got.add('kitchen')
-                measure(pg, '07-kitchen')
-            pg.evaluate("window.__hold = false")
         elif st['phase'] == 'serve' and 'point' in got and 'serve2' not in got:
             got.add('serve2')
             step(0.6)
@@ -300,7 +278,7 @@ with sync_playwright() as p:
                 press(5, -15)
                 step(0.3)
                 release()
-        if 'kitchen' in got or (MODE == 'doubles' and 'serve2' in got):
+        if 'serve2' in got:
             break
         prev = st['phase']
         step(0.05, 1 / 120)
