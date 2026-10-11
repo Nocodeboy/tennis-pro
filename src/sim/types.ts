@@ -1,0 +1,119 @@
+import type { Side } from './court';
+
+export type ShotKind = 'serve' | 'return' | 'drive' | 'dink' | 'drop' | 'lob' | 'smash' | 'speedup' | 'auto';
+/** how well the swing was timed (the human's release, or the AI's roll) */
+export type Timing = 'perfect' | 'good' | 'early' | 'late' | 'auto';
+
+export interface ShotSpec {
+  kind: ShotKind;
+  tx: number;
+  tz: number;
+  /** height over the net tape the shot is meant to have */
+  clear: number;
+  /** 0 … 1: how clean the contact is (scatter of the target and of the height over the net) */
+  q: number;
+  timing: Timing;
+  /** multiplies the fastest allowed flight time (< 1 = harder hit) */
+  pace?: number;
+  /** −1 … 1: swung early (pulled across the body) … late (pushed wide); 0 = on time */
+  late?: number;
+  /** 0 … 1: rally pressure on this shot: the more, the likelier it sits up (high and long) for the other side */
+  pop?: number;
+  /**
+   * 0 … 1: chance the contact fails outright (off the frame: into the net or long), the awkwardness left over once the
+   * quality is at its floor (a smash at the feet with no time). See brain.ts, shankOf.
+   */
+  shank?: number;
+  /**
+   * The human's gesture (docs/notas-08-ataque.md): 'attack' a flick (or F, the right button): a speed-up or a smash;
+   * 'block' a tap: a soft block or reset into the kitchen. None: an aimed shot, the automatic one or the CPU's.
+   */
+  intent?: 'attack' | 'block';
+}
+
+/** Where and when a player will meet the incoming ball. */
+export interface Plan {
+  t: number;
+  bx: number;
+  by: number;
+  bz: number;
+  /** where the feet must be */
+  fx: number;
+  fz: number;
+  volley: boolean;
+  overhead: boolean;
+  /** +1 forehand, −1 backhand */
+  hand: 1 | -1;
+  /** false: the player cannot get there in time (runs anyway and misses) */
+  reach: boolean;
+  /** a volley from inside the kitchen (an AI mistake, or a human standing there): a fault */
+  oops: boolean;
+  /** manual players: how far they reach for it (0 = right there, 1 = full lunge) */
+  stretch?: number;
+  /** a volley of a ball that would land out (better let it go) */
+  out?: boolean;
+}
+
+export interface Player {
+  id: number;
+  team: 0 | 1;
+  side: Side;
+  human: boolean;
+  x: number;
+  z: number;
+  vx: number;
+  vz: number;
+  speed: number;
+  reaction: number;
+  plan: Plan | null;
+  /** sim time from which the player starts moving to the plan (reaction delay) */
+  moveFrom: number;
+  /** where to stand while the ball is away */
+  homeX: number;
+  homeZ: number;
+  /** 0 baseline · 1 transition · 2 kitchen line */
+  depth: 0 | 1 | 2;
+  lastHit: { t: number; kind: ShotKind; hand: 1 | -1; overhead: boolean; timing: Timing } | null;
+  /** looks like: index into the outfits of the view */
+  look: number;
+  /** doubles: the half of the court this player covers (sign of x); the partner covers the other one */
+  lane: 1 | -1;
+}
+
+/** winner: nobody had a go at it · miss: the receiver went for it and did not get there · letGo: he was there and let it go */
+export type PointReason = 'net' | 'out' | 'serveOut' | 'serveKitchen' | 'winner' | 'kitchen' | 'twoBounce' | 'miss' | 'letGo';
+
+export type MatchEvent =
+  | { type: 'serveSetup'; server: number }
+  /** the server starts the wind-up: the ball leaves the paddle at `at` */
+  | { type: 'serveStart'; pid: number; at: number }
+  /**
+   * `shank`: the contact went off the frame (ShotSpec.shank): it goes into the net or long.
+   * `intent`: the human's attack (a flick) or block (a tap), as in ShotSpec.
+   * What the shot was, for explaining the point (read only, nothing in the rules uses them):
+   *  · `clear`: height (m) of the ball over the net tape where it crosses (negative: into the net; absent: it never
+   *    crosses, e.g. hit from the far side of the net's plane);
+   *  · `tx`, `tz`: where it was aimed (before the scatter of the contact);
+   *  · `pop`: the rally pressure made it sit up (high and long);
+   *  · `stretch`: how far the hitter reached for it (0 … 1, a full lunge);
+   *  · `avail`: seconds from the other side's contact to this one (absent for a serve or a fed ball);
+   *  · `vin`: speed of the incoming ball at the contact (m/s, along the court).
+   */
+  | { type: 'hit'; pid: number; kind: ShotKind; timing: Timing; q: number; x: number; y: number; z: number; speed: number; shot: number; volley: boolean; shank?: boolean; intent?: 'attack' | 'block'; clear?: number; tx?: number; tz?: number; pop?: boolean; stretch?: number; avail?: number; vin?: number }
+  | { type: 'bounce'; x: number; z: number; good: boolean; first: boolean; close: boolean }
+  | { type: 'net'; x: number; y: number; z: number; tape: boolean }
+  /**
+   * `handOver`: doubles, side-out scoring: server 1 lost the rally and the serve passes to the partner (server 2).
+   * `withheld`: doubles, rally scoring: the receiving team won the rally at game point: a side out but no point.
+   */
+  /** `feet`: a kitchen fault: where the faulting player's feet were at the volley (for explaining it) */
+  | { type: 'point'; winner: 0 | 1; reason: PointReason; fault: number | null; rally: number; sideOut: boolean; handOver?: boolean; withheld?: boolean; feet?: { x: number; z: number } }
+  | { type: 'over'; winner: 0 | 1 };
+
+export type Scoring = 'rally' | 'sideout';
+
+export interface Rules {
+  scoring: Scoring;
+  /** points to win (by two) */
+  to: number;
+}

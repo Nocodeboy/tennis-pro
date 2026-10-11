@@ -1,0 +1,26 @@
+{
+  "name": "pickleball",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pickleball arcade 3D low-poly (prototipo de encargo) sobre el motor del estudio NocodeBoy",
+  "scripts": {
+    "build": "node build.mjs",
+    "build:dev": "node build.mjs --dev",
+    "typecheck": "tsc --noEmit -p .",
+    "bot": "tsx tools/bot.ts"
+  },
+  "dependencies": {
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@gltf-transform/core": "^4.5.1",
+    "@gltf-transform/extensions": "^4.5.1",
+    "@gltf-transform/functions": "^4.5.1",
+    "@types/node": "^26.6.4",
+    "@types/three": "^0.186.0",
+    "esbuild": "^0.28.2",
+    "meshoptimizer": "^1.3.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.0"
+  }
+}
