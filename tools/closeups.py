@@ -12,7 +12,9 @@ Usage: python3 tools/closeups.py out_dir [dist = dist] [seed = 7] [port = 8900] 
   moments: auto (waiting for the serve, the serve's wind-up, waiting in a rally, each kind of swing around its contact)
            or a list like 12.5,13.0 (match seconds), or a JSON file written by an earlier run (momentos.json)
 Env: W, H (viewport, default 390×844) · CAMS (default game,front,side,back) · TIER (default medium) · ONLY=pid,pid
-     · CLOSE=pid list for the close cameras (default: everyone)
+     · CLOSE=pid list for the close cameras (default: everyone) · QUERY=mocap=off (more of the page's URL)
+     · KINDS=3 (how many of each swing; padel: the overheads are told apart as remate, bandeja and víbora)
+     · HIDE=1 (only the player being shot: no partner in the way) · CAMS can add wfront, wside (wider and higher)
 Writes out_dir/<moment>.png (a sheet per moment: the game camera, then each player's close cameras), the single shots
 in out_dir/shots/, and out_dir/momentos.json."""
 import os, sys, threading, functools, http.server, json, time, base64, io
@@ -49,9 +51,24 @@ HARNESS = """(() => {
     keep() { const c = pb.view.camera; S.gpos = c.position.clone(); S.gq = c.quaternion.clone(); S.fov = c.fov; },
     game() { const c = pb.view.camera; c.position.copy(S.gpos); c.quaternion.copy(S.gq); c.fov = S.fov; c.updateProjectionMatrix(); c.updateMatrixWorld(); return S.grab(); },
     /** a close camera on player pid: front (three-quarter from the front, his right), frontc (straight in front), side
-     *  (his right), back, hands (close on the hands and the paddle) */
+     *  (his right), back, hands (close on the hands and the paddle); wfront, wside: wider and higher, for the jumps of
+     *  the overheads. HIDE=1: the other players are hidden for it (a partner in the way) */
     close(pid, kind) {
       const v = pb.view, m = pb.match, p = m.players[pid], ch = v.chars[pid];
+      if (S.hide) v.chars.forEach((c, i) => { c.root.visible = i === pid; });
+      if (kind === 'wfront' || kind === 'wside') {
+        const x = ch.root.position.x, z = ch.root.position.z;
+        const yaw = p.side === 1 ? Math.PI : 0, fx = Math.sin(yaw), fz = Math.cos(yaw), rx = -Math.cos(yaw), rz = Math.sin(yaw);
+        const P = kind === 'wfront' ? [6.0, 2.6, 1.7] : [0.6, 7.0, 1.6];
+        const c = v.camera;
+        c.fov = 26; c.updateProjectionMatrix();
+        c.position.set(x + fx * P[0] + rx * P[1], P[2], z + fz * P[0] + rz * P[1]);
+        c.lookAt(x, 1.45, z);
+        c.updateMatrixWorld();
+        const u = S.grab();
+        if (S.hide) v.chars.forEach((c) => { c.root.visible = true; });
+        return u;
+      }
       const x = ch.root.position.x, z = ch.root.position.z;
       const yaw = p.side === 1 ? Math.PI : 0, fx = Math.sin(yaw), fz = Math.cos(yaw), rx = -Math.cos(yaw), rz = Math.sin(yaw);
       const P = { front: [4.6, 1.9, 1.25], frontc: [4.9, -0.5, 1.3], side: [0.4, 5.0, 1.05], back: [-4.4, 1.6, 1.55], hands: [1.9, 0.9, 1.3] }[kind];
@@ -60,7 +77,9 @@ HARNESS = """(() => {
       c.position.set(x + fx * P[0] + rx * P[1], P[2], z + fz * P[0] + rz * P[1]);
       c.lookAt(x + (kind === 'hands' ? fx * 0.3 : 0), kind === 'hands' ? 1.12 : 0.92, z + (kind === 'hands' ? fz * 0.3 : 0));
       c.updateMatrixWorld();
-      return S.grab();
+      const u = S.grab();
+      if (S.hide) v.chars.forEach((c) => { c.root.visible = true; });
+      return u;
     },
     /** pass 1: play secs without drawing, logging every 1/30 s */
     log(secs) {
@@ -71,7 +90,8 @@ HARNESS = """(() => {
         const cs = pb.view.chars;
         out.push({ t: +m.t.toFixed(4), phase: m.phase, wu: m.windup ? { pid: m.windup.pid, at: m.windup.at } : null, server: m.phase === 'serve' ? m.server().id : -1,
           p: m.players.map((p, k) => ({ sw: cs[k].swing ? cs[k].swing.kind : '', key: cs[k].swing ? +cs[k].swing.key.toFixed(4) : 0,
-            hit: p.lastHit ? +p.lastHit.t.toFixed(4) : 0, v: +Math.hypot(p.vx, p.vz).toFixed(2), st: m.stance ? m.stance(k) || '' : '' })) });
+            hit: p.lastHit ? +p.lastHit.t.toFixed(4) : 0, hk: p.lastHit ? p.lastHit.kind : '', v: +Math.hypot(p.vx, p.vz).toFixed(2), st: m.stance ? m.stance(k) || '' : '',
+            run: +((cs[k].locoW || {}).run || 0).toFixed(2), walk: +((cs[k].locoW || {}).walk || 0).toFixed(2), re: cs[k].reaction ? cs[k].reaction.kind : '' })) });
       }
       return out;
     },
@@ -107,21 +127,39 @@ def pick(log):
             if k < 4 and not any(x.startswith('saque-') and abs(o['t'] - at) < 2 for o in out for x in [o['name']]):
                 for j, dtc in enumerate([-0.8, -0.45, 0.0, 0.3]):
                     add(f'saque-{j}-{dtc:+.2f}', at + dtc, [f['wu']['pid']])
-    # each kind of swing around its contact (the first two of each), and waiting in a rally while the other side hits
+    # each kind of swing around its contact (the first KINDS of each), and waiting in a rally while the other side hits
+    # (padel: the overheads share the smash's swing and are told apart by the hit, and shot through the jump)
     kinds = {}
+    most = int(os.environ.get('KINDS', '2'))
     for i, f in enumerate(log):
         for k, p in enumerate(f['p']):
             if p['sw'] and p['sw'] != 'serve' and p['hit'] and abs(p['hit'] - p['key']) < 0.05 and abs(p['hit'] - f['t']) < 1 / 59:
-                c = kinds.get(p['sw'], 0)
-                if c >= 2:
+                name = {'smash': 'remate', 'bandeja': 'bandeja', 'vibora': 'vibora'}.get(p['hk'], 'remate') if p['sw'] == 'smash' else p['sw']
+                c = kinds.get(name, 0)
+                if c >= most:
                     continue
-                kinds[p['sw']] = c + 1
-                for dtc in (-0.3, 0.0, 0.25):
-                    add(f"{p['sw']}{c}-{dtc:+.2f}", p['hit'] + dtc, [k])
+                kinds[name] = c + 1
+                for dtc in ((-0.45, -0.2, 0.0, 0.2, 0.45) if p['sw'] == 'smash' else (-0.3, 0.0, 0.25)):
+                    add(f"{name}{c}-{dtc:+.2f}", p['hit'] + dtc, [k])
                 # the others, waiting as this one hits
                 others = [j for j in range(n) if j != k and log[i]['p'][j]['v'] < 0.4]
                 if others and sum(1 for x in seen if x.startswith('espera-peloteo')) < 3:
                     add(f"espera-peloteo-{sum(1 for x in seen if x.startswith('espera-peloteo'))}", p['hit'] - 0.15, others)
+    # running, walking (no swing on) and the reactions after a point, the first two of each
+    loco = {}
+    for i, f in enumerate(log):
+        for k, p in enumerate(f['p']):
+            for name, on in (('carrera', p['run'] > 0.8 and not p['sw']), ('andar', p['walk'] > 0.8 and not p['sw'] and not p['re'])):
+                if on and loco.get(name, 0) < 2 and not any(o['name'].startswith(name) and abs(o['t'] - f['t']) < 3 for o in out):
+                    loco[name] = loco.get(name, 0) + 1
+                    add(f"{name}{loco[name] - 1}", f['t'], [k])
+            if p['re'] and i > 0 and not log[i - 1]['p'][k]['re']:
+                name = {'cheer': 'celebra', 'lost': 'lamento'}.get(p['re'], p['re'])
+                c = loco.get(name, 0)
+                if c < 2:
+                    loco[name] = c + 1
+                    for dt in (0.4, 1.0):
+                        add(f"{name}{c}-{dt:+.1f}", f['t'] + dt, [k])
     out.sort(key=lambda o: o['t'])
     return out
 
@@ -142,9 +180,12 @@ with sync_playwright() as p:
     pg.on('console', lambda m: logs.append(f'{m.type}: {m.text}'))
     pg.on('pageerror', lambda e: logs.append(f'PAGEERROR: {e}'))
     pg.add_init_script(SEEDED)
-    pg.goto(f'http://127.0.0.1:{PORT}/index.html?lang=es', timeout=240000)
+    q = os.environ.get('QUERY', '')
+    pg.goto(f'http://127.0.0.1:{PORT}/index.html?lang=es' + (f'&{q}' if q else ''), timeout=240000)
     pg.wait_for_function('document.querySelector(".menu-col")', timeout=240000)
     pg.evaluate(HARNESS)
+    if os.environ.get('HIDE'):
+        pg.evaluate("window.__cu.hide = true")
     pg.evaluate(f"window.__pb.view.setTier('{TIER}'); window.__pb.save.tutorial = true; window.__pb.manual = true")
     pg.add_style_tag(content='#app > :not(canvas), body > :not(#app):not(script){display:none!important}')
     if MOM == 'auto':
@@ -163,7 +204,8 @@ with sync_playwright() as p:
     now = 0.0
     only = os.environ.get('ONLY')
     for mo in moments:
-        if only and mo['name'] not in only.split(','):
+        # (ONLY: names, or prefixes ending in *)
+        if only and not any(mo['name'] == o or (o.endswith('*') and mo['name'].startswith(o[:-1])) for o in only.split(',')):
             continue
         # (from the match start, in 1/60 steps: the same frames as pass 1)
         t = pg.evaluate("window.__pb.match.t")

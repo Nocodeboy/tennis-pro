@@ -318,7 +318,9 @@ export class HumanController implements Controller {
 
   /** Will the player swing at this ball (for starting the animation in time)? */
   willSwing(m: Match, p: Player): boolean {
-    if (!p.plan) return false;
-    return this.swing(m, p, p.plan);
+    // (or at the circle's contact while he is still getting there: the view starts the swing in time)
+    const plan = p.plan ?? m.targetFor(p.id);
+    if (!plan) return false;
+    return this.swing(m, p, plan);
   }
 }

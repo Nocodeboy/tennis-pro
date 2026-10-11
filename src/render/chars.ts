@@ -132,6 +132,14 @@ interface SwingDef {
    */
   prep?: { hold: number; slow: number; back: number };
   /**
+   * the smash only: the ball height (m, over the floor) the clip reaches without a jump (default SMASH_JUMP.from): the
+   * jump makes up the rest, up to `jumpMax` (default SMASH_JUMP.max)
+   */
+  jumpFrom?: number;
+  jumpMax?: number;
+  /** padel: the most a bandeja or a víbora jumps (m; default OVER.skip) */
+  skip?: number;
+  /**
    * how much of the legs the clip has when it takes them (default 1; the rest is the ready stance): the drive's clip
    * squats wide (feet 0.8 m apart, hips at 0.73 m at the contact), a goalkeeper's crouch for every forehand
    */
@@ -190,6 +198,54 @@ export const CLIP_FILES: Record<string, string> = {
   cheer: 'cheer',
   lost: 'lost',
 };
+
+/**
+ * The clips from motion capture, put on our skeleton in Blender (art/blender/README.md), in place of the Meshy ones
+ * (?mocap=off plays the Meshy ones, as in main, to compare):
+ *  · run: a real runner's stride (CMU 09_01); the paddle arm is still carried by keyposes.ts. Shorter than LOOPS.run's
+ *    window, so it plays whole.
+ *  · walk: a real walk (CMU 35_01, a two-step cycle); keyposes.ts holds the paddle up in front as before.
+ *  · cheer: arms flung up in a V, then hands on the hips (CMU 79_69, "very happy"), REACT_LEN long.
+ *  · lost: arms out, hands to the head, bent over, then up again (CMU 79_74, "upset"), REACT_LEN long.
+ */
+const MOCAP_FILES: Record<string, string> = { run: 'run_mocap', walk: 'walk_mocap', cheer: 'cheer_mocap', lost: 'lost_mocap' };
+
+/**
+ * The swings from motion capture: a real player's forehand and overhead (Rokoko's free tennis pack, put on our skeleton
+ * in Blender: art/blender/README.md), each with its own timings: the contact measured on the clip (tools/swing-path.ts),
+ * a real wind-up (no `prep`: the take-back is early and full), the player's own legs (a real stance, not the Meshy
+ * drive's squat). keyposes.ts leaves their free arm as captured and turns the paddle's face at their contact (see
+ * MOCAP_CONTACT). The volley stays on the Meshy drive (keyposes.ts builds it from the ready stance anyway), and so does
+ * the backhand: a padel backhand is one-handed, the pack's is a tennis two-hander. ?mocap=off plays the Meshy clips.
+ */
+const MOCAP: Partial<Record<SwingKind, { file: string; def: SwingDef }>> = {
+  // (contacts: the hand at its fastest in front of the body, and the smash's paddle at its highest, as findContact's
+  // 'fast' and 'high' find them; fixed here so keyposes.ts turns the paddle's face at the same frame)
+  // forehand: contact with the paddle in front of the right hip, finished high over the left shoulder. Padel's is more
+  // compact than the tennis player's: started 0.42 s before the contact (not 0.5, nor the clip's whole 0.63 s), the
+  // take-back 0.8 as deep (`prep.back`; the paddle's top 1.39 m, not 1.50)
+  drive: { file: 'drive_mocap', def: { find: 0.633, out: 1.15, fade: 0.1, ik: 0.17, pre: 0.3, lift: true, drop: 0.09, legs: 0.9, lead: 0.42, prep: { hold: 0.3, slow: 1, back: 0.8 } } },
+  // overhead: side on under the ball, the free hand pointing at it, a jump into the hit; the long wait under the ball
+  // at the start is cut short when the ball comes sooner (`lead`). The bandeja and the víbora are built on it (OVER).
+  smash: { file: 'smash_mocap', def: { find: 1.667, out: 2.1, fade: 0.12, ik: 0.15, lead: 1.0, jumpFrom: 2.0, jumpMax: 0.72, skip: 0.58 } },
+};
+/** the swings played from motion capture and their contact (s into the clip), for keyposes.ts */
+export const MOCAP_CONTACT: Record<string, number> = {};
+const mocapOff = (() => {
+  try {
+    return new URLSearchParams(location.search).get('mocap') === 'off';
+  } catch {
+    return false;
+  }
+})();
+if (!mocapOff) {
+  Object.assign(CLIP_FILES, MOCAP_FILES);
+  for (const [k, m] of Object.entries(MOCAP)) {
+    CLIP_FILES[k] = m.file;
+    SWINGS[k as SwingKind] = m.def;
+    if (typeof m.def.find === 'number') MOCAP_CONTACT[k] = m.def.find;
+  }
+}
 export const CLIP_NAMES = Object.keys(CLIP_FILES);
 
 const LEFT_ARM = new Set(['LeftShoulder', 'LeftArm', 'LeftForeArm', 'LeftHand']);
@@ -390,7 +446,7 @@ export async function loadCharAssets(base: string, model: string, clipNames: str
   // the key poses built in code (keyposes.ts): the ready stance, between points, the serve, the free arm…
   try {
     const P = PADDLE_POSE;
-    refineClips(gltf.scene, out, { rot: new THREE.Quaternion().setFromEuler(new THREE.Euler(P[0], P[1], P[2])), off: new THREE.Vector3(P[3], P[4], P[5]), face: 0.255 });
+    refineClips(gltf.scene, out, { rot: new THREE.Quaternion().setFromEuler(new THREE.Euler(P[0], P[1], P[2])), off: new THREE.Vector3(P[3], P[4], P[5]), face: 0.255 }, MOCAP_CONTACT);
   } catch (err) {
     console.warn('key poses skipped:', err);
   }
@@ -683,13 +739,17 @@ export const BALL_DROP = SERVE_DROP;
  * The overheads share the smash's clip. What is played is only known at the contact (the hit's kind), so the wind-up is
  * the same (the other side cannot read it either); from the contact the follow-through tells them apart:
  *  · remate (smash): the clip's own, down through the ball, with the jump for a high ball;
- *  · bandeja: a smaller jump for a high ball (`skip` m; the remate's goes up to `jump`), side on (the chest turned
+ *  · bandeja: a smaller jump for a high ball (`skip` m, or the clip's own; the remate's is the clip's jumpMax, or
+ *    SMASH_JUMP.max), side on (the chest turned
  *    `side` rad off the net), the paddle carried forward and across to the
  *    left at about shoulder height (`up` of the clip's drop kept, `across` m to the left), the face open: a slice;
  *  · víbora: as the bandeja, more across and further down (the wrist turns over the ball: side spin).
- * A deep overhead (more than `deep` m from the net) is wound up as a bandeja (from there it nearly always is).
+ * A deep overhead (more than `deep` m from the net) is wound up as a bandeja (from there it nearly always is). On the
+ * motion-capture smash (docs/notas-02-animacion.md): a ball out of reach standing is met with the body under it
+ * (`under` m of the hips at most, horizontally); the jump is the guess's, held through the air; the legs keep only
+ * `legs` of the clip's (no scissor kick: a tucked lift) until the hit shows a remate.
  */
-const OVER = { deep: 4.5, side: 0.35, ik: 0.34, jump: 0.55, skip: 0.5, bandeja: { up: 0.3, across: 0.42, fwd: 0.85 }, vibora: { up: 0.75, across: 0.62, fwd: 1.0 } };
+const OVER = { deep: 4.5, side: 0.35, ik: 0.34, skip: 0.5, under: 0.08, legs: 0.5, bandeja: { up: 0.3, across: 0.42, fwd: 0.85 }, vibora: { up: 0.75, across: 0.62, fwd: 1.0 } };
 type OverStyle = 'smash' | 'bandeja' | 'vibora';
 /** how long a reaction plays at most (s): the `lost` clip turns away from the court after 2.1 s */
 const REACT_LEN: Record<string, number> = { cheer: 1.9, lost: 2.0 };
@@ -783,8 +843,21 @@ const HIPS_MIN = 0.6;
 /** how far out from the feet a forehand meets the ball without a lunge (m, horizontal; the old forehand clip's reach,
  * which the lunge thresholds were set with) */
 const REACH = 0.67;
+/**
+ * The smash's jump for a ball over the head (m): `k` × how far over `from` it is met, at most `max`, in the air as long
+ * as a jump that high takes (peak on the contact). 0.11: it was at most 0.3 m (from 2.15 m, 0.6 s in the air whatever
+ * the height), and the paddle missed the balls met over 2.6 m by 22–32 cm.
+ */
+const SMASH_JUMP = { from: 2.15, k: 1.0, max: 0.55 };
 /** a low drive's take-back: the paddle this far under the ball (m) */
 const LOW_DIP = 0.06;
+/**
+ * The lob's finish (docs/notas-11-golpes.md): the swing up to the ball is the one the plan calls for (a dink, a drive,
+ * a backhand: dressed up as that shot, as a real lob is), and from the contact the paddle goes on lifting the ball: it
+ * rises `rise` m over the contact and `fwd` m on towards the net in `t` s, its head turning up (`tip` of the way to
+ * pointing up and a little forward), held by the arm for `hold` s before the clip takes it back.
+ */
+const LOB_FINISH = { rise: 0.95, fwd: 0.35, t: 0.3, tip: 0.7, hold: 0.42 };
 /** the torso never tips further than this from upright (rad), whatever the clip and the bend to the ball add up to */
 const TILT_MAX = 1.05;
 /** the wrist (rad): how far it bends (flexion, extension, deviation) and twists off straight; the forearm takes the
@@ -1401,7 +1474,14 @@ export class CharacterView {
 
   update(dt: number, m: Match, p: Player, gate: boolean, ball: { x: number; y: number; z: number } | null) {
     this.restore();
-    const plan = p.plan;
+    // (the human's player: the circle's contact while he is still getting to it; his plan only exists once the ball is
+    // within reach, sometimes in the very step of the contact, and a last-moment stretch was played with no swing on:
+    // the paddle 0.9 m off the ball. Now it is under way in time, and a stretch that falls short shows as one)
+    // (not in the frame of his own hit: the plan is gone and the circle is still the one for later, which took the
+    // paddle off the ball just played, up to 1.3 m)
+    const mt = (m as Partial<Match>).targetFor;
+    const justHit = !!p.lastHit && m.t - p.lastHit.t < 0.25;
+    const plan = p.plan ?? (p.human && !justHit && typeof mt === 'function' ? mt.call(m, p.id) : null);
     const wu = m.windup;
     // the swing in hand: the serve being wound up, the coming contact (when the player will swing) or the one just played
     if (wu && wu.pid === p.id) {
@@ -1414,6 +1494,8 @@ export class CharacterView {
     if (this.contact && m.t - this.contact.t > 0.6) this.contact = null;
     const c = this.contact;
     const tc = c ? m.t - c.t : 0; // < 0 before the contact
+    // (a lob just played off this contact: its finish, LOB_FINISH)
+    if (c && tc >= 0 && p.lastHit?.kind === 'lob' && Math.abs(p.lastHit.t - c.t) < 0.05) this.lobT = c.t;
 
     // which swing: the one playing for this contact, or the one this contact calls for
     // (one under way is kept: see commit)
@@ -1421,12 +1503,17 @@ export class CharacterView {
     const kind: Swing | null = c && want && tc < 0 ? this.commit(want, c, tc) : want;
     const proc = kind === 'proc';
     // an overhead: a remate, a bandeja or a víbora (see OVER)
+    let shown = false;
     if (kind === 'smash' && c) {
       const h = p.lastHit;
       const hk = h && Math.abs(h.t - c.t) < 0.05 ? h.kind : null;
       this.over = hk === 'bandeja' || hk === 'vibora' ? hk : hk ? 'smash' : Math.abs(c.z) > OVER.deep ? 'bandeja' : 'smash';
+      shown = hk !== null;
     }
     const slice = kind === 'smash' && this.over !== 'smash';
+    // (the legs: a compact lift off both feet until the hit shows a remate, then the clip's scissor kick: most
+    // overheads are bandejas and víboras, and the kick would give one away before the contact)
+    if (kind === 'smash') this.sliceK += ((slice || !shown ? 1 : 0) - this.sliceK) * (1 - Math.exp(-12 * dt));
 
     // a lunge: the body goes out to a ball beyond the arm and the paddle (the feet step after it: see `legs`)
     let lx = 0;
@@ -1436,7 +1523,8 @@ export class CharacterView {
       const dz = c.z - p.z;
       const dh = Math.hypot(dx, dz);
       const env = 1 - smooth(0.04, 0.32, Math.abs(tc));
-      const reach = this.reachOf(kind);
+      // (a ball over the head, out of reach standing: the body goes under it, so the arm reaches up for it)
+      const reach = kind === 'smash' && c.y > (SWINGS.smash.jumpFrom ?? SMASH_JUMP.from) ? Math.min(this.reachOf(kind), OVER.under) : this.reachOf(kind);
       // (and a ball jammed into the body: a step back out of its way, so the arm has room for the paddle)
       const away = kind === 'smash' || kind === 'serve' || kind === 'proc' ? 0 : Math.min(0.3, Math.max(0, 0.6 * reach - dh));
       const k = ((Math.min(0.75, Math.max(0, dh - reach)) - away) * env) / Math.max(dh, 0.05);
@@ -1457,10 +1545,20 @@ export class CharacterView {
       this.lunge.x += ex;
       this.lunge.y += ez;
     }
-    // a ball above the reach of the paddle: a jump into the smash (crouch, take-off, landing)
-    // (padel's lobs are met high, up to 2.9 m: a remate jumps up to OVER.jump m for them, a bandeja or a víbora a
-    // little less, OVER.skip; under 2.15 m the paddle gets there standing)
-    const hop = c && kind === 'smash' ? Math.min(slice ? OVER.skip : OVER.jump, Math.max(0, c.y - 2.15)) * Math.max(0, 1 - (tc / 0.3) ** 2) : 0;
+    // a ball above the reach of the paddle: a jump into the smash (crouch, take-off, landing), in the air as long as a
+    // jump that high takes (peak on the contact)
+    // (padel's lobs are met high, 2.85 m and more: a remate jumps up to the clip's jumpMax for them, a bandeja or a
+    // víbora less (its `skip`, or OVER.skip), with the legs tucked: see OVER)
+    const jumpFrom = SWINGS.smash.jumpFrom ?? SMASH_JUMP.from;
+    const jumpTop = slice ? (SWINGS.smash.skip ?? OVER.skip) : (SWINGS.smash.jumpMax ?? SMASH_JUMP.max);
+    let jumpH = c && kind === 'smash' ? Math.min(jumpTop, Math.max(0, c.y - jumpFrom) * SMASH_JUMP.k) : 0;
+    // (held from the take-off to the landing: the shot is only known at the contact, and the jump of the guess must
+    // not change in the air when it turns out to be another)
+    if (c && kind === 'smash') {
+      if (this.jump.t === c.t && tc > -this.jump.air) jumpH = this.jump.h;
+      else this.jump = { t: c.t, h: jumpH, air: jumpH > 0 ? Math.sqrt((2 * jumpH) / 9.81) : 0 };
+    }
+    const hop = jumpH > 0 ? jumpH * Math.max(0, 1 - (tc / Math.sqrt((2 * jumpH) / 9.81)) ** 2) : 0;
     // the footwork the simulation is doing (match.stance: one source of truth for the legs): the split step as the
     // other side hits, braking into the shot ('plant'), finishing it ('follow'). (A match without it, a test stand-in,
     // gets the legs timed to the contact as before.)
@@ -1610,7 +1708,9 @@ export class CharacterView {
       // footwork, timed to the contact); the lunge's stride from the moment it steps out
       const lungeK = s.kind === 'lunge' || s.kind === 'lunge_left';
       const fw = st === undefined || lungeK ? footwork(s.kind, m.t - s.key) : Math.abs(m.t - s.key) < 0.6 ? this.plantK : 0;
-      const plant = (s.react ? still : Math.max(still, fw)) * (s.react || s.kind === 'proc' ? 1 : SWINGS[s.kind as SwingKind].legs ?? 1);
+      let plant = (s.react ? still : Math.max(still, fw)) * (s.react || s.kind === 'proc' ? 1 : SWINGS[s.kind as SwingKind].legs ?? 1);
+      // (a bandeja or a víbora: less of the clip's legs, no scissor kick: a compact lift off both feet, OVER.legs)
+      if (s.kind === 'smash' && !s.react) plant *= 1 - (1 - OVER.legs) * this.sliceK;
       // (running to the ball, the arms go on running until the swing gets going: see RUN_ARMS)
       // (eased: a burst of speed or a contact put back must not snap the arms from one pose to the other)
       const running = s.react || s.rate < 0 || s.kind === 'proc' ? 0 : RUN_ARMS.most * smooth(RUN_ARMS.v0, RUN_ARMS.v1, sp) * (1 - smooth(-RUN_ARMS.from, -RUN_ARMS.to, m.t - s.key));
@@ -1745,7 +1845,9 @@ export class CharacterView {
       const def = proc ? null : SWINGS[kind as SwingKind];
       // (the IK's window: a low drive's take-back is the IK's too, from `pre` before the contact)
       const lowK = def && def.lift ? this.lowness(kind as SwingKind, c) : 0;
-      const win = (def ? (tc < 0 ? def.ik + ((def.pre ?? def.ik) - def.ik) * (def.prep ? 1 : lowK) : kind === 'smash' && this.over !== 'smash' ? OVER.ik : def.ik) : 0) + 0.06;
+      let win = (def ? (tc < 0 ? def.ik + ((def.pre ?? def.ik) - def.ik) * (def.prep ? 1 : lowK) : kind === 'smash' && this.over !== 'smash' ? OVER.ik : def.ik) : 0) + 0.06;
+      // (a lob: the arm holds its rising finish a little longer)
+      if (tc > 0 && this.lobT === c.t) win = Math.max(win, LOB_FINISH.hold);
       w = proc ? 0 : 1 - smooth(0.5 * win, win, Math.abs(tc));
       if (proc) {
         const B0 = -0.4;
@@ -1768,7 +1870,7 @@ export class CharacterView {
     }
     // the smash jump: crouch before the take-off, give at the landing
     let give = 0;
-    if (hop > 0 || (c && kind === 'smash' && c.y > 2.15)) give = (slice ? 0.045 : 0.07) * (Math.exp(-(((tc + 0.33) / 0.07) ** 2)) + Math.exp(-(((tc - 0.33) / 0.08) ** 2)));
+    if (hop > 0 || (c && kind === 'smash' && c.y > jumpFrom)) give = (slice ? 0.045 : 0.07) * (Math.exp(-(((tc + 0.33) / 0.07) ** 2)) + Math.exp(-(((tc - 0.33) / 0.08) ** 2)));
     this.drop += (dropWant - this.drop) * (1 - Math.exp(-12 * dt));
     this.legs(dt, this.drop + split.dip + give + this.leanDrop + this.idleOut.drop, jump, sp, ((this.locoW.shuffle ?? 0) + (this.locoW.shuffle_l ?? 0)) * Ll, split.widen);
 
@@ -1906,6 +2008,17 @@ export class CharacterView {
         }
       }
     }
+    // a lob: from the ball the paddle goes on up and towards the net, lifting it (LOB_FINISH), carried with the body
+    const lobK = tc > 0 && this.lobT === c.t && kind !== 'proc' ? smooth(0, LOB_FINISH.t, tc) : 0;
+    const toNet = -Math.sign(this.root.position.z || 1);
+    if (lobK > 0) {
+      if (this.anchorT !== c.t) {
+        this.anchorT = c.t;
+        this.anchor.copy(this.root.position);
+      }
+      sBall.set(c.x + this.root.position.x - this.anchor.x, c.y + LOB_FINISH.rise, c.z + this.root.position.z - this.anchor.z + toNet * LOB_FINISH.fwd);
+      target.lerp(sBall, lobK);
+    }
     // from where the clip has the paddle onto that target, by w
     wpos(this.tip, sA);
     target.lerp(sA, 1 - w);
@@ -1944,6 +2057,8 @@ export class CharacterView {
     this.kd += (kd - this.kd) * (this.kdT < 0 ? 1 : e);
     this.kdT = 1;
     this.pdir.copy(sD).lerp(sE, this.kd).normalize();
+    // (a lob's finish: the paddle's head turns up)
+    if (lobK > 0) this.pdir.lerp(sP.set(0, 1, toNet * 0.35).normalize(), lobK * LOB_FINISH.tip).normalize();
     // the elbow: down and out for the drives and the dinks, leading for the backhand, up and out for the smash
     const ch = this.bone.Spine;
     wquat(ch, sQ);
@@ -2023,6 +2138,12 @@ export class CharacterView {
   private anchorT = -1;
   /** the overhead being played (see OVER): what the hit was, once it is known; before it, the guess */
   private over: OverStyle = 'smash';
+  /** how much the overhead's legs are a slice's (0 remate … 1 bandeja or víbora), eased: see OVER.legs */
+  private sliceK = 0;
+  /** the overhead's jump, held through the air (its contact, height and half the time in the air) */
+  private jump = { t: -1, h: 0, air: 0 };
+  /** the contact (its time) the player has just played a lob off: the lob's finish (LOB_FINISH) */
+  private lobT = -1;
 
   /** Turns the hand so the paddle points along `dir`, within what a wrist does (the forearm takes the twist). */
   private aimWrist(dir: THREE.Vector3) {

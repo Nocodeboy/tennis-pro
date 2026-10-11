@@ -3,7 +3,7 @@
 Juego de pádel en 3D para web y móvil del estudio NocodeBoy, hecho por encargo. El nombre y la marca son provisionales: los pone el cliente y se cambian en `src/tour.ts` (y el título de la página en `build.mjs`).
 
 - **Origen:** copia del juego de pickleball del estudio (`Nocodeboy/Pickleball@2f15030`, versión 0.10), convertida en pádel. Las notas de diseño del pickleball siguen en `docs/pickleball/` como referencia (la interfaz que se hereda: `notas-09-interfaz.md`).
-- **Versión:** 0.1 (11 oct 2026).
+- **Versión:** 0.2 (12 oct 2026): animaciones de captura de movimiento y mobiliario y luz de Blender, traídos del pickleball 0.12.
 - **Estado:** se juega siempre en dobles: tú y Martín Di Neno (tu pareja, la CPU) contra un cuadro de cuatro parejas de la máquina, de octavos a la final. Pista de 20 × 10 m con cristal y malla; la bola rebota en las paredes y se puede jugar después del bote. Puntuación de pádel (15-30-40, punto de oro o ventajas, un set corto con tie-break). Marcador de televisión con juegos y puntos, saque y segundo saque, punto de oro, iguales, tie-break y banners de falta, let y de cada forma de acabar el punto (a la red, pared directa, doble falta, por 3, por 4…). Textos en español e inglés. Sin online, sin modo individual y sin entrenamiento (se quitaron al pasar del pickleball).
 
 ## Compilar

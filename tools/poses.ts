@@ -237,7 +237,24 @@ function makeRun(a: CharAssets, mode: string, i: number): Run {
         const b = r.m.ballPos(bp);
         r.chars.forEach((c, k) => c.update(dt, r.m, r.m.players[k], r.gate(k), b));
         probe.frame(r.chars, r.m, dt, { run: tag });
-        for (const h of hits) probe.hit(r.chars[h.pid], h.pid, h.x, h.y, h.z, h.kind, { run: tag, t: +r.m.t.toFixed(3) }, h.vel);
+        for (const h of hits) {
+          probe.hit(r.chars[h.pid], h.pid, h.x, h.y, h.z, h.kind, { run: tag, t: +r.m.t.toFixed(3) }, h.vel);
+          // (padel: the overheads share the smash's swing, so the shot is told by its style (chars.ts OVER); and where
+          // the ball is met against the hips, along where they face: + in front)
+          const ch = r.chars[h.pid] as unknown as { swing: { kind: string } | null; over?: string; root: THREE.Object3D };
+          const rec = probe.hits[probe.hits.length - 1];
+          if (rec && ch.swing) {
+            rec.view = ch.swing.kind === 'smash' ? (ch.over ?? 'smash') : ch.swing.kind;
+            const hips = ch.root.getObjectByName('Hips');
+            if (hips) {
+              const fw = new THREE.Vector3(0, 0, 1).applyQuaternion(hips.getWorldQuaternion(new THREE.Quaternion()));
+              const hp = hips.getWorldPosition(new THREE.Vector3());
+              const l = Math.hypot(fw.x, fw.z) || 1;
+              rec.fwd = ((h.x - hp.x) * fw.x + (h.z - hp.z) * fw.z) / l;
+              rec.rootY = +ch.root.position.y.toFixed(3);
+            }
+          }
+        }
         for (const d of dumps) {
           if (d.done || d.run !== tag || r.m.t < d.t) continue;
           d.done = true;
@@ -298,6 +315,26 @@ function makeRun(a: CharAssets, mode: string, i: number): Run {
   console.log('\n— postura de espera (Idle), entre puntos (Rest); K: línea de cocina, D: fondo —');
   for (const k of Object.keys(S).filter((k) => /^(padHead|padFace|padChest|freeToPaddle|elbowFwd|hipsBack|knee(Idle|Rest)|hips(Idle|Rest)|torso(Idle|Rest)|serveWait|serveTip|serveHead|driveFinish|faceOff|freeAbd|freeElbow|freeLat|padAhead)/.test(k)).sort()) console.log(rowp(k, /^(pad(Head|Face)|knee|torso|faceOff|free(Abd|Elbow))/.test(k) ? '°' : ' m'));
   for (const k of Object.keys(S).filter((k) => /^(freeOut|freeStiff|padFlat|freeWide)/.test(k)).sort()) console.log(`${k.padEnd(18)} ${(S[k].share * 100).toFixed(1)} % de ${S[k].n}`);
+  // padel: paddle–ball at the contact and the contact in front of the hips, by what is shown (remate, bandeja and
+  // víbora apart)
+  {
+    type H = { d: number; view?: string; fwd?: number; y: number; rootY?: number };
+    const by: Record<string, H[]> = {};
+    for (const h of probe.hits as H[]) (by[h.view ?? 'none'] ??= []).push(h);
+    const pc = (a: number[], k: number) => {
+      const s = a.slice().sort((x, y) => x - y);
+      return s.length ? s[Math.min(s.length - 1, Math.floor(k * s.length))] : NaN;
+    };
+    const cm = (v: number) => (v * 100).toFixed(1);
+    console.log('\n— por golpe (pala a la bola en el contacto, cm; contacto delante de la cadera, cm; altura de la bola, m; el cuerpo sobre el suelo, cm) —');
+    for (const [k, a] of Object.entries(by).sort((x, y) => y[1].length - x[1].length)) {
+      const d = a.map((h) => h.d);
+      const f = a.filter((h) => h.fwd !== undefined).map((h) => h.fwd as number);
+      const y = a.map((h) => h.y);
+      const ry = a.map((h) => h.rootY ?? 0);
+      console.log(`${k.padEnd(11)} n=${String(a.length).padEnd(5)} pala p50 ${cm(pc(d, 0.5))} p90 ${cm(pc(d, 0.9))} máx ${cm(pc(d, 1))} · delante p10 ${cm(pc(f, 0.1))} p50 ${cm(pc(f, 0.5))} · bola p50 ${pc(y, 0.5).toFixed(2)} máx ${pc(y, 1).toFixed(2)} · salto p50 ${cm(pc(ry, 0.5))} máx ${cm(pc(ry, 1))}`);
+    }
+  }
   if (S.idleFrozen) console.log(`espera congelada: ${(S.idleFrozen.share * 100).toFixed(1)} % de ${S.idleFrozen.n} fotogramas · tramos de más de 0,25 s: ${S.idleFrozen.runs} (p50 ${S.idleFrozen.p50} s, p90 ${S.idleFrozen.p90} s, máx ${S.idleFrozen.max} s)`);
   if (OUT) {
     writeFileSync(OUT, JSON.stringify({ ...rep, nat, ranges, dumped, ...(process.env.HITS ? { hits: probe.hits } : {}) }, null, 1));

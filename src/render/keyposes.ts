@@ -656,8 +656,8 @@ function rollTo(r: Rig, k: Kin, want: THREE.Vector3, side: number): number {
 }
 
 /** A swing clip with its paddle face turned forward round the contact (see FACE). */
-function faceForward(r: Rig, k: Kin, c: THREE.AnimationClip, name: string): THREE.AnimationClip {
-  const F = FACE[name];
+function faceForward(r: Rig, k: Kin, c: THREE.AnimationClip, name: string, at?: number): THREE.AnimationClip {
+  const F = { ...FACE[name], k: at ?? FACE[name].k };
   const want = v3(0, Math.sin(F.tilt), Math.cos(F.tilt));
   const times = timesOf(c.duration, 20);
   // the turn wanted at each frame, from the face nearer at the contact, unwrapped and smoothed
@@ -704,8 +704,10 @@ function timesOf(dur: number, fps = 30): number[] {
 /**
  * Rewrites the clips (in place) with the key poses built here; `grip` is the paddle in the hand (chars.ts).
  *  · ready: the pickleball ready stance (GUARD), on the clip's own small movements of the legs and the hips
+ * `mocap`: the swings played from motion capture (chars.ts MOCAP) and their contact (s): their free arm and the
+ * drive's finish are left as captured; the paddle's face is turned at their own contact.
  */
-export function refineClips(template: THREE.Object3D, clips: Record<string, THREE.AnimationClip>, grip: Grip) {
+export function refineClips(template: THREE.Object3D, clips: Record<string, THREE.AnimationClip>, grip: Grip, mocap: Record<string, number> = {}) {
   // (a lap timer, for the tools: globalThis.__kpTime collects ms by stage)
   const prof = (globalThis as { __kpTime?: Record<string, number> }).__kpTime;
   let lapT = prof ? performance.now() : 0;
@@ -816,9 +818,10 @@ export function refineClips(template: THREE.Object3D, clips: Record<string, THRE
   }
   lap('run');
   // the free arm through each swing (see FREE)
+  // (not the swings from motion capture: their free arm is a real player's, see `mocap`)
   for (const [n, keys] of Object.entries(FREE)) {
     const c = clips[n];
-    if (!c) continue;
+    if (!c || n in mocap) continue;
     const times = timesOf(c.duration, 20);
     clips[n] = r.bake(
       n,
@@ -835,7 +838,7 @@ export function refineClips(template: THREE.Object3D, clips: Record<string, THRE
   lap('free');
   // the drive finishes high, over the left shoulder (the clip's ended across at the hip): from just after the contact
   // the paddle arm goes up and across, the paddle's head back over the shoulder
-  if (clips.drive) {
+  if (clips.drive && !('drive' in mocap)) {
     const c = clips.drive;
     const K = 0.46;
     const times = timesOf(c.duration, 20);
@@ -940,7 +943,7 @@ export function refineClips(template: THREE.Object3D, clips: Record<string, THRE
   }
   lap('serve');
   // last, the paddle's face at each swing's contact (see FACE)
-  for (const n of Object.keys(FACE)) if (clips[n]) clips[n] = faceForward(r, kin, clips[n], n);
+  for (const n of Object.keys(FACE)) if (clips[n]) clips[n] = faceForward(r, kin, clips[n], n, mocap[n]);
   lap('face');
 }
 

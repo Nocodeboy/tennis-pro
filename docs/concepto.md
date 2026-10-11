@@ -1,7 +1,7 @@
 # Pádel (encargo) · ficha de concepto y estado
 
 *Nombre provisional:* **Pádel · Pro Tour**. El nombre y la marca finales los pone el cliente (el mismo del pickleball); están en `src/tour.ts`.
-*Estado (12 oct 2026):* **prototipo 0.1 jugable en web**, hecho a partir del pickleball 0.10 (`Nocodeboy/Pickleball@2f15030`).
+*Estado (12 oct 2026):* **prototipo 0.2 jugable en web**, hecho a partir del pickleball 0.10 (`Nocodeboy/Pickleball@2f15030`). La 0.2 trae de la 0.12 del pickleball (`cc00ccb`) las animaciones de captura de movimiento y el trabajo de Blender: ver «0.2» al final.
 
 ## El encargo
 
@@ -65,3 +65,32 @@ Tu pareja es **Martín Di Neno** (suena a Martín Di Nenno).
 - **Martín** falla demasiado en la red contra las parejas fuertes.
 - **Personajes:** siguen el cuerpo y los clips del pickleball (falta un modelo de mujer y movimiento capturado de personas reales).
 - **Online:** el mismo plan que en el pickleball (Colyseus en el VPS sobre la simulación determinista).
+
+## 0.2 (12 oct): captura de movimiento y Blender, desde el pickleball 0.12
+
+Germán, tras probar la 0.1 («se siente bien»): aprovechar del pickleball «el modelado en Blender y los movimientos y animaciones».
+
+- **Animaciones** (`notas-02-animacion.md`):
+  - carrera, andar, celebración y lamento de captura real (CMU);
+  - derecha y remate de un tenista (pack *Sports* de Rokoko). La derecha es más compacta que la de tenis;
+  - el revés se queda a una mano, como en el pádel: el de captura es a dos manos;
+  - bandeja y víbora se montan sobre el remate de captura, sin tijera, de lado y con el final cruzado;
+  - de la 0.11: tu jugador prepara el golpe con el círculo mientras llega, y el globo tiene su final con la pala subiendo.
+- **Blender** (`notas-02-blender.md`, `art/blender/`):
+  - mobiliario modelado con la oclusión horneada: la silla del juez en la red, los banquillos fuera de la jaula, las cámaras de TV y los taburetes de fotógrafos;
+  - postes de la red de pádel nuevos, a ras de la malla, con el tensor;
+  - sin sillas de jueces de línea;
+  - la luz de los focos horneada sobre la pista, con las sombras suaves de la jaula y la red;
+  - el mobiliario va en `assets/props/props.bin` y la luz en `assets/light/floor.webp`, fuera de la página.
+- **Números:**
+  - pala–bola en el remate, de 15,8 a 2,7 cm de mediana;
+  - remate, bandeja y víbora golpean delante del cuerpo y no 33 cm por detrás;
+  - mismas llamadas de dibujo, unos 49.000 triángulos más en calidad alta y media.
+- **Para comparar en la URL:** `?mocap=off` (clips de antes), `?props=box` (mobiliario de cajas) y `?light=off` (sin luz horneada).
+
+### Pendiente de la 0.2
+- **La bandeja salta demasiado:** la simulación la golpea a unos 2,85 m (lo real es 2,3–2,6 m). Hay que bajar ahí la altura del contacto de la bandeja.
+- **Licencia del pack de Rokoko:** confirmarla antes de publicar en una tienda. CMU se puede usar en un juego comercial; la cita está en `notas-02-animacion.md`.
+- **Probar en el móvil:** los triángulos de más del mobiliario, la derecha y el salto del remate a la velocidad del juego.
+- **Golpes propios del pádel con captura:** volea, chiquita, bandeja de verdad y salida de pared. El método de Blender ya está en el repo (`art/blender/padel_clip.py`); falta una fuente de capturas de pádel.
+

@@ -2,7 +2,8 @@
 rally in the gameplay camera, and fixed cameras by the net, at the stands, a wide corner view and from behind the near
 baseline. Prints renderer.info of the rally frame (draw calls, triangles, textures; shadow pass and post included).
 Usage: python3 tools/look.py <dist_dir> <out_dir> <tier> <W> <H> <port> [scenes=play,serve,net,stands,wide,far]
-[singles|doubles]. Software rendering: judge the looks, not the speed."""
+[singles|doubles]; the close-ups of the furniture: umpire, bench, tvcam, post, corner. QUERY=props=box (an environment
+variable) adds options to the page's URL. Software rendering: judge the looks, not the speed."""
 import os, sys, threading, functools, http.server, json, time
 from playwright.sync_api import sync_playwright
 
@@ -20,7 +21,7 @@ SEED = """(() => { let s = 1234567; window.__seed = (v) => { s = v >>> 0; }; Mat
   t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; })();"""
 INFO = """(() => { const v = window.__pb.view, r = v.renderer; r.info.autoReset = false; r.info.reset(); v.render();
   const i = r.info; const o = { calls: i.render.calls, tris: i.render.triangles, lines: i.render.lines, points: i.render.points,
-  geos: i.memory.geometries, texs: i.memory.textures, progs: (i.programs || []).length }; r.info.autoReset = true; return o; })()"""
+  geos: i.memory.geometries, texs: i.memory.textures, progs: (i.programs || []).length, props: v.venue.furnishMs }; r.info.autoReset = true; return o; })()"""
 ST = """(() => { const m = window.__pb.match; const b = m.ballPos();
   return { phase: m.phase, shots: m.rally ? m.rally.shots : 0, b: b ? [b.x, b.y, b.z] : null, t: m.t }; })()"""
 CAMS = {
@@ -28,6 +29,14 @@ CAMS = {
     'stands': {'px': -1.0, 'py': 1.7, 'pz': 5.5, 'lx': 9.0, 'ly': 1.6, 'lz': -3.0},
     'wide': {'px': -13.0, 'py': 8.5, 'pz': 15.5, 'lx': 0.0, 'ly': 0.0, 'lz': -1.0},
     'far': {'px': 0.0, 'py': 3.2, 'pz': 9.5, 'lx': 0.0, 'ly': 1.0, 'lz': -12.0},
+    # the court's furniture up close: the umpire's chair at the net (from outside the cage, over the far bench), the
+    # near bench, the TV camera in the near right corner (from beside the side glass), a net post (from inside the
+    # court) and a corner of the cage's frame
+    'umpire': {'px': -6.3, 'py': 2.4, 'pz': -3.6, 'lx': -5.8, 'ly': 1.3, 'lz': 0.0},
+    'bench': {'px': -7.6, 'py': 2.0, 'pz': 3.9, 'lx': -6.0, 'ly': 0.5, 'lz': 1.4},
+    'tvcam': {'px': 5.4, 'py': 1.9, 'pz': 9.2, 'lx': 6.4, 'ly': 1.45, 'lz': 11.6},
+    'post': {'px': 3.7, 'py': 1.05, 'pz': 1.6, 'lx': 4.55, 'ly': 0.45, 'lz': -0.5},
+    'corner': {'px': -2.5, 'py': 1.6, 'pz': 6.0, 'lx': -5.0, 'ly': 1.4, 'lz': 9.0},
 }
 def snap(pg, name):
     t0 = time.time()
@@ -41,7 +50,8 @@ with sync_playwright() as p:
     logs = []
     pg.on('console', lambda m: logs.append(f'{m.type}: {m.text}'))
     pg.on('pageerror', lambda e: logs.append(f'PAGEERROR: {e}'))
-    pg.goto(f'http://127.0.0.1:{PORT}/index.html?lang=es')
+    # QUERY: more of the page's options (e.g. props=box, light=off)
+    pg.goto(f'http://127.0.0.1:{PORT}/index.html?lang=es' + ('&' + os.environ['QUERY'] if os.environ.get('QUERY') else ''), timeout=180000)
     pg.wait_for_function('document.querySelector(".menu-col")', timeout=120000)
     start = 'window.__pb.startDoubles(2)' if MODE == 'doubles' else 'window.__pb.start(3)'
     pg.evaluate(f"window.__pb.manual = true; window.__pb.view.setTier('{TIER}'); window.__seed(424242); {start}; window.__pb.save.tutorial = true; window.__pb.autopilot()")
