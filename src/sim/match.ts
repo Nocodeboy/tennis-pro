@@ -18,7 +18,7 @@ import { Rng } from './rng';
 import type { MatchEvent, Plan, Player, PointReason, Rules, ServeFault, ShotKind, ShotSpec, Timing } from './types';
 
 /** Spin each kind of shot carries: topspin drives, sliced volleys, bandejas, víboras and chiquitas. */
-export const SPIN: Record<ShotKind, number> = { serve: -0.2, return: 0.2, drive: 0.6, speedup: 0.2, smash: 0.25, bandeja: -0.55, vibora: -0.75, lob: 0.35, dink: -0.3, drop: -0.6, auto: -0.35 };
+export const SPIN: Record<ShotKind, number> = { serve: -0.2, return: 0.2, drive: 0.6, speedup: 0.2, smash: 0.25, bandeja: -0.55, vibora: -0.75, bajada: 0.15, lob: 0.35, dink: -0.3, drop: -0.6, auto: -0.35 };
 const SOFT = new Set<ShotKind>(['dink', 'drop']);
 /**
  * A hard shot gone wrong (Match.launch) carries up to this × (0.3 + 1) × (1 − q) m long: on a 10 m half a deep drive

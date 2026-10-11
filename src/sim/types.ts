@@ -7,9 +7,16 @@ import type { Side } from './court';
  *  · speedup: a hard volley at the net («volea» attacking);
  *  · bandeja: the controlled overhead that keeps the net (sliced, deep, not too fast);
  *  · vibora: the aggressive sliced overhead, angled to the side glass;
- *  · smash: the flat overhead («remate»), hard enough to go out of the court off the back glass («por 3»).
+ *  · smash: the flat overhead («remate»), hard enough to go out of the court off the back glass («por 3»);
+ *  · bajada: the attack on a ball that comes back high off the back glass («bajada de pared»), hit down and hard.
  */
-export type ShotKind = 'serve' | 'return' | 'drive' | 'dink' | 'drop' | 'lob' | 'smash' | 'bandeja' | 'vibora' | 'speedup' | 'auto';
+export type ShotKind = 'serve' | 'return' | 'drive' | 'dink' | 'drop' | 'lob' | 'smash' | 'bandeja' | 'vibora' | 'bajada' | 'speedup' | 'auto';
+/**
+ * A remate looking for the point off the walls (ShotSpec.special): «por 3» (flat, hard and steep: it bounces high and
+ * leaves the court over the walls) or «por 4» (with topspin: it bounces, comes off the back glass and goes back over
+ * the net to the hitter's side).
+ */
+export type Special = 'por3' | 'por4';
 /** how well the swing was timed (the human's release, or the AI's roll) */
 export type Timing = 'perfect' | 'good' | 'early' | 'late' | 'auto';
 
@@ -38,6 +45,13 @@ export interface ShotSpec {
    * 'block' a tap: a soft block or reset into the kitchen. None: an aimed shot, the automatic one or the CPU's.
    */
   intent?: 'attack' | 'block';
+  /**
+   * 0 … 1: how hard the player meant it (the human: the speed of the release stroke; 0.5 a plain release, 1 the
+   * fastest flick). Absent: 0.5. Harder is faster and riskier.
+   */
+  power?: number;
+  /** a remate looking for «por 3» or «por 4» (see Special) */
+  special?: Special;
 }
 
 /** Where and when a player will meet the incoming ball. */
@@ -118,7 +132,7 @@ export type MatchEvent =
    *  · `avail`: seconds from the other side's contact to this one (absent for a serve or a fed ball);
    *  · `vin`: speed of the incoming ball at the contact (m/s, along the court).
    */
-  | { type: 'hit'; pid: number; kind: ShotKind; timing: Timing; q: number; x: number; y: number; z: number; speed: number; shot: number; volley: boolean; shank?: boolean; intent?: 'attack' | 'block'; clear?: number; tx?: number; tz?: number; pop?: boolean; stretch?: number; avail?: number; vin?: number }
+  | { type: 'hit'; pid: number; kind: ShotKind; timing: Timing; q: number; x: number; y: number; z: number; speed: number; shot: number; volley: boolean; shank?: boolean; intent?: 'attack' | 'block'; power?: number; special?: Special; clear?: number; tx?: number; tz?: number; pop?: boolean; stretch?: number; avail?: number; vin?: number }
   | { type: 'bounce'; x: number; z: number; good: boolean; first: boolean; close: boolean }
   | { type: 'net'; x: number; y: number; z: number; tape: boolean }
   /** the ball meets a wall: glass (it comes back), mesh (it comes back dead and a little off) */

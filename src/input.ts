@@ -20,8 +20,13 @@ export interface Release {
   t: number;
   dx: number;
   dy: number;
-  /** the gesture: an attack (a flick, F, the right button), a tap (a block or reset), or none (a plain aimed release) */
-  gesture?: 'attack' | 'tap';
+  /**
+   * the gesture: an attack (a flick up, F, the right button), a down-flick (towards the player: over the head, a remate
+   * «por 4»), a tap (a block or reset), or none (a plain aimed release)
+   */
+  gesture?: 'attack' | 'down' | 'tap';
+  /** 0 … 1: how fast the stroke was at the lift (a still finger ≈ 0.3, a plain release 0.5, the fastest flick 1) */
+  power?: number;
   /** an attack: the drag before the flick's stroke (where it was aimed; ~0 = not aimed) and the stroke's direction */
   ax?: number;
   ay?: number;
