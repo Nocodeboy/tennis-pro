@@ -2,7 +2,7 @@
 // Each rival is a Skill. Also the human's automatic reset and the aim mapping shared with the view.
 
 import { posAt } from './ball';
-import { HL, NVZ, NET_C, W } from './court';
+import { AT_NET, DEPTH_Z, HL, NET_C, SERVICE, W } from './court';
 import type { Controller, Match, Mover } from './match';
 import type { Plan, Player, ShotKind, ShotSpec, Timing } from './types';
 
@@ -150,7 +150,7 @@ export class AIController implements Controller {
     const avail = r?.last?.lastHit ? plan.t - r.last.lastHit.t : 9;
     const block = ballSpeed(m) > 10.5 && plan.by < NET_C + 0.25 && (avail < 0.75 || plan.by < 0.45) && !plan.overhead && (r?.shots ?? 0) > 2;
     if (block && shot.kind !== 'lob' && m.rng.chance(clamp(0.3 + s.touch * 0.55 + fam * 0.25, 0, 0.95))) {
-      const atNet = Math.abs(plan.fz) < 3.6;
+      const atNet = Math.abs(plan.fz) < AT_NET;
       shot = {
         kind: atNet ? 'dink' : 'drop',
         ...target(p.side, (m.rng.next() - 0.5) * 2.2 - p.x * 0.3, (atNet ? 1.0 : 1.3) + m.rng.next() * 0.9),
@@ -170,7 +170,7 @@ export class AIController implements Controller {
     if (this.autoSeen.n >= AUTO_PUNISH.from && (r?.shots ?? 0) > 2 && m.rng.chance(AUTO_PUNISH.base + AUTO_PUNISH.attack * s.attack)) {
       shot = punish(m, p, plan, s);
       risk = attackRisk(shot.kind, plan) * poise;
-      if (solo) this.intent = Math.abs(plan.fz) < 3.6 ? 'putaway' : 'pass';
+      if (solo) this.intent = Math.abs(plan.fz) < AT_NET ? 'putaway' : 'pass';
     }
     const spec = this.roll(m, shot, hard + risk);
     // the rally weighs on them (less on the calm ones, and less against a pattern they have already read)
@@ -239,7 +239,7 @@ function punish(m: Match, p: Player, plan: Plan, s: Skill): Omit<ShotSpec, 'q' |
   const x = opp.x + way * (1.4 + s.risk * 0.6 + rng.next() * 0.6);
   if (plan.overhead) return { kind: 'smash', ...target(p.side, x, Math.min(HL - 0.6, Math.abs(opp.z) + 1.0 + rng.next() * 2)), clear: 0.08, pace: 0.8 };
   const d = Math.min(HL - 0.6, Math.abs(opp.z) + 0.6 + rng.next() * 1.6);
-  return { kind: Math.abs(plan.fz) < 3.6 ? 'speedup' : 'drive', ...target(p.side, x, d), clear: 0.12, pace: 0.9 };
+  return { kind: Math.abs(plan.fz) < AT_NET ? 'speedup' : 'drive', ...target(p.side, x, d), clear: 0.12, pace: 0.9 };
 }
 
 /**
@@ -412,7 +412,7 @@ function singlesShot(m: Match, p: Player, plan: Plan, s: Skill): { shot: Omit<Sh
   const opp = m.players.find((o) => o.team !== p.team)!;
   const side = p.side;
   const me = Math.abs(plan.fz);
-  const meNet = me < 3.6;
+  const meNet = me < AT_NET;
   // where the other one will be when the ball gets there: a player running in is read where he is going
   const oz = Math.max(0.5, Math.abs(opp.z + opp.vz * 0.35));
   const ox = opp.x + opp.vx * 0.25;
@@ -552,11 +552,11 @@ function placeSingles(m: Match, p: Player, s: Skill, intent: Intent | null): { d
   let depth: 0 | 2;
   if (r.shots === 1) depth = 0;
   else if (r.shots === 2) depth = rng.chance(rush) ? 2 : 0;
-  else if (za < 3.6) depth = 2;
+  else if (za < AT_NET) depth = 2;
   else if (intent === 'approach') depth = rng.chance(Math.min(1, rush + SINGLES.approachIn)) ? 2 : 0;
   else if (intent === 'drop' || intent === 'lobAtk' || (intent === 'block' && za < 5.4)) depth = rng.chance(rush) ? 2 : 0;
   else depth = 0;
-  const z = [HL + 0.3, 4.3, NVZ + 0.3][depth];
+  const z = DEPTH_Z[depth];
   return { depth, x: coverX(m, p, z, s) };
 }
 
@@ -573,7 +573,7 @@ function coverX(m: Match, p: Player, z: number, s: Skill): number {
   const sg = r.seg;
   let g = posAt(sg, r.tGround);
   const oz = Math.abs(opp.z);
-  if (oz < 3.6 && Math.abs(g.z) > oz) {
+  if (oz < AT_NET && Math.abs(g.z) > oz) {
     // volleyed: the ball as it passes the opponent's depth (how far into their half it is grows along the flight)
     let a = sg.t0;
     let b = r.tGround;
@@ -601,8 +601,8 @@ export function chooseShot(m: Match, p: Player, plan: Plan, s: Skill): Omit<Shot
   const opps = m.players.filter((o) => o.team !== p.team);
   const dbl = opps.length > 1;
   const opp = dbl ? pickOpp(m, opps) : opps[0];
-  const oppAtNet = dbl ? opps.every((o) => Math.abs(o.z) < 3.6) : opps.some((o) => Math.abs(o.z) < 3.6);
-  const meAtNet = Math.abs(plan.fz) < 3.6;
+  const oppAtNet = dbl ? opps.every((o) => Math.abs(o.z) < AT_NET) : opps.some((o) => Math.abs(o.z) < AT_NET);
+  const meAtNet = Math.abs(plan.fz) < AT_NET;
   // how attackable the ball is: 0 at the height of the tape, 1 well above it
   const up = clamp((plan.by - NET_C + 0.05) / 0.5, 0, 1);
   const side = p.side;
@@ -611,7 +611,7 @@ export function chooseShot(m: Match, p: Player, plan: Plan, s: Skill): Omit<Shot
   const atFeet = () => opp.x + (rng.next() - 0.5) * 0.8;
   // doubles: over the head of a player at the net
   const overNet = () => {
-    const o = Math.abs(opp.z) < 3.6 ? opp : opps.find((q) => Math.abs(q.z) < 3.6) ?? opp;
+    const o = Math.abs(opp.z) < AT_NET ? opp : opps.find((q) => Math.abs(q.z) < AT_NET) ?? opp;
     return o.x * 0.85 + (rng.next() - 0.5) * 0.6;
   };
   const deep = () => HL - 0.9 - s.risk * 0.5 - rng.next() * 0.8;
@@ -743,7 +743,7 @@ export interface Rival {
   skill: Skill;
 }
 
-const mv = (netRush: number, misjudge: number, kitchenFault: number, lunge = 0): Mover => ({ netRush, misjudge, kitchenFault, lunge });
+const mv = (netRush: number, misjudge: number, _old: number, lunge = 0): Mover => ({ netRush, misjudge, lunge });
 
 /**
  * Feet: the human runs at 4.6 m/s and reaches 1 m; the first three rivals are clearly slower and reach less, Nuria and
@@ -829,8 +829,8 @@ export function autoShot(m: Match, p: Player, plan: Plan): Omit<ShotSpec, 'q' | 
   const r = m.rally;
   const rng = m.rng;
   const opps = m.players.filter((o) => o.team !== p.team);
-  const oppAtNet = opps.length > 1 ? opps.every((o) => Math.abs(o.z) < 3.6) : opps.some((o) => Math.abs(o.z) < 3.6);
-  const meAtNet = Math.abs(plan.fz) < 3.6;
+  const oppAtNet = opps.length > 1 ? opps.every((o) => Math.abs(o.z) < AT_NET) : opps.some((o) => Math.abs(o.z) < AT_NET);
+  const meAtNet = Math.abs(plan.fz) < AT_NET;
   const x = (rng.next() - 0.5) * 1.4;
   if (r && r.shots === 1) return { kind: 'return', ...target(p.side, x, HL - 1.4 - rng.next() * 0.6), clear: 0.75 };
   // a ball over the head up at the net: the reflex is to hit it down, to the middle and not too hard (aiming picks
@@ -856,8 +856,8 @@ export function kindForAim(m: Match, p: Player, plan: Plan, d: number, lob: bool
   if (!r) return { kind: 'serve', clear: 0.7 };
   if (attack) return plan.overhead ? { kind: 'smash', clear: ATTACK.smashClear, pace: ATTACK.smashPace } : { kind: 'speedup', clear: ATTACK.clear, pace: ATTACK.pace };
   if (lob) return { kind: 'lob', clear: 2.8 };
-  const meAtNet = Math.abs(plan.fz) < 3.6;
-  if (d < NVZ) return meAtNet ? { kind: 'dink', clear: 0.17 } : { kind: 'drop', clear: 0.3 };
+  const meAtNet = Math.abs(plan.fz) < AT_NET;
+  if (d < AIM_SOFT) return meAtNet ? { kind: 'dink', clear: 0.17 } : { kind: 'drop', clear: 0.3 };
   if (plan.overhead) return { kind: 'smash', clear: 0.08, pace: 0.8 };
   if (AIM.slowSpeedup && meAtNet && plan.by > NET_C + 0.2) return { kind: 'speedup', clear: 0.1, pace: 0.85 };
   if (r.shots === 1) return { kind: 'return', clear: 0.55 };
@@ -865,6 +865,9 @@ export function kindForAim(m: Match, p: Player, plan: Plan, d: number, lob: bool
 }
 /** The aim mapping's options (tools try them): `slowSpeedup` = 0.7's hidden attack (a slow drag deep at the net). */
 export const AIM = { slowSpeedup: false };
+/** the human's aim: closer to the net than this (m) is a soft ball (a chiquita, a dejada) */
+export const AIM_SOFT = 4.2;
+void SERVICE;
 
 /**
  * The human's attack (docs/notas-08-ataque.md): a flick (or F, or the right button) is a flat, fast speed-up, or a
@@ -880,7 +883,7 @@ export const AIM = { slowSpeedup: false };
  * often than a placed drive); a ball that sits up is the one to hit (attackable). An attack let go outside the golden
  * window is `rough` rougher than a placed shot (a full swing: the timing matters more).
  */
-export const ATTACK = { aimed: 20, side: 0, behind: 0.25, minDepth: NVZ + 1.2, bend: 1.4, clear: 0.1, pace: 0.85, smashClear: 0.07, smashPace: 0.75, lowRisk: 3, rough: 0.04 };
+export const ATTACK = { aimed: 20, side: 0, behind: 0.25, minDepth: DEPTH_Z[2] + 1.2, bend: 1.4, clear: 0.1, pace: 0.85, smashClear: 0.07, smashPace: 0.75, lowRisk: 3, rough: 0.04 };
 export function attackTarget(m: Match, p: Player, plan: Plan, aimed: { x: number; z: number } | null, bend: number): { tx: number; tz: number } {
   const opps = m.players.filter((o) => o.team !== p.team);
   const want = (aimed ? aimed.x : plan.bx) + bend;
@@ -907,7 +910,7 @@ export function attackTarget(m: Match, p: Player, plan: Plan, aimed: { x: number
  */
 export const BLOCK = { depth: 1.15, spread: 0.6, x: 0.4, clear: 0.15, clearBack: 0.26, good: 0.12, perfectMin: 0.84, soak: 0.6, miss: 0.04 };
 export function blockShot(m: Match, p: Player, plan: Plan): Omit<ShotSpec, 'q' | 'timing'> {
-  const atNet = Math.abs(plan.fz) < 3.6;
+  const atNet = Math.abs(plan.fz) < AT_NET;
   const x = plan.bx * BLOCK.x + (m.rng.next() - 0.5) * 1.2;
   const d = BLOCK.depth + (atNet ? 0 : 0.3) + m.rng.next() * BLOCK.spread;
   return { kind: atNet ? 'dink' : 'drop', ...target(p.side, x, d), clear: atNet ? BLOCK.clear : BLOCK.clearBack };

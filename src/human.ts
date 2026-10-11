@@ -1,7 +1,7 @@
 // The human's side: turns the drag into a target and a shot type, and the release time into contact quality.
 
 import { ATTACK, BLOCK, HUMAN_MOVER, Q_AIMED, Q_AUTO, Q_FLOOR_HUMAN, Q_PERFECT, attackRisk, attackTarget, autoShot, ballCue, blockShot, difficulty, kindForAim, lobShape, pressure, shankOf } from './sim/brain';
-import { HL, NET_C, NVZ, W, inHalf, inServiceCourt } from './sim/court';
+import { HL, NET_C, SERVICE, W, inHalf, inServiceCourt } from './sim/court';
 import { IDEAL_RELEASE, Match, PERFECT_WINDOW, SERVE_HEIGHT, type Controller } from './sim/match';
 import type { Plan, Player, ShotKind, ShotSpec, Timing } from './sim/types';
 import type { Input, Release } from './input';
@@ -135,7 +135,7 @@ export class HumanController implements Controller {
     if (serving) {
       half = (-m.serveX(p.team)) as 1 | -1;
       x0 = half * 1.5 * p.side; // in the server's screen frame
-      d0 = (NVZ + HL) / 2 + 0.3;
+      d0 = SERVICE * 0.6;
     }
     let sx = x0 + dx * gx;
     let d = d0 - dy * gz;

@@ -19,7 +19,7 @@ g.window ??= { addEventListener() {} };
 
 import { Input } from '../src/input';
 import { HumanController, SERVE_PERIOD } from '../src/human';
-import { HL, NET_C, NVZ, W } from '../src/sim/court';
+import { AT_NET, DEPTH_Z, HL, NET_C, W } from '../src/sim/court';
 import { ballCue } from '../src/sim/brain';
 import { IDEAL_RELEASE, type Match } from '../src/sim/match';
 import { Rng } from '../src/sim/rng';
@@ -190,7 +190,7 @@ export class ThumbBot {
         this.act = 'tap';
         this.tapE = IDEAL_RELEASE + this.gauss() * L.blockSigma - L.blockBias;
       } else if (el >= this.pressAt && tg.t - m.t > 0.08) {
-        const atNet = Math.abs(tg.fz) < (L.rashNear ?? 3.6) && m.rally!.shots >= 2;
+        const atNet = Math.abs(tg.fz) < (L.rashNear ?? AT_NET) && m.rally!.shots >= 2;
         const rash = cue !== 'attack' && atNet && tg.by > NET_C + (L.rashFloor ?? -0.2) && this.rng.chance(L.rash);
         if ((cue === 'attack' && this.rng.chance(L.flick)) || rash) {
           this.act = 'flick';
@@ -304,7 +304,7 @@ export class ThumbBot {
       this.lastShots = r.shots;
       if (r.shots >= 2 && !this.up && this.rng.chance(this.level.netRush)) this.up = true;
     }
-    const z = this.up ? NVZ + 0.3 : HL + 0.3;
+    const z = this.up ? DEPTH_Z[2] : DEPTH_Z[0];
     return { x: Math.max(-1.6, Math.min(1.6, p.homeX)), z: p.side * z };
   }
 
@@ -318,8 +318,8 @@ export class ThumbBot {
     const r = m.rally!;
     const opps = m.players.filter((o) => o.team !== p.team);
     const opp = opps.length > 1 ? opps[rng.chance(0.5) ? 0 : 1] : opps[0];
-    const oppNet = opps.length > 1 ? opps.every((o) => Math.abs(o.z) < 3.6) : Math.abs(opp.z) < 3.6;
-    const meNet = Math.abs(tg.fz) < 3.6;
+    const oppNet = opps.length > 1 ? opps.every((o) => Math.abs(o.z) < AT_NET) : Math.abs(opp.z) < AT_NET;
+    const meNet = Math.abs(tg.fz) < AT_NET;
     const high = tg.overhead || tg.by > NET_C + 0.2;
     const open = () => -Math.sign(opp.x || rng.next() - 0.5) * (1.1 + L.risk * 1.4 + rng.next() * 0.4);
     const feet = () => opp.x + (rng.next() - 0.5) * 0.7;
@@ -346,7 +346,7 @@ export class ThumbBot {
         d = 0;
       } else {
         x = feet();
-        d = Math.max(NVZ + 0.3, Math.abs(opp.z) - 0.5);
+        d = Math.max(DEPTH_Z[2], Math.abs(opp.z) - 0.5);
       }
     } else if (!meNet && oppNet) {
       const u = rng.next();
