@@ -83,16 +83,24 @@ export function boxProps(): boolean {
 export const propTiming = { fetch: 0, decode: 0, build: 0 };
 
 /**
- * Fetches assets/props/props.bin and decodes every prop; resolves true once they are in, false if the page cannot
- * have them (?props=box, no page, the file missing: the venue keeps the boxes).
+ * Fetches the props and decodes every prop; resolves true once they are in, false if the page cannot have them
+ * (?props=box, no page, the file missing: the venue keeps the boxes). The build ships assets/props/props.bin as
+ * props.json too (the bytes in base64, `{ b64 }`): the artifact host only serves known web types, and .json is one.
+ * The page asks for the JSON; the raw .bin stays the source (art/blender/props.py writes it).
  */
 export function loadProps(base = ''): Promise<boolean> {
   if (boxProps() || typeof fetch === 'undefined') return Promise.resolve(false);
   const t0 = performance.now();
-  return fetch(`${base}assets/props/props.bin`)
+  return fetch(`${base}assets/props/props.json`)
     .then((r) => {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      return r.arrayBuffer();
+      return r.json() as Promise<{ b64: string }>;
+    })
+    .then((j) => {
+      const bin = atob(j.b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return bytes.buffer;
     })
     .then((buf) => {
       const t1 = performance.now();
@@ -103,7 +111,7 @@ export function loadProps(base = ''): Promise<boolean> {
       return true;
     })
     .catch((err) => {
-      console.warn('props: assets/props/props.bin', err);
+      console.warn('props: assets/props/props.json', err);
       return false;
     });
 }

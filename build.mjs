@@ -64,4 +64,6 @@ writeFileSync('dist/index.html', page);
 writeFileSync('dist/artifact.html', fragment);
 // the AI-made players and their animations are fetched next to the page
 cpSync('assets', 'dist/assets', { recursive: true });
+// the Blender props as JSON (base64) next to the raw .bin: the artifact host serves .json but not .bin
+writeFileSync('dist/assets/props/props.json', JSON.stringify({ b64: readFileSync('assets/props/props.bin').toString('base64') }));
 console.log(`dist/index.html ${(page.length / 1024).toFixed(0)} KB · v${VERSION}`);

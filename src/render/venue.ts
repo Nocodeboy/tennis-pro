@@ -311,7 +311,7 @@ interface Place {
   mirror: boolean;
 }
 
-/** The boxes the Blender models replaced (?props=box, or no assets/props/props.bin): the same places. */
+/** The boxes the Blender models replaced (?props=box, or the props file missing): the same places. */
 function boxProp(s: Solid, p: Place) {
   const { x, y, z, ry } = p;
   const fx = Math.sin(ry);
