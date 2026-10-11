@@ -1,18 +1,24 @@
 // The match: positions, the ball, the rules of a rally and the score. Deterministic for a given seed and the same
 // shot decisions, so the bot, the browser and (later) an online server run exactly the same code.
 //
-// Built for 1 or 2 players a side: everything goes through `players` and `team`, never "the player" and "the CPU".
-// Doubles (four players) adds the USA Pickleball serve rotation for both scoring systems (side-out: server 1 and 2
-// with the "0-0-2" start; rally: one server per side out and the game won only serving), positions that follow the
-// score, the right receiver, and a receiving team that agrees who takes each ball (each covers a half).
+// Padel doubles (FIP rules), always four players: everything goes through `players` and `team`, never "the player"
+// and "the CPU".
+//  · The serve: underhand after a bounce, from behind the service line, diagonally into the box. Two serves; a let if
+//    it touches the net and bounces in; a fault if, after bouncing in, it hits the mesh before the second bounce.
+//  · The rally: the ball must bounce in the other half before touching anything else there; after the bounce it can
+//    come back off the glass or the mesh and is still live until it bounces a second time. Out of the court over the
+//    walls after bouncing («por 3») or back over the net («por 4»): the hitter's point. The return must bounce.
+//  · The score: 15-30-40, golden point at 40-40 (or advantages), games to a short set with a tie-break.
+//  · Each player keeps his side for the set (right, «drive», or left, «revés»); the receiver is the one in the box the
+//    serve goes to, the server serves from the right on even points of the game and the serve goes round the four.
 
-import { bounce, groundTime, minFlight, netTime, posAt, seg, shotByClearance, velAt, type Seg, type Vec3 } from './ball';
-import { HL, NET_C, NVZ, R, W, inHalf, inKitchen, inServiceCourt, netHeight, outBy, type Side } from './court';
+import { bounce, groundTime, minFlight, netTime, nextEvent, posAt, seg, shotByClearance, velAt, wallBounce, wallTime, type Seg, type Vec3, type WallHit } from './ball';
+import { AT_NET, DEPTH_Z, HL, NET_C, R, SERVICE, W, backSurface, inHalf, inServiceCourt, netHeight, serveOutBy, sideSurface, type Side, type Surface } from './court';
 import { Rng } from './rng';
-import type { MatchEvent, Plan, Player, PointReason, Rules, ShotKind, ShotSpec, Timing } from './types';
+import type { MatchEvent, Plan, Player, PointReason, Rules, ServeFault, ShotKind, ShotSpec, Timing } from './types';
 
-/** Spin each kind of shot carries: topspin drives and rolls, sliced drops and blocks. */
-export const SPIN: Record<ShotKind, number> = { serve: 0.3, return: 0.35, drive: 0.8, speedup: 0.55, smash: 0.45, lob: 0.45, dink: -0.15, drop: -0.5, auto: -0.35 };
+/** Spin each kind of shot carries: topspin drives, sliced volleys, bandejas, víboras and chiquitas. */
+export const SPIN: Record<ShotKind, number> = { serve: -0.2, return: 0.2, drive: 0.6, speedup: 0.2, smash: 0.25, bandeja: -0.55, vibora: -0.75, lob: 0.35, dink: -0.3, drop: -0.6, auto: -0.35 };
 const SOFT = new Set<ShotKind>(['dink', 'drop', 'auto']);
 
 export interface Controller {
@@ -43,20 +49,13 @@ export interface Controller {
    * spot (dx, dz) off the real one, and the read is corrected at time `at` (see Match.misread). null: read right.
    */
   read?(m: Match, p: Player, plan: Plan): { dx: number; dz: number; at: number } | null;
-  /**
-   * CPU players in singles: where to go after their own shot (depth: 0 back · 1 transition · 2 kitchen line; x: where
-   * to wait across), the AI's decision to come in or stay back. null (or absent): the default habits (afterHit).
-   */
-  place?(m: Match, p: Player, spec: ShotSpec): { depth: 0 | 1 | 2; x: number } | null;
 }
 
 export interface Mover {
-  /** 0 … 1: how readily they move up to the kitchen line once the two-bounce rule allows it */
+  /** 0 … 1: how readily they move up to the net */
   netRush: number;
-  /** chance of playing a ball that was going out */
+  /** chance of volleying a ball that was going straight into the glass (the other side's fault if left alone) */
   misjudge: number;
-  /** chance of stepping into the kitchen on a volley (a fault) */
-  kitchenFault: number;
   /** CPU players: how far past the spot they can still reach with a lunge (m) */
   lunge?: number;
 }
@@ -149,7 +148,7 @@ export const HUMAN_FEET = {
   brakeMax: 30,
   turn: 22,
   turnLo: 34,
-  /** the assist's braking profile into the suggested spot and into the kitchen line (m/s², below brakeMax) */
+  /** the assist's braking profile into the suggested spot (m/s², below brakeMax) */
   park: 22,
   split: 0.1,
   splitUp: 16,
@@ -283,9 +282,11 @@ function lungeAt(lunge: number, dt: number): number {
   if (CPU_LUNGE.time <= 0) return lunge;
   return lunge * Math.max(0, Math.min(1, CPU_LUNGE.min + ((1 - CPU_LUNGE.min) * dt) / CPU_LUNGE.time));
 }
-/** the playing area inside the fence (30 × 60 ft): nobody runs through it */
-const AREA_X = 4.57 - 0.35;
-const AREA_Z = 9.14 - 0.35;
+/** the playing area inside the walls: nobody runs through the glass */
+export const AREA_X = W / 2 - 0.3;
+export const AREA_Z = HL - 0.3;
+/** a ball closer than this to a wall cannot be swung at (the paddle would hit the glass) */
+const WALL_GAP = { side: 0.3, back: 0.38 };
 /** pause after a point before the next serve */
 const DEAD_TIME = 1.6;
 /** the human can cut the pause short with a tap (Match.hurry), but not below this: the banner says why the point ended */
@@ -307,8 +308,6 @@ const FRESH_OFF = cosd(35);
  * the very moment the other side hits (docs/concepto.md, «Control y simulación 0.7»).
  */
 export const ASSIST = { see: 0.18, idle: [0, 1.2, 2.4] };
-/** where the feet of a player running up to the net stop (assisted): just behind the kitchen line */
-export const LINE_STOP = NVZ + 0.2;
 /**
  * The serve's wind-up: from the moment the server lets go (the controller returns the serve) to the contact. It is
  * the contact frame of the serve clip (assets/anims/serve.json, measured in render/chars.ts), so the view can play
@@ -317,17 +316,37 @@ export const LINE_STOP = NVZ + 0.2;
 export const SERVE_WINDUP = 0.87;
 /** height of the serve contact (m): underhand, below the waist, where the serve clip's paddle can get to */
 export const SERVE_HEIGHT = 0.7;
+/** the pause after a serve fault before the second serve */
+const FAULT_TIME = 1.0;
 
 interface Rally {
   shots: number;
   last: Player | null;
+  /** floor bounces since the last hit */
   bounces: number;
   seg: Seg;
+  /** next crossing of the net's plane (null: none on this stretch) */
   tNet: number | null;
   netDone: boolean;
   tGround: number;
+  /** next wall on this stretch */
+  wall: WallHit | null;
+  /** the ball has crossed the net since the last hit */
+  crossed: boolean;
+  /** walls met since the last hit */
+  walls: number;
+  /** the serve clipped the net (a let if it then bounces in the box) */
+  tape: boolean;
   /** the serve must land in this half of the receiver's service courts (sign of x) */
   serveHalf: 1 | -1;
+}
+
+/** One stretch of the ball's coming path (Match.path): from t0 to t1, after `floor` floor bounces since the hit. */
+interface Leg {
+  s: Seg;
+  t0: number;
+  t1: number;
+  floor: number;
 }
 
 export class Match {
@@ -335,7 +354,12 @@ export class Match {
   readonly players: Player[] = [];
   readonly controllers: Controller[] = [];
   readonly rng: Rng;
-  score: [number, number] = [0, 0];
+  /** games won in the set */
+  games: [number, number] = [0, 0];
+  /** points in the current game (raw counts: 0, 1, 2, 3 = 0, 15, 30, 40; in a tie-break, the tie-break points) */
+  points: [number, number] = [0, 0];
+  /** the current game is the tie-break */
+  tiebreak = false;
   serverTeam: 0 | 1 = 0;
   phase: 'serve' | 'rally' | 'dead' | 'over' = 'serve';
   rally: Rally | null = null;
@@ -354,22 +378,28 @@ export class Match {
     winners: [0, 0],
     errors: [0, 0],
     shots: [0, 0],
-    /** per player (doubles: your own count, not the team's) */
+    /** per player (your own count, not the team's) */
     perfectBy: [] as number[],
     errorsBy: [] as number[],
   };
-  /** two players a side */
-  readonly doubles: boolean;
-  /** doubles: who serves now (−1 before the first serve) */
+  /** always true in padel (kept for the code that reads it) */
+  readonly doubles = true;
+  /** who serves now */
   serverId = -1;
-  /** doubles, side-out scoring: server 1 or 2 of the serving team (the game starts at "0-0-2": one server only) */
-  serverNum: 1 | 2 = 1;
-  /** doubles: who returns this serve (the player diagonally opposite the server) */
+  /** first or second serve */
+  serveNum: 1 | 2 = 1;
+  /** who returns this serve (the player in the box the serve goes to) */
   receiverId = -1;
-  /** doubles: who of the receiving team takes the coming ball (−1: nobody, it is going out) */
+  /** who of the receiving team takes the coming ball (−1: nobody, it is going out) */
   owner = -1;
-  /** doubles: the coming ball was already passed on once (to the partner of a player who could not make it) */
+  /** the coming ball was already passed on once (to the partner of a player who could not make it) */
   private passed = -1;
+  /** the order of the servers round the four (set at the toss): game g is served by order[g % 4] */
+  private order: number[] = [];
+  /** games played in the set (whose turn it is to serve) */
+  private played = 0;
+  /** the next serve is a second serve after a fault (or a let: the same serve again) */
+  private reserve: 'fault' | 'let' | null = null;
   /** scratch */
   private acc = 0;
   private pv: Vec3 = { x: 0, y: 0, z: 0 };
@@ -380,8 +410,8 @@ export class Match {
     readonly rules: Rules,
     seed: number,
   ) {
+    if (cfgs.length !== 4) throw new Error('padel is played two a side');
     this.rng = new Rng(seed);
-    this.doubles = cfgs.length > 2;
     cfgs.forEach((c, i) => {
       const side: Side = c.team === 0 ? 1 : -1;
       this.players.push({
@@ -390,7 +420,7 @@ export class Match {
         side,
         human: c.human,
         x: 0,
-        z: side * (HL + 0.3),
+        z: side * DEPTH_Z[0],
         vx: 0,
         vz: 0,
         speed: c.speed,
@@ -398,7 +428,7 @@ export class Match {
         plan: null,
         moveFrom: 0,
         homeX: 0,
-        homeZ: side * (HL + 0.3),
+        homeZ: side * DEPTH_Z[0],
         depth: 0,
         lastHit: null,
         look: c.look,
@@ -418,35 +448,48 @@ export class Match {
     return this.players.filter((p) => p.team === t);
   }
   server(): Player {
-    if (this.doubles) return this.players[this.serverId] ?? this.rightOf(this.serverTeam);
-    return this.team(this.serverTeam)[0];
+    return this.players[this.serverId] ?? this.team(this.serverTeam)[0];
   }
-  /** doubles: the partner of `p` */
+  /** the partner of `p` */
   mate(p: Player): Player {
     return this.players.find((q) => q.team === p.team && q !== p) ?? p;
   }
   /**
-   * Doubles: who stands in the right court of `team` (right from the team's own view). Positions follow the score:
-   * the team's first player (the one in the right court at 0) is there when the team's score is even, and in the left
-   * court when it is odd. So a serving team that wins a point swaps sides, and a receiving team never does (rally
-   * scoring: the team that wins the side-out point swaps, and the player now in the right court serves).
+   * Who plays the right side («drive») of `team` (right from the team's own view): the team's first player, for the
+   * whole set; the other one plays the left («revés»).
    */
   rightOf(team: 0 | 1): Player {
-    const [a, b] = this.team(team);
-    return this.score[team] % 2 === 0 ? a : b;
+    return this.team(team)[0];
   }
-  /** doubles: sign of x of the court (half) `p` stands in for the serve */
+  /** sign of x of the half `p` plays in (his side for the set, see rightOf) */
   courtX(p: Player): 1 | -1 {
     return (this.rightOf(p.team) === p ? p.side : -p.side) as 1 | -1;
   }
-  /**
-   * The score as it is called before a serve: serving team first. Side-out doubles adds the server number ("4-2-1");
-   * rally scoring and singles are two numbers.
-   */
+  /** points played in the current game (or tie-break): even, the serve goes from the right */
+  private pointsPlayed(): number {
+    return this.points[0] + this.points[1];
+  }
+
+  /** The score of a team in the current game as it is called: 0, 15, 30, 40, AD (tie-break: the number). */
+  pointText(team: 0 | 1): string {
+    const a = this.points[team];
+    if (this.tiebreak) return String(a);
+    const b = this.points[team === 0 ? 1 : 0];
+    if (a >= 3 && b >= 3) return a > b ? 'AD' : '40';
+    return ['0', '15', '30', '40'][Math.min(3, a)];
+  }
+  /** 40-40 with the golden point on: the next point wins the game */
+  goldenPoint(): boolean {
+    return !this.tiebreak && this.rules.golden && this.points[0] === 3 && this.points[1] === 3;
+  }
+  /** 40-40 (or back to it) with advantages: «iguales» */
+  deuce(): boolean {
+    return !this.tiebreak && !this.rules.golden && this.points[0] >= 3 && this.points[0] === this.points[1];
+  }
+  /** The score of the game as it is called before a serve: serving team first ("15-30", "40-AD"; tie-break "3-2"). */
   call(): string {
     const st = this.serverTeam;
-    const s = `${this.score[st]}-${this.score[st === 0 ? 1 : 0]}`;
-    return this.doubles && this.rules.scoring === 'sideout' ? `${s}-${this.serverNum}` : s;
+    return `${this.pointText(st)}-${this.pointText(st === 0 ? 1 : 0)}`;
   }
   /** the ball now (live, or dead and rolling away), or null when someone is holding it to serve */
   ballPos(out: Vec3 = { x: 0, y: 0, z: 0 }): Vec3 | null {
@@ -466,38 +509,58 @@ export class Match {
   }
 
   /**
-   * Server's half of the court (sign of x). Singles: right (from the server's view) when the server's score is even.
-   * Doubles: the court the server stands in (see rightOf).
+   * The half of the court (sign of x) the serve goes from, for the serving team: the server's right on even points of
+   * the game, his left on odd ones. For the receiving team: the box it goes to (the same court, diagonally).
    */
   serveX(team: 0 | 1): 1 | -1 {
-    if (this.doubles) return this.courtX(team === this.serverTeam ? this.server() : this.rightOf(team));
     const side: Side = team === 0 ? 1 : -1;
-    const even = this.score[team] % 2 === 0;
-    return (side * (even ? 1 : -1)) as 1 | -1;
+    const right = this.pointsPlayed() % 2 === 0;
+    return (side * (right ? 1 : -1)) as 1 | -1;
   }
 
   /** Puts everybody in place for the next serve. */
   setupServe() {
     const st = this.serverTeam;
-    if (this.doubles) this.setupDoubles();
-    else {
-      const sx = this.serveX(st);
-      for (const p of this.players) {
-        p.plan = null;
-        p.vx = p.vz = 0;
-        p.depth = 0;
-        p.lastHit = null;
-        if (p.team === st) {
-          p.x = sx * 1.1;
-          p.z = p.side * (HL + 0.35);
+    const srv = this.server();
+    const sx = this.serveX(st);
+    // the receiver: the opponent who plays the box the serve goes to (right court to right court)
+    const rcv = this.team(st === 0 ? 1 : 0).find((q) => this.courtX(q) === this.serveX(q.team))!;
+    this.receiverId = rcv.id;
+    this.owner = -1;
+    this.passed = -1;
+    for (const p of this.players) {
+      p.plan = null;
+      p.vx = p.vz = 0;
+      p.lastHit = null;
+      if (p === srv) {
+        // behind the service line, a step off the centre line
+        p.x = sx * 1.3;
+        p.z = p.side * (SERVICE + 1.0);
+        p.depth = 1;
+        p.lane = sx;
+      } else if (p.team === st) {
+        // the server's partner waits at the net, in the other half
+        p.x = -sx * 2.4;
+        p.z = p.side * DEPTH_Z[2];
+        p.depth = 2;
+        p.lane = -sx as 1 | -1;
+      } else {
+        const c = this.courtX(p);
+        p.lane = c;
+        if (p === rcv) {
+          // the receiver, a good step in front of the back glass
+          p.x = c * 2.7;
+          p.z = p.side * (HL - 1.4);
+          p.depth = 0;
         } else {
-          // the receiver stands diagonally, a step behind the baseline (serves come in deep)
-          p.x = -sx * 1.35;
-          p.z = p.side * (HL + 0.45);
+          // the receiver's partner, around the service line in the other half
+          p.x = c * 2.5;
+          p.z = p.side * (SERVICE + 0.3);
+          p.depth = 1;
         }
-        p.homeX = p.x;
-        p.homeZ = p.z;
       }
+      p.homeX = p.x;
+      p.homeZ = p.z;
     }
     this.rally = null;
     this.deadSeg = null;
@@ -507,55 +570,18 @@ export class Match {
     this.phase = 'serve';
     this.servePending = true;
     this.windup = null;
-    this.events.push({ type: 'serveSetup', server: this.server().id });
-  }
-
-  /**
-   * Doubles positions for the serve, all in the halves the score gives them: the server behind the baseline, the
-   * partner back at the baseline too (the return must bounce), the receiver diagonally opposite a step behind the
-   * baseline and the receiver's partner already up at the kitchen line (the usual strategy).
-   */
-  private setupDoubles() {
-    const st = this.serverTeam;
-    if (this.serverId < 0) {
-      // the first serve of the game: from the right court, and only one server ("0-0-2") in side-out scoring
-      this.serverNum = this.rules.scoring === 'sideout' ? 2 : 1;
-      this.serverId = this.rightOf(st).id;
-    }
-    const srv = this.server();
-    const sx = this.courtX(srv);
-    const rcv = this.players.find((q) => q.team !== st && this.courtX(q) === -sx)!;
-    this.receiverId = rcv.id;
-    this.owner = -1;
-    this.passed = -1;
-    for (const p of this.players) {
-      p.plan = null;
-      p.vx = p.vz = 0;
-      p.depth = 0;
-      p.lastHit = null;
-      const c = this.courtX(p);
-      p.lane = c;
-      if (p === srv) {
-        p.x = c * 1.2;
-        p.z = p.side * (HL + 0.35);
-      } else if (p.team === st) {
-        p.x = c * 1.6;
-        p.z = p.side * (HL + 0.2);
-      } else if (p === rcv) {
-        p.x = c * 1.5;
-        p.z = p.side * (HL + 0.45);
-      } else {
-        p.x = c * 1.5;
-        p.z = p.side * (NVZ + 0.35);
-        p.depth = 2;
-      }
-      p.homeX = p.x;
-      p.homeZ = p.z;
-    }
+    this.events.push({ type: 'serveSetup', server: srv.id });
   }
 
   start() {
     this.serverTeam = this.rng.chance(0.5) ? 0 : 1;
+    // the order round the four: the first server, then the other team, then the partners
+    const a = this.team(this.serverTeam);
+    const b = this.team(this.serverTeam === 0 ? 1 : 0);
+    this.order = [a[0].id, b[0].id, a[1].id, b[1].id];
+    this.played = 0;
+    this.serverId = this.order[0];
+    this.serveNum = 1;
     this.setupServe();
   }
 
@@ -610,11 +636,20 @@ export class Match {
   }
 
   // ------------------------------------------------------------------ the rally
+  /** A new stretch of flight for the rally: when it meets the net's plane, the floor and the walls. */
+  private setSeg(r: Rally, s: Seg) {
+    r.seg = s;
+    r.tGround = groundTime(s);
+    r.wall = wallTime(s);
+    r.tNet = netTime(s);
+    r.netDone = r.tNet === null;
+  }
+
   private rallyEvents(t1: number) {
-    for (let guard = 0; guard < 8 && this.phase === 'rally'; guard++) {
+    for (let guard = 0; guard < 12 && this.phase === 'rally'; guard++) {
       const r = this.rally!;
       let te = Infinity;
-      let kind: 'net' | 'ground' | 'hit' | null = null;
+      let kind: 'net' | 'ground' | 'wall' | 'hit' | null = null;
       let hitter: Player | null = null;
       if (!r.netDone && r.tNet !== null && r.tNet < te) {
         te = r.tNet;
@@ -623,6 +658,10 @@ export class Match {
       if (r.tGround < te) {
         te = r.tGround;
         kind = 'ground';
+      }
+      if (r.wall && r.wall.t < te) {
+        te = r.wall.t;
+        kind = 'wall';
       }
       for (const p of this.players) {
         if (p.plan && p.plan.t < te) {
@@ -634,28 +673,46 @@ export class Match {
       if (te > t1 || kind === null) return;
       if (kind === 'net') this.onNet(te);
       else if (kind === 'ground') this.onGround(te);
+      else if (kind === 'wall') this.onWall(te);
       else this.onContact(hitter!, te);
     }
+  }
+
+  /** the other team */
+  private other(team: 0 | 1): 0 | 1 {
+    return team === 0 ? 1 : 0;
   }
 
   private onNet(t: number) {
     const r = this.rally!;
     r.netDone = true;
     const p = posAt(r.seg, t, this.pv);
+    const hitter = r.last!;
+    if (r.crossed) {
+      // after bouncing in it goes back over the net to the hitter's side («por 4»): the hitter's point
+      if (r.bounces > 0) {
+        this.deadSeg = r.seg;
+        this.endPoint(hitter.team, 'back', null, t);
+      }
+      return;
+    }
     const top = netHeight(p.x) + R;
-    if (p.y >= top + 0.004) return; // clean over
+    if (p.y >= top + 0.004) {
+      r.crossed = true;
+      return; // clean over
+    }
     const v = velAt(r.seg, t);
-    const side = r.last!.side;
+    const side = hitter.side;
     // how squarely it meets the tape: 1 = brushes it, 0 = hits it full on
     const c = (p.y - (top - 1.3 * R)) / (1.3 * R + 0.004);
     if (c > 0.3) {
-      // clips the tape: loses most of its pace, pops up and trickles over (live, as in the real game)
-      const keep = 0.2 + 0.55 * c;
+      // clips the tape: loses most of its pace, pops up and trickles over (live, as in the real game; on the serve, a
+      // let if it then bounces in the box)
+      const keep = 0.25 + 0.55 * c;
       const nv = { x: v.x * keep * 0.8, y: Math.abs(v.y) * 0.15 + 0.5 + 1.5 * (1 - c), z: v.z * keep };
-      const s = seg(t, { x: p.x, y: top + 0.005, z: -side * 0.03 }, nv, 0.1);
-      r.seg = s;
-      r.tGround = groundTime(s);
-      r.tNet = null;
+      this.setSeg(r, seg(t, { x: p.x, y: top + 0.005, z: -side * 0.03 }, nv, 0.1));
+      r.crossed = true;
+      if (r.shots === 1) r.tape = true;
       this.events.push({ type: 'net', x: p.x, y: p.y, z: 0, tape: true });
       // a new flight: the suggested spots (and the assist locked on them) start over
       this.targets.length = 0;
@@ -666,7 +723,8 @@ export class Match {
     // into the net: it dies there and drops on the hitter's side
     this.events.push({ type: 'net', x: p.x, y: p.y, z: 0, tape: false });
     this.deadSeg = seg(t, { x: p.x, y: Math.max(R, p.y), z: side * 0.06 }, { x: v.x * 0.15, y: 0.2, z: side * Math.abs(v.z) * 0.08 });
-    this.endPoint(r.last!.team === 0 ? 1 : 0, 'net', r.last!.id, t);
+    if (r.shots === 1) this.serveFault('serveNet', t);
+    else this.endPoint(this.other(hitter.team), 'net', hitter.id, t);
   }
 
   private onGround(t: number) {
@@ -674,24 +732,34 @@ export class Match {
     const p = posAt(r.seg, t, this.pv);
     const hitter = r.last!;
     const recvSide = -hitter.side as Side;
-    const onRecv = p.z * recvSide > 0;
+    if (!r.crossed) {
+      // it bounced on the hitter's own side (a mishit that never got over)
+      this.events.push({ type: 'bounce', x: p.x, z: p.z, good: false, first: true, close: false });
+      this.deadSeg = bounce(r.seg, t);
+      if (r.shots === 1) this.serveFault('serveNet', t);
+      else this.endPoint(this.other(hitter.team), 'net', hitter.id, t);
+      return;
+    }
     if (r.bounces === 0) {
-      let good: boolean;
-      let reason: PointReason = 'out';
-      if (!onRecv) good = false;
-      else if (r.shots === 1) {
+      let good = true;
+      let close = false;
+      if (r.shots === 1) {
         good = inServiceCourt(p.x, p.z, recvSide, r.serveHalf);
-        if (!good) reason = inKitchen(p.z, recvSide) && Math.abs(p.x) <= W / 2 ? 'serveKitchen' : 'serveOut';
+        const ob = serveOutBy(p.x, p.z, recvSide, r.serveHalf);
+        close = good ? Math.abs(p.z * recvSide - SERVICE) < 0.12 || Math.abs(p.x) < 0.1 : ob < 0.12;
       } else good = inHalf(p.x, p.z, recvSide);
-      const close = good ? outBy(p.x, p.z, recvSide) === 0 && (Math.abs(Math.abs(p.x) - W / 2) < 0.12 || Math.abs(Math.abs(p.z) - HL) < 0.12) : outBy(p.x, p.z, recvSide) < 0.12;
       this.events.push({ type: 'bounce', x: p.x, z: p.z, good, first: true, close });
-      r.seg = bounce(r.seg, t);
-      r.tGround = groundTime(r.seg);
-      r.tNet = netTime(r.seg);
-      r.netDone = r.tNet === null;
+      this.setSeg(r, bounce(r.seg, t));
       if (!good) {
         this.deadSeg = r.seg;
-        this.endPoint(hitter.team === 0 ? 1 : 0, reason, hitter.id, t);
+        if (r.shots === 1) this.serveFault('serveOut', t);
+        else this.endPoint(this.other(hitter.team), 'out', hitter.id, t);
+        return;
+      }
+      if (r.shots === 1 && r.tape) {
+        // the serve clipped the net and bounced in: a let, the same serve again
+        this.deadSeg = r.seg;
+        this.let(t);
         return;
       }
       r.bounces = 1;
@@ -700,10 +768,95 @@ export class Match {
     // second bounce: nobody got to it
     this.events.push({ type: 'bounce', x: p.x, z: p.z, good: true, first: false, close: false });
     this.deadSeg = bounce(r.seg, t);
-    // why: a clean winner, a ball someone went for and did not reach, or one let go (a volley from the kitchen)
+    this.endPoint(hitter.team, this.whyUnplayed(hitter), null, t);
+  }
+
+  /** why a ball in was not returned: a clean winner, one someone went for and did not reach, or one let go */
+  private whyUnplayed(hitter: Player): PointReason {
     const recv = this.players.filter((q) => q.team !== hitter.team);
-    const reason: PointReason = recv.some((q) => this.letGo[q.id]) ? 'letGo' : recv.some((q) => this.chased[q.id] || (q.plan && !q.plan.reach)) ? 'miss' : 'winner';
-    this.endPoint(hitter.team, reason, null, t);
+    return recv.some((q) => this.letGo[q.id]) ? 'letGo' : recv.some((q) => this.chased[q.id] || (q.plan && !q.plan.reach)) ? 'miss' : 'winner';
+  }
+
+  /** What the ball meets at a wall hit (glass, mesh, or nothing: over the top). */
+  surfaceOf(s: Seg, hit: WallHit): Surface {
+    const p = posAt(s, hit.t, this.pv2);
+    return hit.axis === 'x' ? sideSurface(Math.abs(p.z), p.y) : backSurface(p.y);
+  }
+
+  private onWall(t: number) {
+    const r = this.rally!;
+    const hit = r.wall!;
+    const hitter = r.last!;
+    const recvSide = -hitter.side as Side;
+    const p = posAt(r.seg, t);
+    const v = velAt(r.seg, t);
+    const surface = this.surfaceOf(r.seg, hit);
+    // the half of the court the wall is in
+    const wz = hit.axis === 'z' ? hit.sign * HL : p.z;
+    const theirs = wz * recvSide > 0;
+    if (surface === 'open') {
+      // over the top: out of the court. After bouncing in, the hitter's («por 3»); before, his fault
+      r.wall = null;
+      r.tGround = Infinity;
+      r.tNet = null;
+      r.netDone = true;
+      this.deadSeg = r.seg;
+      if (r.crossed && r.bounces > 0) this.endPoint(hitter.team, 'exit', null, t);
+      else if (r.shots === 1) this.serveFault('serveOut', t);
+      else this.endPoint(this.other(hitter.team), 'out', hitter.id, t);
+      return;
+    }
+    this.events.push({ type: 'wall', x: p.x, y: p.y, z: p.z, surface, speed: Math.hypot(v.x, v.y, v.z) });
+    if (theirs && r.bounces === 0) {
+      // straight into their wall without bouncing first: the hitter's fault
+      this.setSeg(r, wallBounce(r.seg, hit, surface));
+      this.deadSeg = r.seg;
+      if (r.shots === 1) this.serveFault('serveOut', t);
+      else this.endPoint(this.other(hitter.team), 'wall', hitter.id, t);
+      return;
+    }
+    if (theirs && r.shots === 1 && surface === 'mesh') {
+      // the serve, after bouncing in, into the mesh: a fault
+      this.setSeg(r, wallBounce(r.seg, hit, surface));
+      this.deadSeg = r.seg;
+      this.serveFault('serveFence', t);
+      return;
+    }
+    // off the glass (or the mesh): still live. The plans already counted on it (Match.path follows the walls, and
+    // the mesh is deterministic), so nobody has to read the ball again.
+    this.setSeg(r, wallBounce(r.seg, hit, surface));
+    r.walls++;
+  }
+
+  /** A serve fault: a second serve after the first, the point after the second. */
+  private serveFault(fault: ServeFault, t: number) {
+    const srv = this.server();
+    if (this.serveNum === 1) {
+      this.events.push({ type: 'fault', pid: srv.id, fault, second: true });
+      this.serveNum = 2;
+      this.pause(t, 'fault');
+      return;
+    }
+    this.events.push({ type: 'fault', pid: srv.id, fault, second: false });
+    this.endPoint(this.other(srv.team), 'doubleFault', srv.id, t);
+  }
+
+  /** A let: the same serve again. */
+  private let(t: number) {
+    this.events.push({ type: 'let', pid: this.server().id });
+    this.pause(t, 'let');
+  }
+
+  /** The ball is dead without a point (a fault on the first serve, a let): a short pause and the serve again. */
+  private pause(t: number, why: 'fault' | 'let') {
+    this.t = t;
+    for (const p of this.players) p.plan = null;
+    this.targets.length = 0;
+    this.locks.length = 0;
+    this.reserve = why;
+    this.phase = 'dead';
+    this.pointAt = t;
+    this.deadUntil = t + FAULT_TIME;
   }
 
   private onContact(p: Player, t: number) {
@@ -715,39 +868,25 @@ export class Match {
     const gap = Math.hypot(p.x - plan.fx, p.z - plan.fz);
     const lunge = ctl.mover.lunge ?? 0;
     if (gap > (manual ? LUNGE + 0.05 : Math.max(REACH_TOL, 0.3 + lungeAt(lunge, t - p.moveFrom)))) {
-      // did not get there: the ball goes past (in doubles the partner may still get to it)
-      if (this.doubles && !manual) this.passOn(p, true);
+      // did not get there: the ball goes past (the partner may still get to it)
+      if (!manual) this.passOn(p, true);
       return;
     }
     if (!manual) plan.stretch = lunge > 0 ? Math.max(0, gap - 0.3) / lunge : 0;
-    // a plan worked out on a flight that has changed since (the tape): the ball is not where the paddle is
+    // a plan worked out on a flight that has changed since (the tape, a wall): the ball is not where the paddle is
     const bp = posAt(r.seg, t);
     if (Math.hypot(bp.x - plan.bx, bp.y - plan.by, bp.z - plan.bz) > 0.3) return;
     if (manual && ctl.swing && !ctl.swing(this, p, plan)) {
-      // no swing: this chance goes by (another may come after the bounce)
+      // no swing: this chance goes by (another may come after the bounce or off the glass)
       this.declined = t;
-      if (plan.oops) this.letGo[p.id] = true;
       return;
     }
     const volley = r.bounces === 0;
-    // the two-bounce rule: the return and the third shot must bounce first
-    if (volley && r.shots < 3) {
-      this.endPoint(p.team === 0 ? 1 : 0, 'twoBounce', p.id, t);
+    // the return of serve must bounce
+    if (volley && r.shots === 1) {
+      this.deadSeg = r.seg;
+      this.endPoint(this.other(p.team), 'twoBounce', p.id, t);
       return;
-    }
-    if (volley && inKitchen(p.z, p.side)) {
-      if (plan.oops) {
-        this.deadSeg = r.seg;
-        this.endPoint(p.team === 0 ? 1 : 0, 'kitchen', p.id, t);
-        return;
-      }
-      // a legal plan: the last step takes the feet behind the line
-      if (!manual) p.z = plan.fz;
-      else {
-        this.deadSeg = r.seg;
-        this.endPoint(p.team === 0 ? 1 : 0, 'kitchen', p.id, t);
-        return;
-      }
     }
     const spec = this.controllers[p.id].hit(this, p, plan);
     p.lastHit = { t, kind: spec.kind, hand: plan.hand, overhead: plan.overhead, timing: spec.timing };
@@ -782,7 +921,7 @@ export class Match {
     const u = this.rng.next();
     let clear = spec.clear;
     if (soft) {
-      // a poor soft shot mostly floats up and carries past the kitchen (a ball the other side can volley and
+      // a poor soft shot mostly floats up and carries long (a ball the other side can volley and
       // attack); only a really poor one, or one scooped off the floor, dies in the tape. A poor block of a hard ball
       // sends its pace back: it flies up and long. The automatic reset is aimed deep and high already: a poor one
       // sits up rather than carrying further.
@@ -803,7 +942,7 @@ export class Match {
       // a hard swing gone wrong: off a low ball it mostly sails, off a high one it may be hit down into the net
       const low = from.y < 0.6;
       // a drive hit up from below the tape close to the net: gone wrong, it sits up for the volleyer
-      const up = spec.kind === 'drive' && from.y < NET_C && Math.abs(from.z) < 3.6;
+      const up = spec.kind === 'drive' && from.y < NET_C && Math.abs(from.z) < AT_NET;
       if (this.rng.chance(low ? 0.72 : 0.62)) {
         clear += bad * u * 0.5 + (up ? bad * (0.2 + u * 0.8) : 0);
         tz += recvSide * bad * (0.3 + u) * 1.5;
@@ -833,18 +972,21 @@ export class Match {
     const s = seg(t, from, shot.v, spin, shot.k, shot.g);
     const isServe = p.lastHit === null && this.rally === null;
     const serveHalf = (-this.serveX(p.team)) as 1 | -1;
-    const r: Rally = this.rally ?? { shots: 0, last: null, bounces: 0, seg: s, tNet: null, netDone: false, tGround: 0, serveHalf };
+    const r: Rally = this.rally ?? { shots: 0, last: null, bounces: 0, seg: s, tNet: null, netDone: false, tGround: 0, wall: null, crossed: false, walls: 0, tape: false, serveHalf };
     this.declined = -1;
     this.chased.length = 0;
     this.letGo.length = 0;
     this.locks.length = 0;
+    this.pathCache = null;
     r.shots++;
     r.last = p;
     r.bounces = 0;
-    r.seg = s;
-    r.tNet = netTime(s);
-    r.netDone = r.tNet === null;
-    r.tGround = groundTime(s);
+    r.walls = 0;
+    r.tape = false;
+    this.setSeg(r, s);
+    // hit from the far side of the net's plane (a ball played back from over the net is not possible here, but a
+    // contact right on it is): it has crossed when it starts on the other side
+    r.crossed = from.z * p.side < 0;
     this.rally = r;
     if (isServe) {
       p.lastHit = { t, kind: 'serve', hand: 1, overhead: false, timing: spec.timing };
@@ -875,60 +1017,42 @@ export class Match {
     this.planReceivers();
   }
 
-  /** The hitter's next position: back, in transition or up at the kitchen line. */
+  /**
+   * Where the hitter's team goes after his shot (padel habits; the two move as one, both up or both back):
+   *  · the server comes in to the net behind his serve (his partner is there already);
+   *  · a lob that goes over them, or a chiquita at their feet, is the moment to take the net;
+   *  · up at the net they stay up after a volley or an overhead;
+   *  · from the back, a drive keeps them back.
+   * The receiving team's depth follows the ball coming at them (cover: a lob over them sends both back).
+   */
   private afterHit(p: Player, spec: ShotSpec) {
     const r = this.rally!;
     const mv = this.controllers[p.id].mover;
-    // singles: a CPU player decides it (come in or stay back, and where to wait across: Controller.place)
-    const pl = this.doubles ? null : this.controllers[p.id].place?.(this, p, spec) ?? null;
-    this.placed[p.id] = !!pl;
-    if (pl) {
-      p.depth = pl.depth;
-      p.homeZ = p.side * [HL + 0.3, 4.3, NVZ + 0.3][pl.depth];
-      p.homeX = pl.x;
-      return;
-    }
-    // the server waits for the return to bounce; the returner moves up behind the return
-    if (r.shots === 1) p.depth = 0;
-    else if (r.shots === 2) p.depth = this.rng.chance(mv.netRush) ? 2 : 0;
-    else if (spec.kind === 'lob') p.depth = Math.min(p.depth, 1) as 0 | 1;
-    else if (spec.kind === 'dink' || spec.kind === 'drop') p.depth = this.rng.chance(mv.netRush) ? 2 : 1;
-    else if (p.depth < 2) p.depth = this.rng.chance(mv.netRush * 0.8) ? (p.depth + 1) as 1 | 2 : p.depth;
-    const zs = [HL + 0.3, 4.3, NVZ + 0.3][p.depth];
-    p.homeZ = p.side * zs;
-    p.homeX = Math.max(-1.8, Math.min(1.8, spec.tx * 0.35));
-    if (this.doubles) {
-      // the partner moves with the hitter: both back for the serve, then up and back together
-      const q = this.mate(p);
-      if (!this.controllers[q.id].steer) {
-        if (r.shots === 1) q.depth = 0;
-        else if (r.shots >= 3) q.depth = p.depth;
-      } else if (r.shots >= 3) q.homeZ = q.side * [HL + 0.3, 4.3, NVZ + 0.3][p.depth]; // where the bot's thumbs go
-      // whoever crossed into the partner's half (a lob, a poach) keeps it: they switch halves
-      if ((p.x - q.x) * p.lane < -0.6) {
-        p.lane = -p.lane as 1 | -1;
-        q.lane = -q.lane as 1 | -1;
-      }
+    this.placed[p.id] = false;
+    const atNet = Math.abs(p.z) < AT_NET;
+    const k = spec.kind;
+    if (r.shots === 1) p.depth = this.rng.chance(0.4 + 0.6 * mv.netRush) ? 2 : 1;
+    else if (k === 'lob') p.depth = spec.q > 0.6 && this.rng.chance(mv.netRush) ? 2 : atNet ? 1 : 0;
+    else if (k === 'dink' || k === 'drop') p.depth = atNet || this.rng.chance(mv.netRush) ? 2 : 1;
+    else if (k === 'smash' || k === 'bandeja' || k === 'vibora' || k === 'speedup') p.depth = atNet ? 2 : Math.max(1, p.depth) as 1 | 2;
+    else if (atNet) p.depth = 2;
+    else p.depth = Math.abs(p.z) < DEPTH_Z[1] + 0.6 && this.rng.chance(mv.netRush * 0.5) ? 2 : 0;
+    p.homeZ = p.side * DEPTH_Z[p.depth];
+    p.homeX = Math.max(-2.6, Math.min(2.6, spec.tx * 0.3));
+    // the partner moves with the hitter
+    const q = this.mate(p);
+    if (!this.controllers[q.id].steer) q.depth = p.depth;
+    else q.homeZ = q.side * DEPTH_Z[p.depth]; // where the bot's thumbs go
+    // whoever crossed into the partner's half (a lob, a poach) keeps it: they switch halves
+    if ((p.x - q.x) * p.lane < -0.6) {
+      p.lane = -p.lane as 1 | -1;
+      q.lane = -q.lane as 1 | -1;
     }
   }
 
   /** After a hit, the team on the other side works out who takes the ball and where. */
   private planReceivers() {
-    if (this.doubles) return this.planDoubles();
-    const r = this.rally!;
-    const hitter = r.last!;
-    let best: { p: Player; plan: Plan; cost: number } | null = null;
-    for (const p of this.players) {
-      p.plan = null;
-      if (p.team === hitter.team || this.controllers[p.id].steer) continue;
-      const res = this.planContact(p);
-      if (res && (!best || res.cost < best.cost)) best = { p, plan: res.plan, cost: res.cost };
-    }
-    if (best) {
-      best.p.plan = best.plan;
-      best.p.moveFrom = this.t + best.p.reaction;
-      this.misread(best.p);
-    }
+    this.planDoubles();
   }
 
   /** CPU players: the real feet spot of a plan whose first read was off, put back at `at` */
@@ -990,7 +1114,7 @@ export class Match {
     // the poach (POACH): the partner up at the net steps across and volleys a ball that sits up (two CPU players)
     const q = this.mate(best.p);
     const qp = plans[q.id];
-    if (POACH.chance > 0 && r.shots > 2 && !this.controllers[best.p.id].steer && !this.controllers[q.id].steer && qp?.reach && qp.volley && Math.abs(q.z) < 3.6 && qp.by > NET_C) {
+    if (POACH.chance > 0 && r.shots > 2 && !this.controllers[best.p.id].steer && !this.controllers[q.id].steer && qp?.reach && qp.volley && Math.abs(q.z) < AT_NET && qp.by > NET_C) {
       if (this.rng.chance(POACH.chance * Math.min(1, (qp.by - NET_C) / 0.5))) best = { p: q, plan: qp, cost: best.cost };
     }
     this.owner = best.p.id;
@@ -1058,11 +1182,9 @@ export class Match {
   private stickWas: number[] = [];
   /** manual players: since when the thumb is off the stick */
   private idleSince: number[] = [];
-  /** manual players: the kitchen line is holding them back right now */
-  private lineHeld: boolean[] = [];
   /** when the last point ended */
   private pointAt = 0;
-  /** this ball: the receiver had a spot to go to (a miss if it bounces twice) / let it go (a kitchen volley) */
+  /** this ball: the receiver had a spot to go to (a miss if it bounces twice) / let it go */
   private chased: boolean[] = [];
   /** CPU players waiting on their spot (they only move again when it is more than FEET.idle away) */
   private settled: boolean[] = [];
@@ -1070,11 +1192,65 @@ export class Match {
   private placed: boolean[] = [];
   private letGo: boolean[] = [];
 
-  /** Where the ball of the rally will be at time t (through the coming bounce). */
-  private ballAt(t: number): Vec3 {
+  /** the path worked out for the rally's current stretch (Match.path) */
+  private pathCache: { seg: Seg; legs: Leg[] } | null = null;
+
+  /**
+   * The coming path of the ball: the stretches of flight from now, through the floor and the walls, until the second
+   * bounce on the floor since the hit or the ball leaving the court over a wall. A wall on the receiving side before the
+   * first bounce ends it (a fault: nothing to play after it), and so does the mesh after the serve's bounce. The mesh
+   * bounce is deterministic, so this is exactly where the ball will go (the net tape is not foreseen: the rally plans
+   * again when the ball clips it).
+   */
+  path(): Leg[] {
     const r = this.rally!;
-    if (r.bounces === 0 && t > r.tGround) return posAt(bounce(r.seg, r.tGround), t);
-    return posAt(r.seg, t);
+    if (this.pathCache && this.pathCache.seg === r.seg) return this.pathCache.legs;
+    const legs: Leg[] = [];
+    const recvSide = -r.last!.side;
+    let s = r.seg;
+    let floor = r.bounces;
+    for (let i = 0; i < 12; i++) {
+      const ev = nextEvent(s, s.t0 + 8);
+      if (!ev) {
+        legs.push({ s, t0: s.t0, t1: s.t0 + 8, floor });
+        break;
+      }
+      legs.push({ s, t0: s.t0, t1: ev.t, floor });
+      if (ev.kind === 'floor') {
+        floor++;
+        if (floor >= 2) break;
+        s = bounce(s, ev.t);
+        continue;
+      }
+      const surface = this.surfaceOf(s, ev.hit);
+      if (surface === 'open') break;
+      const p = posAt(s, ev.t, this.pv2);
+      const wz = ev.hit.axis === 'z' ? ev.hit.sign * HL : p.z;
+      const theirs = wz * recvSide > 0;
+      if (theirs && floor === 0) break;
+      if (theirs && r.shots === 1 && surface === 'mesh') break;
+      s = wallBounce(s, ev.hit, surface);
+    }
+    this.pathCache = { seg: r.seg, legs };
+    return legs;
+  }
+
+  /** Where the ball of the rally will be at time t (along its path, walls included). */
+  private ballAt(t: number): Vec3 {
+    const legs = this.path();
+    for (const l of legs) if (t <= l.t1) return posAt(l.s, Math.max(l.t0, t));
+    const l = legs[legs.length - 1];
+    return posAt(l.s, l.t1);
+  }
+
+  /** Where the coming ball first bounces on the floor (or where it is now if it already has), for positioning. */
+  firstBounce(out: Vec3 = { x: 0, y: 0, z: 0 }): Vec3 {
+    const r = this.rally!;
+    if (r.bounces > 0) return posAt(r.seg, this.t, out);
+    const legs = this.path();
+    const i = legs.findIndex((l) => l.floor >= 1);
+    if (i < 0) return posAt(legs[0].s, legs[0].t1, out);
+    return posAt(legs[i].s, legs[i].t0, out);
   }
   targetFor(pid: number): Plan | null {
     return this.targets[pid] ?? null;
@@ -1097,10 +1273,6 @@ export class Match {
     if (!tg || !p) return null;
     const d = Math.max(0, Math.hypot(tg.fx - p.x, tg.fz - p.z) - 0.3);
     return { slack: tg.t - this.t - d / p.speed, reach: this.reachAt(tg.t) };
-  }
-  /** For the HUD: the kitchen line is holding the player back right now (he pushes on, the ball does not bounce in). */
-  lineHold(pid: number): boolean {
-    return !!this.lineHeld[pid];
   }
   /**
    * The human taps during the pause after a point: the next serve is set up sooner (never before MIN_DEAD has gone by,
@@ -1233,7 +1405,7 @@ export class Match {
       if (tg) {
         const d = Math.hypot(p.x - tg.fx, p.z - tg.fz);
         if (d <= this.reachAt(tg.t)) {
-          p.plan = { ...tg, fx: p.x, fz: p.z, stretch: d / LUNGE, oops: tg.volley && inKitchen(p.z, p.side) };
+          p.plan = { ...tg, fx: p.x, fz: p.z, stretch: d / LUNGE, oops: false };
           continue;
         }
       }
@@ -1245,32 +1417,35 @@ export class Match {
   /**
    * Earliest good, legal and reachable moment for `p` to hit the ball now in the air.
    * `fromHere`: manual players, from where they stand (a lunge away at most).
-   * `suggest`: the spot the game suggests to a manual player (no dice: in-balls only, never a kitchen volley).
+   * `suggest`: the spot the game suggests to a manual player (no dice: balls in only).
    * `stretch`: the suggested spot only has to be within a stretch (SUGGEST: the circle for this ball has shown).
+   * The ball can be met before it bounces (a volley; never the return of serve), after the bounce, or after it comes
+   * back off the glass (Match.path), but not right against a wall (WALL_GAP).
    */
   planContact(p: Player, fromHere = false, suggest = false, stretch = false): { plan: Plan; cost: number } | null {
     const r = this.rally!;
     const mv = this.controllers[p.id].mover;
-    // already bounced (manual players re-plan every step): only the stretch before the second bounce is left
-    const after = r.bounces === 1;
-    const s1 = r.seg;
-    const tg1 = after ? s1.t0 : r.tGround;
-    const g1 = posAt(s1, tg1);
+    const legs = this.path();
     // would it go into the net? Then there is nothing to play.
-    if (!after && r.tNet !== null && !r.netDone) {
-      const pn = posAt(s1, r.tNet);
+    if (r.bounces === 0 && !r.crossed && r.tNet !== null && !r.netDone) {
+      const pn = posAt(r.seg, r.tNet);
       if (pn.y < netHeight(pn.x) + R) return null;
     }
-    const firstIn = after || (r.shots === 1 ? inServiceCourt(g1.x, g1.z, p.side, r.serveHalf) : inHalf(g1.x, g1.z, p.side));
+    // the first bounce on the floor: is it in? (a ball going straight into the glass or out of the court is not)
+    const after = r.bounces >= 1;
+    const iFirst = legs.findIndex((l) => l.floor >= 1);
+    let firstIn = after;
+    if (!after && iFirst >= 0) {
+      const g1 = posAt(legs[iFirst].s, legs[iFirst].t0, this.pv2);
+      firstIn = r.shots === 1 ? inServiceCourt(g1.x, g1.z, p.side, r.serveHalf) : inHalf(g1.x, g1.z, p.side);
+    }
     // a manual player decides for themselves whether a ball is going out (by not swinging)
     const playOut = !firstIn && !suggest && (fromHere || this.rng.chance(mv.misjudge));
     if (!firstIn && !playOut) return null; // let it go
-    const s2 = after ? s1 : bounce(s1, tg1);
-    const tg2 = after ? r.tGround : groundTime(s2);
-    const mustBounce = r.shots < 3;
+    const mustBounce = r.shots === 1;
     const start = fromHere || suggest ? Math.max(this.t + 1 / 240, this.declined + 1 / 60) : this.t + p.reaction;
-    const end = firstIn ? tg2 : tg1;
-    const kitchenOops = !suggest && (fromHere || this.rng.chance(mv.kitchenFault));
+    // in: until the second bounce (the end of the path); going out: only before it bounces (or hits the glass)
+    const end = firstIn ? legs[legs.length - 1].t1 : iFirst >= 0 ? legs[iFirst].t0 : legs[0].t1;
     // the suggested spot: what is left of the time a person needs to see the ball and push the stick (SUGGEST)
     const seeLeft = suggest ? Math.max(0, SUGGEST.see - (this.t - (r.last?.lastHit?.t ?? this.t))) : 0;
     let best: { plan: Plan; cost: number } | null = null;
@@ -1288,28 +1463,35 @@ export class Match {
       const B = FEET.brakeMax;
       if (v > 0.05) {
         const tb = Math.min(p.reaction, v / B);
-        const s = v * tb - 0.5 * B * tb * tb;
-        ox += (p.vx / v) * s;
-        oz += (p.vz / v) * s;
+        const sd = v * tb - 0.5 * B * tb * tb;
+        ox += (p.vx / v) * sd;
+        oz += (p.vz / v) * sd;
         rvx = (p.vx / v) * (v - B * tb);
         rvz = (p.vz / v) * (v - B * tb);
       }
     }
+    let li = 0;
     for (let t = start; t < end; t += 1 / 60) {
-      const bounced = t > tg1;
+      while (li < legs.length - 1 && t > legs[li].t1) li++;
+      const leg = legs[li];
+      const bounced = leg.floor >= 1;
       if (mustBounce && !bounced) continue;
       if (!bounced && playOut === false && !firstIn) continue;
-      posAt(bounced ? s2 : s1, t, bp);
-      if (bp.z * p.side < 0.35) continue; // still on the other side of the net
-      if (bp.y < 0.14 || bp.y > 2.75) continue;
+      posAt(leg.s, t, bp);
+      if (bp.z * p.side < 0.35) continue; // still (or again) on the other side of the net
+      // right against the glass there is no room for the swing
+      if (Math.abs(bp.x) > W / 2 - WALL_GAP.side || Math.abs(bp.z) > HL - WALL_GAP.back) continue;
+      if (bp.y < 0.14 || bp.y > 2.9) continue;
       const overhead = bp.y > 1.75;
+      // (walls met since the hit, for the cost: a ball off the glass is slower and easier to read)
+      const offGlass = li > 0 && legs.slice(1, li + 1).some((l, k) => legs[k].floor === l.floor);
       for (const hand of [1, -1] as const) {
         // forehand: the ball on the player's right (+x for the near side, −x for the far side)
         const fx = bp.x - p.side * hand * 0.55;
-        const fz = bp.z + p.side * (overhead ? 0.35 : 0.2);
+        if (Math.abs(fx) > AREA_X) continue;
+        const fz = p.side * Math.min(AREA_Z, bp.z * p.side + (overhead ? 0.35 : 0.2));
         if (fz * p.side < 0.3) continue;
         const volley = !bounced;
-        if (volley && (fromHere ? p.z : fz) * p.side < NVZ + 0.18 && !kitchenOops) continue;
         const dist = Math.hypot(fx - ox, fz - oz);
         // CPU players reach the last bit with a lunge
         const lg = fromHere || suggest ? 0 : lungeAt(mv.lunge ?? 0, t - start);
@@ -1331,14 +1513,15 @@ export class Match {
         // from here: the feet stay where they are (the lunge does the rest)
         const ffx = fromHere ? p.x : fx;
         const ffz = fromHere ? p.z : fz;
-        const plan: Plan = { t, bx: bp.x, by: bp.y, bz: bp.z, fx: ffx, fz: ffz, volley, overhead, hand, reach: need <= avail, oops: volley && inKitchen(ffz, p.side), stretch: fromHere ? dist / LUNGE : 0, out: volley && !firstIn };
+        const plan: Plan = { t, bx: bp.x, by: bp.y, bz: bp.z, fx: ffx, fz: ffz, volley, overhead, hand, reach: need <= avail, oops: false, stretch: fromHere ? dist / LUNGE : 0, out: volley && !firstIn };
         if (need <= avail) {
-          let cost = Math.abs(bp.y - 0.85) * 1.2 + (bp.y < 0.35 ? 1.4 : 0) + (hand === -1 ? 0.18 : 0) + (t - this.t) * 0.25;
-          // up at the kitchen line, take it out of the air (it robs the opponent of time) and as high as it comes:
-          // a ball above the net can be attacked
-          if (volley && p.depth === 2) cost -= 0.4 + Math.max(0, bp.y - 0.85) * 1.6;
+          let cost = Math.abs(bp.y - 0.95) * 1.2 + (bp.y < 0.35 ? 1.4 : 0) + (hand === -1 ? 0.18 : 0) + (t - this.t) * 0.25;
+          // up at the net, take it out of the air (it robs the other side of time) and as high as it comes
+          if (volley && Math.abs(fz) < AT_NET) cost -= 0.4 + Math.max(0, bp.y - 0.95) * 1.2;
+          // at the back, a ball that comes off the glass is the easy one (slower, at a comfortable height)
+          if (offGlass && !volley) cost -= 0.15;
           // from here: prefer the comfortable side of the body and the nearest point
-          if (fromHere) cost = Math.abs(bp.y - 0.9) * 0.8 + (bp.y < 0.3 ? 1 : 0) + dist * 0.6 + (hand === -1 ? 0.1 : 0) + (t - this.t) * 0.6;
+          if (fromHere) cost = Math.abs(bp.y - 0.95) * 0.8 + (bp.y < 0.3 ? 1 : 0) + dist * 0.6 + (hand === -1 ? 0.1 : 0) + (t - this.t) * 0.6;
           if (overhead) cost -= 0.2;
           cost += tight * SUGGEST.tight;
           if (!best || cost < best.cost) best = { plan, cost };
@@ -1355,60 +1538,47 @@ export class Match {
 
   // ------------------------------------------------------------------ movement
   /**
-   * Doubles: where a player waits while the partner plays the ball or the other side has it. Side by side, each in
-   * their half, the pair shifted towards where the ball is going. Depth: the two-bounce rule keeps the serving team
-   * back until its third shot and the receiver back until the return (the receiver's partner waits at the kitchen line);
-   * after that a CPU pair moves as one (afterHit), and a CPU partner of the human goes up and back with him.
-   * Manual players only get the lateral spot (the bot's thumbs use it); they choose their depth themselves.
+   * Where a player waits while the partner plays the ball or the other side has it. Side by side, each in their half,
+   * the pair shifted towards where the ball is going. Depth (CPU players): the team moves as one (afterHit); while the
+   * serve is on its way the receiver waits back and his partner around the service line; a ball that is going to bounce
+   * deep behind a pair at the net (a lob over them) sends both back. A CPU partner of the human goes up and back with
+   * him. Manual players only get the lateral spot (the bot's thumbs use it); they choose their depth themselves.
    */
   private cover(p: Player): { x: number; z: number } {
     const r = this.rally!;
     const q = this.mate(p);
     const manual = !!this.controllers[p.id].steer;
     const nextToHuman = !!this.controllers[q.id].steer;
+    const g = this.firstBounce(this.pv2);
     if (!manual) {
-      const serving = p.team === this.serverTeam;
-      if (serving && r.shots < 3) p.depth = 0;
-      else if (!serving && r.shots < 2) p.depth = p.id === this.receiverId ? 0 : 2;
+      const coming = r.last && r.last.team !== p.team;
+      if (r.shots === 1 && coming) p.depth = p.id === this.receiverId ? 0 : 1;
+      else if (coming && r.bounces === 0 && g.z * p.side > DEPTH_Z[1] - 0.3 && (r.last!.lastHit?.kind === 'lob' || r.seg.y > 3)) p.depth = 0;
       else if (nextToHuman) p.depth = q.depth;
     }
-    const g = posAt(r.seg, r.tGround, this.pv2).x;
-    const c = Math.max(-1, Math.min(1, g * 0.45));
-    const half = [1.5, 1.45, 1.3][p.depth];
+    const c = Math.max(-1.6, Math.min(1.6, g.x * 0.4));
+    const half = [2.2, 2.1, 2.0][p.depth];
     let x = c + p.lane * half;
     // next to the human: keep the gap from where he really is
-    if (nextToHuman && (x - q.x) * p.lane < 2 * half - 0.4) x = q.x + p.lane * (2 * half - 0.4);
-    x = Math.max(-W / 2 + 0.2, Math.min(W / 2 - 0.2, x));
-    const z = manual ? p.homeZ : p.side * [HL + 0.3, 4.3, NVZ + 0.3][p.depth];
+    if (nextToHuman && (x - q.x) * p.lane < 2 * half - 0.6) x = q.x + p.lane * (2 * half - 0.6);
+    x = Math.max(-W / 2 + 0.5, Math.min(W / 2 - 0.5, x));
+    const z = manual ? p.homeZ : p.side * DEPTH_Z[p.depth];
     return { x, z };
   }
 
   /**
    * Manual players who asked for it (Controller.recover): where to jog back to while their side's shot is on its way.
-   * Good habits: the serving side waits back for the return to bounce; after the return, or a soft shot, up to the
-   * kitchen line; after a drive, a step further in (back → transition → line); after a lob, stay. Across: the middle
-   * of the angles the reply can take (homeX: singles, from the target of his shot; doubles, his half).
+   * Padel habits: the server comes in to the net; after a volley or an overhead, stay up; after a lob or a chiquita
+   * from the back, in to the net behind it; after a drive from the back, stay back. Across: his half.
    */
   recoverSpot(p: Player): { x: number; z: number } {
     const r = this.rally!;
     const za = Math.abs(p.z);
     const kind = r.last?.lastHit?.kind ?? 'serve';
     let z: number;
-    if (p.team === this.serverTeam && r.shots < 3) z = HL + 0.3;
-    else if (kind === 'lob') z = Math.max(za, NVZ + 0.3);
-    else if (r.shots === 2 || kind === 'dink' || kind === 'drop' || (kind === 'auto' && za < 4.6)) z = NVZ + 0.3;
-    else z = za > 5.4 ? 4.3 : NVZ + 0.3;
-    // (never into the kitchen)
-    z = Math.max(NVZ + 0.3, Math.min(HL + 0.3, z));
-    return { x: Math.max(-2.2, Math.min(2.2, p.homeX)), z: p.side * z };
-  }
-
-  /** The ball coming to `p`'s side bounces (or has bounced) in their kitchen: a reason to step in. */
-  private kitchenBall(p: Player): boolean {
-    const r = this.rally;
-    if (this.phase !== 'rally' || !r?.last || r.last.team === p.team) return false;
-    const g = r.bounces === 0 ? posAt(r.seg, r.tGround, this.pv2) : posAt(r.seg, r.seg.t0, this.pv2);
-    return inKitchen(g.z, p.side) && Math.abs(g.x) <= W / 2 + 0.3;
+    if (kind === 'serve' || kind === 'lob' || kind === 'dink' || kind === 'drop' || za < AT_NET) z = DEPTH_Z[2];
+    else z = za < DEPTH_Z[1] ? DEPTH_Z[1] : DEPTH_Z[0];
+    return { x: Math.max(-3.2, Math.min(3.2, p.homeX)), z: p.side * z };
   }
 
   /** Doubles: a player who ends up clearly on the partner's side of the partner takes that half (they switch). */
@@ -1493,22 +1663,6 @@ export class Match {
         }
         let wx = ux * want;
         let wz = uz * want;
-        // The kitchen line stops a player running up to the net (with any help): the feet stay just behind it, so a
-        // volley is never a fault by accident. The only reason to go in is a ball that bounces in there: then the line
-        // lets him through (and the assist takes him to a spot in there). Moving along the line or back is free.
-        const za = p.z * p.side;
-        const toSpotIn = !!lock && !!tg && tg.fz * p.side < LINE_STOP;
-        const brake = as > 0 && za >= LINE_STOP - 0.02 && !toSpotIn && !this.kitchenBall(p);
-        const atLine = za <= LINE_STOP + 0.02;
-        this.lineHeld[p.id] = false;
-        if (brake) {
-          // (eases into the line: the speed towards the net is what still stops in the room left)
-          const cap = Math.sqrt(2 * HUMAN_FEET.park * Math.max(0, za - LINE_STOP));
-          if (-wz * p.side > cap) {
-            wz = -p.side * cap;
-            if (atLine && k >= 0.2) this.lineHeld[p.id] = true;
-          }
-        }
         // Human feet (HUMAN_FEET): a quick first step that eases into top speed, a planted stop, grip in the turns.
         // Around the contacts: braking into his own (assisted swing), the swing finished before running off, and a
         // split step when the other side hits, which pays off: the first step after it is the quicker one. The thumb's
@@ -1537,10 +1691,6 @@ export class Match {
         footStep(p, wx, wz, h, p.speed, HUMAN_FEET, upCap, upMul);
         p.x += p.vx * h;
         p.z += p.vz * h;
-        if (brake && p.z * p.side < LINE_STOP) {
-          p.z = p.side * LINE_STOP;
-          if (p.vz * p.side < 0) p.vz = 0;
-        }
         if (p.z * p.side < 0.4) {
           p.z = p.side * 0.4;
           p.vz = 0;
@@ -1554,9 +1704,9 @@ export class Match {
           p.z = Math.sign(p.z) * AREA_Z;
           p.vz = 0;
         }
-        // the depth the rest of the code reads (kitchen line, transition, back)
+        // the depth the rest of the code reads (at the net, halfway, back)
         const d = Math.abs(p.z);
-        p.depth = d < 3.4 ? 2 : d < 5.4 ? 1 : 0;
+        p.depth = d < AT_NET ? 2 : d < DEPTH_Z[1] + 1.2 ? 1 : 0;
         continue;
       }
       // CPU players (see FEET): where they head, and how fast they want to be going there
@@ -1591,10 +1741,6 @@ export class Match {
           const c = this.cover(p);
           tx = c.x;
           tz = c.z;
-        } else if (ball && r?.last && r.last.team === p.team && !this.placed[p.id]) {
-          // waiting for the reply: shade towards where the ball is (a placed player already waits where the reply's
-          // angles say)
-          tx = Math.max(-2.2, Math.min(2.2, p.homeX * 0.5 + ball.x * 0.45));
         }
         // back to the spot: briskly over a few metres, a step or two for a small correction, nothing for centimetres
         const d0 = Math.hypot(tx - p.x, tz - p.z);
@@ -1625,9 +1771,17 @@ export class Match {
       footStep(p, wx, wz, h, p.speed);
       p.x += p.vx * h;
       p.z += p.vz * h;
-      // never past the net
+      // never past the net, nor through the glass
       if (p.z * p.side < 0.4) {
         p.z = p.side * 0.4;
+        p.vz = 0;
+      }
+      if (Math.abs(p.x) > AREA_X) {
+        p.x = Math.sign(p.x) * AREA_X;
+        p.vx = 0;
+      }
+      if (Math.abs(p.z) > AREA_Z) {
+        p.z = Math.sign(p.z) * AREA_Z;
         p.vz = 0;
       }
     }
@@ -1635,80 +1789,78 @@ export class Match {
 
   // ------------------------------------------------------------------ points
   private endPoint(winner: 0 | 1, reason: PointReason, fault: number | null, t: number) {
-    const r = this.rally!;
+    const r = this.rally;
     this.t = t;
     for (const p of this.players) p.plan = null;
     this.targets.length = 0;
     this.locks.length = 0;
     this.stats.rallies++;
-    this.stats.longest = Math.max(this.stats.longest, r.shots);
+    this.stats.longest = Math.max(this.stats.longest, r?.shots ?? 0);
     if (fault !== null) {
       this.stats.errors[this.players[fault].team]++;
       this.stats.errorsBy[fault]++;
     } else this.stats.winners[winner]++;
-    let sideOut = false;
-    let handOver = false;
-    let withheld = false;
-    if (this.doubles) {
-      const res = this.rotate(winner);
-      sideOut = res.sideOut;
-      handOver = res.handOver;
-      withheld = res.withheld;
-    } else if (this.rules.scoring === 'rally') {
-      this.score[winner]++;
-      sideOut = winner !== this.serverTeam;
-      this.serverTeam = winner;
-    } else if (winner === this.serverTeam) this.score[winner]++;
-    else {
-      sideOut = true;
-      this.serverTeam = winner;
-    }
-    const feet = reason === 'kitchen' && fault !== null ? { feet: { x: this.players[fault].x, z: this.players[fault].z } } : {};
-    this.events.push({ type: 'point', winner, reason, fault, rally: r.shots, sideOut, ...(handOver ? { handOver } : {}), ...(withheld ? { withheld } : {}), ...feet });
-    const [a, b] = this.score;
-    if ((a >= this.rules.to || b >= this.rules.to) && Math.abs(a - b) >= 2) {
-      this.winner = a > b ? 0 : 1;
-      this.phase = 'over';
-      this.events.push({ type: 'over', winner: this.winner });
-      return;
-    }
+    this.events.push({ type: 'point', winner, reason, fault, rally: r?.shots ?? 0 });
+    this.reserve = null;
+    this.serveNum = 1;
+    this.award(winner);
+    if (this.winner !== null) return;
     this.phase = 'dead';
     this.pointAt = t;
     this.deadUntil = t + DEAD_TIME;
   }
 
   /**
-   * Doubles serve rotation after a rally won by `winner` (USA Pickleball rules; positions follow from rightOf):
-   *  · the serving team wins: a point, and the same server serves again from the other court (they swap sides);
-   *  · side-out scoring, server 1 loses: no point, the partner serves (server 2) from where they stand;
-   *  · otherwise a side out: the other team serves, first from the right court (server 1). In rally scoring the
-   *    receiving team also gets the point, unless it would win them the game: the game can only be won serving.
+   * The point to `winner`: 15-30-40, the golden point at 40-40 (or advantages), the game and the set. The serve goes
+   * round the four players, one game each; in the tie-break the first serve is the next in turn's, then two serves each
+   * in the same order.
    */
-  private rotate(winner: 0 | 1): { sideOut: boolean; handOver: boolean; withheld: boolean } {
-    if (winner === this.serverTeam) {
-      this.score[winner]++;
-      return { sideOut: false, handOver: false, withheld: false };
+  private award(winner: 0 | 1) {
+    const lose = this.other(winner);
+    this.points[winner]++;
+    const a = this.points[winner];
+    const b = this.points[lose];
+    let won = false;
+    if (this.tiebreak) won = a >= 7 && a - b >= 2;
+    else if (this.rules.golden) won = a >= 4;
+    else won = a >= 4 && a - b >= 2;
+    if (!won) {
+      if (this.tiebreak && (a + b) % 2 === 1) this.nextServer();
+      return;
     }
-    if (this.rules.scoring === 'sideout' && this.serverNum === 1) {
-      this.serverNum = 2;
-      this.serverId = this.mate(this.server()).id;
-      return { sideOut: false, handOver: true, withheld: false };
+    this.games[winner]++;
+    const wasTie = this.tiebreak;
+    this.events.push({ type: 'game', winner, games: [this.games[0], this.games[1]], tiebreak: wasTie });
+    this.points = [0, 0];
+    const g = this.games[winner];
+    const G = this.rules.games;
+    if (wasTie || (g >= G && g - this.games[lose] >= 2)) {
+      this.winner = winner;
+      this.phase = 'over';
+      this.events.push({ type: 'over', winner });
+      return;
     }
-    let withheld = false;
-    if (this.rules.scoring === 'rally') {
-      const a = this.score[winner] + 1;
-      const b = this.score[winner === 0 ? 1 : 0];
-      if (a >= this.rules.to && a - b >= 2) withheld = true;
-      else this.score[winner] = a;
-    }
-    this.serverTeam = winner;
-    this.serverNum = 1;
-    this.serverId = this.rightOf(winner).id;
-    return { sideOut: true, handOver: false, withheld };
+    this.tiebreak = this.games[0] === G && this.games[1] === G;
+    this.nextServer();
+  }
+
+  /** The next server round the four (a new game, or every two points of the tie-break). */
+  private nextServer() {
+    this.played++;
+    this.serverId = this.order[this.played % 4];
+    this.serverTeam = this.players[this.serverId].team;
   }
 
   private deadBounces(t1: number) {
     const s = this.deadSeg!;
+    const w = wallTime(s);
+    if (w && w.t <= t1 && w.t > this.t - 1e-6 && w.t < groundTime(s)) {
+      const surface = this.surfaceOf(s, w);
+      if (surface !== 'open') {
+        this.deadSeg = wallBounce(s, w, surface);
+        return;
+      }
+    }
     const tg = groundTime(s);
     if (tg <= t1 && tg > this.t - 1e-6) {
       const v = velAt(s, tg);
@@ -1725,43 +1877,6 @@ export class Match {
   humanPlan(): { p: Player; plan: Plan } | null {
     for (const p of this.players) if (p.human && p.plan) return { p, plan: p.plan };
     return null;
-  }
-
-  /**
-   * Training (src/sim/drill.ts): player `pid` (the ball machine) puts a ball in play from `from`, as shot number
-   * `shots` of a rally (at least 2: no serve rules; 2 is a return, so the reply must bounce; from 3 on anything goes).
-   * Whatever was going on stops (a dead ball, a serve being set up). The ball is launched like any shot, so the
-   * receiver gets the suggested spot, the assist and the timing ring as in a match.
-   */
-  feed(pid: number, from: Vec3, spec: ShotSpec, shots = 4) {
-    const p = this.players[pid];
-    for (const q of this.players) q.plan = null;
-    this.deadSeg = null;
-    this.windup = null;
-    this.servePending = false;
-    this.targets.length = 0;
-    this.locks.length = 0;
-    this.phase = 'rally';
-    // (a rally already `shots − 1` shots long, the ball still at the mouth of the machine: launch counts this one)
-    this.rally = { shots: Math.max(2, shots) - 1, last: null, bounces: 0, seg: seg(this.t, from, { x: 0, y: 0, z: 0 }), tNet: null, netDone: true, tGround: Infinity, serveHalf: 1 };
-    p.lastHit = { t: this.t, kind: spec.kind, hand: 1, overhead: false, timing: spec.timing };
-    this.launch(p, from, spec, false);
-  }
-
-  /**
-   * Training: no ball in play for `sec` seconds (the players move freely), then the serve is set up as usual unless a
-   * ball is fed before. (Match.hurry would cut it short: the training does not call it between fed balls.)
-   */
-  idle(sec: number) {
-    for (const q of this.players) q.plan = null;
-    this.rally = null;
-    this.deadSeg = null;
-    this.windup = null;
-    this.targets.length = 0;
-    this.locks.length = 0;
-    this.phase = 'dead';
-    this.pointAt = this.t;
-    this.deadUntil = this.t + sec;
   }
 
   /**

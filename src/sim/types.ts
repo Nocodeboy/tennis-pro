@@ -1,6 +1,15 @@
 import type { Side } from './court';
 
-export type ShotKind = 'serve' | 'return' | 'drive' | 'dink' | 'drop' | 'lob' | 'smash' | 'speedup' | 'auto';
+/**
+ * The shots. Pickleball's names are kept where the shot is the same idea (the engine came from there):
+ *  · dink: the soft, low ball at the feet of a player at the net (padel's «chiquita»), or a soft volley dropped short;
+ *  · drop: a soft ball from the back that dies short («dejada»);
+ *  · speedup: a hard volley at the net («volea» attacking);
+ *  · bandeja: the controlled overhead that keeps the net (sliced, deep, not too fast);
+ *  · vibora: the aggressive sliced overhead, angled to the side glass;
+ *  · smash: the flat overhead («remate»), hard enough to go out of the court off the back glass («por 3»).
+ */
+export type ShotKind = 'serve' | 'return' | 'drive' | 'dink' | 'drop' | 'lob' | 'smash' | 'bandeja' | 'vibora' | 'speedup' | 'auto';
 /** how well the swing was timed (the human's release, or the AI's roll) */
 export type Timing = 'perfect' | 'good' | 'early' | 'late' | 'auto';
 
@@ -46,7 +55,7 @@ export interface Plan {
   hand: 1 | -1;
   /** false: the player cannot get there in time (runs anyway and misses) */
   reach: boolean;
-  /** a volley from inside the kitchen (an AI mistake, or a human standing there): a fault */
+  /** an illegal contact (the return of serve volleyed): a fault */
   oops: boolean;
   /** manual players: how far they reach for it (0 = right there, 1 = full lunge) */
   stretch?: number;
@@ -71,7 +80,7 @@ export interface Player {
   /** where to stand while the ball is away */
   homeX: number;
   homeZ: number;
-  /** 0 baseline · 1 transition · 2 kitchen line */
+  /** 0 back · 1 halfway · 2 at the net (court.ts, DEPTH_Z) */
   depth: 0 | 1 | 2;
   lastHit: { t: number; kind: ShotKind; hand: 1 | -1; overhead: boolean; timing: Timing } | null;
   /** looks like: index into the outfits of the view */
@@ -80,8 +89,18 @@ export interface Player {
   lane: 1 | -1;
 }
 
-/** winner: nobody had a go at it · miss: the receiver went for it and did not get there · letGo: he was there and let it go */
-export type PointReason = 'net' | 'out' | 'serveOut' | 'serveKitchen' | 'winner' | 'kitchen' | 'twoBounce' | 'miss' | 'letGo';
+/**
+ * Why a point ended.
+ *  · net: into the net · out: over the walls without bouncing in · wall: it hit the other side's wall or fence before
+ *    bouncing (a fault of the hitter) · doubleFault: two faults on the serve · twoBounce: the return of serve was
+ *    volleyed (it must bounce)
+ *  · winner: nobody had a go at it · miss: the receiver went for it and did not get there · letGo: he was there and
+ *    let it go · exit: after bouncing in it left the court over the walls («por 3») · back: after bouncing in it went
+ *    back over the net to the hitter's side («por 4»)
+ */
+export type PointReason = 'net' | 'out' | 'wall' | 'doubleFault' | 'twoBounce' | 'winner' | 'miss' | 'letGo' | 'exit' | 'back';
+/** a serve fault: out of the box, into the net, or into the fence after the bounce */
+export type ServeFault = 'serveOut' | 'serveNet' | 'serveFence';
 
 export type MatchEvent =
   | { type: 'serveSetup'; server: number }
@@ -102,18 +121,20 @@ export type MatchEvent =
   | { type: 'hit'; pid: number; kind: ShotKind; timing: Timing; q: number; x: number; y: number; z: number; speed: number; shot: number; volley: boolean; shank?: boolean; intent?: 'attack' | 'block'; clear?: number; tx?: number; tz?: number; pop?: boolean; stretch?: number; avail?: number; vin?: number }
   | { type: 'bounce'; x: number; z: number; good: boolean; first: boolean; close: boolean }
   | { type: 'net'; x: number; y: number; z: number; tape: boolean }
-  /**
-   * `handOver`: doubles, side-out scoring: server 1 lost the rally and the serve passes to the partner (server 2).
-   * `withheld`: doubles, rally scoring: the receiving team won the rally at game point: a side out but no point.
-   */
-  /** `feet`: a kitchen fault: where the faulting player's feet were at the volley (for explaining it) */
-  | { type: 'point'; winner: 0 | 1; reason: PointReason; fault: number | null; rally: number; sideOut: boolean; handOver?: boolean; withheld?: boolean; feet?: { x: number; z: number } }
+  /** the ball meets a wall: glass (it comes back), mesh (it comes back dead and a little off) */
+  | { type: 'wall'; x: number; y: number; z: number; surface: 'glass' | 'mesh'; speed: number }
+  /** a serve fault: the first one gives a second serve (`second`), the second one is the point (doubleFault) */
+  | { type: 'fault'; pid: number; fault: ServeFault; second: boolean }
+  /** the serve touched the net and bounced in the box: it is played again (same serve) */
+  | { type: 'let'; pid: number }
+  | { type: 'point'; winner: 0 | 1; reason: PointReason; fault: number | null; rally: number }
+  /** a game won: the games of each team after it (`tiebreak`: the game was the tie-break) */
+  | { type: 'game'; winner: 0 | 1; games: [number, number]; tiebreak: boolean }
   | { type: 'over'; winner: 0 | 1 };
 
-export type Scoring = 'rally' | 'sideout';
-
 export interface Rules {
-  scoring: Scoring;
-  /** points to win (by two) */
-  to: number;
+  /** games to win the set (the match is one set): 6 is a full set; a tie-break to 7 at games−games */
+  games: number;
+  /** at 40-40 the next point wins the game («punto de oro»); false: advantages */
+  golden: boolean;
 }
