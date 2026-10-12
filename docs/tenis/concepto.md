@@ -2,7 +2,7 @@
 
 *Nombre provisional:* **Tenis · Pro Tour**. Es un juego propio del estudio Nocodeboy Games, como el pádel y el pickleball. El nombre, la marca, las tiendas y la publicación los decide el estudio con sus protocolos. La marca está en `src/tour.ts`.
 
-*Estado (13 oct 2026):* **prototipo 0.1 jugable en web**, en la rama `tenis` de `Nocodeboy/padel-pro`.
+*Estado (13 oct 2026):* **prototipo 0.1 jugable en web**, en su propio repositorio, `Nocodeboy/tennis-pro`.
 
 ## El origen
 
@@ -11,7 +11,7 @@ Germán (12 oct): «aprovechar el motor que tenemos en los juegos de pádel y pi
 - **Base:** el pádel 0.6 (puntuación, sets, tie-break, físico, atributos y gráficos) más el individual del pickleball (IA de individual y pista abierta).
 - **Modalidades:** individual y dobles desde la primera versión.
 - **Superficies:** las tres (dura, tierra batida y hierba), con bote distinto.
-- **Código:** rama `tenis` en `padel-pro`. **No se fusiona nunca en `main`**, que es el pádel y se publica sola en Vercel. Si el tenis se publica, se le hace su propio repositorio desde esta rama.
+- **Código:** se empezó en la rama `tenis` de `padel-pro` (sin fusionarse nunca en su `main`, que es el pádel y se publica sola en Vercel). El 13 oct Germán creó `Nocodeboy/tennis-pro` y la rama se trasladó allí entera, como `main`.
 
 ## Cómo se hizo
 

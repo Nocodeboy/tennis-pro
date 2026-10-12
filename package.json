@@ -1,8 +1,8 @@
 {
-  "name": "padel-pro",
+  "name": "tennis-pro",
   "version": "0.1.0",
   "private": true,
-  "description": "Pádel arcade 3D (prototipo) de Nocodeboy Games, sobre el motor del estudio",
+  "description": "Tenis arcade 3D (prototipo) de Nocodeboy Games, sobre el motor del estudio",
   "scripts": {
     "build": "node build.mjs",
     "build:dev": "node build.mjs --dev",

@@ -1,11 +1,11 @@
 # Tenis 0.1 · contrato entre simulación, gráficos e interfaz
 
-Rama `tenis` de `Nocodeboy/padel-pro` (12 oct 2026). Germán: «aprovechar el motor que tenemos en los juegos de pádel y pickleball y hacer nuestro propio juego de tenis». Decidió:
+Empezado en la rama `tenis` de `Nocodeboy/padel-pro` (12 oct 2026); desde el 13 oct, en `Nocodeboy/tennis-pro`. Germán: «aprovechar el motor que tenemos en los juegos de pádel y pickleball y hacer nuestro propio juego de tenis». Decidió:
 
 - **Base:** el pádel 0.6 (puntuación, sets, tie-break, físico, atributos, gráficos) más el individual del pickleball (`Nocodeboy/Pickleball`, IA de individual y pista abierta).
 - **Modalidades:** individual y dobles desde la primera versión.
 - **Superficies:** las tres (dura, tierra batida y hierba), con bote distinto.
-- **Código:** rama `tenis` en `padel-pro`. **No se fusiona nunca en `main`**: `main` se publica sola en Vercel y es el pádel.
+- **Código:** rama `tenis` en `padel-pro`, sin fusionarse nunca en su `main` (el pádel, que se publica solo en Vercel). Trasladada a `Nocodeboy/tennis-pro` el 13 oct.
 
 Este documento es lo que comparten las tres partes mientras se rehace el juego. Si algo cambia, se cambia aquí.
 

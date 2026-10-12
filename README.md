@@ -1,10 +1,10 @@
-# Tenis · Pro Tour (prototipo, rama `tenis`)
+# Tenis · Pro Tour (prototipo)
 
 Juego de tenis en 3D para web y móvil, propio del estudio Nocodeboy Games. El nombre y la marca son provisionales: los decide el estudio y se cambian en `src/tour.ts` (y el título de la página en `build.mjs`).
 
-> **Esta rama no se fusiona en `main`.** `main` es el pádel y se publica sola en Vercel ([padel-pro-one.vercel.app](https://padel-pro-one.vercel.app)). El tenis vive en la rama `tenis`, con su propia vista previa de Vercel (con inicio de sesión). Si el tenis pasa a ser un juego publicado, se le hace su propio repositorio desde esta rama.
+> **Repositorio propio desde el 13 oct 2026.** El tenis se empezó en la rama `tenis` de `Nocodeboy/padel-pro` y se trajo aquí con toda su historia (la del pádel y la del pickleball incluidas). El pádel sigue en `padel-pro`, con su web en [padel-pro-one.vercel.app](https://padel-pro-one.vercel.app); los dos juegos evolucionan cada uno por su lado.
 
-- **Origen:** el motor del pádel 0.6 de `main` (`33e2ba3`) más lo que el pickleball sabía de individual (`Nocodeboy/Pickleball`). Las notas del pádel siguen en `docs/` y las del pickleball en `docs/pickleball/` como referencia; las del tenis, en `docs/tenis/`.
+- **Origen:** el motor del pádel 0.6 (`Nocodeboy/padel-pro@33e2ba3`) más lo que el pickleball sabía de individual (`Nocodeboy/Pickleball`). Las notas del pádel siguen en `docs/` y las del pickleball en `docs/pickleball/` como referencia; las del tenis, en `docs/tenis/`.
 - **Versión:** 0.1 (12–13 oct 2026), la primera jugable:
   - **individual** contra un cuadro de cinco rivales, de dieciseisavos a la final;
   - **dobles** con tu pareja, Marcel Granoyers, contra cuatro parejas, de octavos a la final;

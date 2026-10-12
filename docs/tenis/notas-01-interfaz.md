@@ -129,7 +129,7 @@ Al cargar, los valores que no son válidos vuelven al de por defecto, y los prog
 
 - **Siguen las notas del PES y del riesgo legal.**
 - **Página:** título «Tennis Pro Tour» y descripción de tenis.
-- **Versión: `0.1.0-tenis`.** Es una línea propia: el pádel sigue en la 0.6 en `main` y esta rama no se fusiona nunca.
+- **Versión: `0.1.0-tenis`.** Es una línea propia: el tenis tiene su propio repositorio y su numeración, aparte del pádel.
 
 ## Sonido (`audio.ts`)
 

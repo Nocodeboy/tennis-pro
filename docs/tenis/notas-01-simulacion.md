@@ -168,7 +168,7 @@ Los puntos acaban en ganador un 22 % (14 % sin que nadie la toque, 7 % sin llega
 - `tools/thumb.ts` y `tools/humans.ts`: el humano simulado de tenis. Saca plano, cortado o liftado y apunta el saque como lo haría una persona que ve el arco. Corta las bolas que se saca al límite, sube detrás de una aproximación según su `netRush` y elige sus golpes con reglas de tenis.
 - `tools/review/fuzz.ts`: individual y dobles, tres superficies, sets sueltos y al mejor de tres. Comprueba que nadie pasa la red ni las vallas y que la bola tampoco.
 - `tools/tenis/play.py`: un partido real en el navegador, con fotogramas del saque (lanzamiento, trofeo, contacto), del peloteo y de los puntos.
-- **Quitadas:** las sondas del pádel (`tools/audit/*.ts`, `tools/review/por.ts`) y su escenificación (`tools/stage*.ts`, `tools/poses.ts`). Siguen en la historia de `main`; las de render del tenis están en `tools/render/`.
+- **Quitadas:** las sondas del pádel (`tools/audit/*.ts`, `tools/review/por.ts`) y su escenificación (`tools/stage*.ts`, `tools/poses.ts`). Siguen en la historia del repositorio y en `padel-pro`; las de render del tenis están en `tools/render/`.
 
 ## Pendiente
 
