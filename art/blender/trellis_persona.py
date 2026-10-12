@@ -296,7 +296,7 @@ def tipo_color(c):
     return "otro"
 
 
-def clasificar(atlas, m, uvl, P, S):
+def clasificar(atlas, m, uvl, P, S, color_imagen=None):
     """qué es cada texel: por triángulo, con los colores de unas muestras y dónde está en el cuerpo
 
     La imagen se pide con camiseta blanca, pantalón marino y zapatillas blancas, así que el color dice casi todo; la
@@ -326,11 +326,15 @@ def clasificar(atlas, m, uvl, P, S):
         top = max(votos, key=votos.get)
         if z < 0.125:
             c = CALZADO
-        elif z > 1.47 and x < 0.16:
+        elif z > 1.47:
             # la cabeza: el pelo oscuro (castaño, negro) es lo más oscuro; el rubio queda como piel (solo cambia el brillo)
             c = PELO if float(np.mean(medias)) < 0.24 else PIEL
         elif top == "marino":
             c = PANTALON
+        elif top == "blanco" and z > 1.36 and color_imagen is not None and \
+                tipo_color(color_imagen(np.mean([P[i][0] for i in vs]), z)[0]) not in ("blanco",):
+            # (blanco en la textura de TRELLIS pero no en la imagen, a la altura del cuello: los brillos de una melena)
+            c = PELO
         elif top == "blanco":
             # (los calcetines: piel, que el pintor pinta de calcetín; y la manga nunca pasa del codo)
             c = CAMISETA if (z > 0.80 and x < 0.38) else PIEL
@@ -491,7 +495,7 @@ def cara_proyectada(atlas, m, uvl, P, imagen, me):
     pi = puntos_cara(rec_g)
     if pr is None or pi is None:
         print(f"cara: sin puntos (render {pr is not None}, imagen {pi is not None}); no se proyecta")
-        return atlas, None, np.zeros(A.shape[:2], np.float32)
+        return atlas, None, np.zeros(A.shape[:2], np.float32), None
     pi = pi / f + np.array([ua, va])
     # semejanza (Umeyama) render -> imagen
     ma, mb = pr.mean(0), pi.mean(0)
@@ -524,7 +528,7 @@ def cara_proyectada(atlas, m, uvl, P, imagen, me):
     for tri in m.loop_triangles:
         vs = [m.loops[li].vertex_index for li in tri.loops]
         Q = P[vs]
-        if Q[:, 2].min() < 1.40 or np.abs(Q[:, 0]).max() > 0.13:
+        if Q[:, 2].min() < 1.40 or np.abs(Q[:, 0]).max() > 0.20:
             continue
         nrm = cn[list(tri.loops)].mean(0)
         frente = -nrm[1] / (np.linalg.norm(nrm) + 1e-9)
@@ -568,7 +572,14 @@ def cara_proyectada(atlas, m, uvl, P, imagen, me):
         corr = (A[sel].mean(0), A[sel].std(0) + 1e-3, proy[sel].mean(0), proy[sel].std(0) + 1e-3)
     out = A * (1 - peso[..., None]) + np.clip(proy, 0, 1) * peso[..., None]
     print(f"cara proyectada: {n_tri} triángulos, {int((peso > 0).sum())} texels ({k:.0f} px/m en la imagen)")
-    return Image.fromarray((np.clip(out, 0, 1) * 255).astype(np.uint8)), corr, peso
+
+    def color_imagen(X, Z):
+        u, v = a_imagen(np.atleast_1d(X), np.atleast_1d(Z))
+        u = np.clip(u.astype(int), 0, W_ - 1)
+        v = np.clip(v.astype(int), 0, H_ - 1)
+        return I[v, u]
+
+    return Image.fromarray((np.clip(out, 0, 1) * 255).astype(np.uint8)), corr, peso, color_imagen
 
 
 def corregir_piel(atlas, cls, corr, peso, fuerza=0.8):
@@ -645,8 +656,10 @@ def exportar(J, me, P, tex_img, salida, fuente, imagen=None):
     S = 2048
     atlas = tex_img.convert("RGB").resize((S, S), Image.LANCZOS)
     if imagen:
-        atlas, corr, peso = cara_proyectada(atlas, m, uvl, P, imagen, me)
-    cls, zonas = clasificar(atlas, m, uvl, P, S)
+        atlas, corr, peso, color_imagen = cara_proyectada(atlas, m, uvl, P, imagen, me)
+    else:
+        color_imagen = None
+    cls, zonas = clasificar(atlas, m, uvl, P, S, color_imagen)
     if imagen and corr is not None:
         atlas = corregir_piel(atlas, cls, corr, peso)
     atlas = alisar(atlas, cls)

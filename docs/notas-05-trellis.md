@@ -62,7 +62,8 @@ python3 art/blender/ver_modelo.py assets/chars/ia_jugador_x.json /tmp/ver.png   
    - se renderiza la cabeza del modelo de frente;
    - MediaPipe Face Landmarker busca los 478 puntos de la cara en ese render y en la imagen;
    - la semejanza que lleva unos a otros da dónde cae cada punto del modelo en la imagen (error mediano de 1 a 3 px);
-   - cada texel de la cara toma su píxel, mezclado con el de TRELLIS según lo de frente que mire.
+   - cada texel de la cabeza que mira de frente (la cara y el pelo, hasta 0,20 m del centro) toma su píxel, mezclado con el de TRELLIS según lo de frente que mire.
+   - Con la misma correspondencia, la máscara usa el color de la imagen en el cuello: lo que en TRELLIS es blanco pero en la imagen no, es pelo (los brillos de una melena), no camiseta.
    - **El tono:** el resto de la piel de TRELLIS (brazos, piernas, cuello y orejas) se corrige al tono de la cara de la imagen.
    - **Antes de esto:** con el ajuste solo por la silueta, la cara salía doble y desplazada.
 5. **La máscara** (la de `persona.py`: piel, camiseta, pantalón, calzado y pelo), por triángulo:
@@ -103,4 +104,5 @@ python3 art/blender/ver_modelo.py assets/chars/ia_jugador_x.json /tmp/ver.png   
 - **Atribución:** al publicar, citar los vídeos de KNSU (CC BY) en los créditos.
 - **Más rivales con cuerpo propio** (Paco, Lola y Nuria). Si se quieren mujeres, el mismo método sirve.
 - **La costura del cuello de la camiseta:** se ve una línea clara entre piel y cuello en los primeros planos.
+- **La melena de Martín:** los mechones de los lados que miran de lado (no se ven en la imagen de frente) quedan con los brillos blanco-azulados de TRELLIS. La proyección cubre la cabeza de frente hasta 0,20 m del centro; los de detrás y de lado, no.
 - **Medir en un Android flojo** la carga: 4 cuerpos de unos 1,3 MB cada uno, más el de siempre.
