@@ -228,4 +228,5 @@ Germán: «Es importante que hagamos lo de los vídeos». Detalle en `notas-golp
   - la cara de la pala en la bajada queda peor (75°, antes 54°).
 - **Sonido:** los clips de KNSU están mudos; de estos vídeos no salen golpes reales. Lo que queda es grabarlos con el móvil en pista.
 - **Créditos:** en Ajustes → Créditos (KNSU, CMU, Rokoko, la IA y el sonido).
+- **Publicación:** Germán pidió poner orden: «hemos estado haciendo cambios en distintas ramas y ya no sé en qué punto está el repo». Lo que había en tres ramas se juntó en `main` (PR #2, `ae5248b`): la 0.5 de sonido y simulación y los jugadores con IA y los golpes desde vídeo. Está publicado en **[padel-pro-one.vercel.app](https://padel-pro-one.vercel.app)** (0.6.0, comprobado en la web: cargan los cuatro cuerpos con IA y no hay errores). Se borraron las tres páginas de prueba de Claude, que tenían versiones viejas. Las ramas `modelos-ia`, `v0.5` y `claude/eager-sagan-lq9ax0` ya están enteras en `main`. Desde la sesión de Claude no se pueden borrar, así que se borran en GitHub (*Branches*).
 
