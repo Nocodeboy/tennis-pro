@@ -19,6 +19,7 @@ Cuatro jugadores con cuerpo, cara y pelo propios, montados en el esqueleto del j
   - el `skin` de sus equipaciones queda en 1, salvo el tuyo, un 5–12 % más claro: de espaldas a los focos las piernas se veían casi negras;
   - el `hair` de la equipación no se aplica.
 - **Peso:** de 1,24 a 1,46 MB por cuerpo (unas 19.000 caras, textura y máscara de 1024). Se descargan en paralelo con el jugador.
+- **Memoria de vídeo:** el pintor de equipaciones suelta la textura y la máscara de cada cuerpo en cuanto pinta (unos 10 MB por cuerpo); three.js las vuelve a subir de las imágenes si hace falta otra equipación.
 - **Sin cuerpo cargado,** ese jugador usa el de siempre, con un aviso en la consola.
 - **`?rb=off` / `#rb-off`** los quita todos, para comparar.
 
@@ -62,16 +63,24 @@ python3 art/blender/ver_modelo.py assets/chars/ia_jugador_x.json /tmp/ver.png   
    - se renderiza la cabeza del modelo de frente;
    - MediaPipe Face Landmarker busca los 478 puntos de la cara en ese render y en la imagen;
    - la semejanza que lleva unos a otros da dónde cae cada punto del modelo en la imagen (error mediano de 1 a 3 px);
-   - cada texel de la cabeza que mira de frente (la cara y el pelo, hasta 0,20 m del centro) toma su píxel, mezclado con el de TRELLIS según lo de frente que mire.
-   - Con la misma correspondencia, la máscara usa el color de la imagen en el cuello: lo que en TRELLIS es blanco pero en la imagen no, es pelo (los brillos de una melena), no camiseta.
-   - **El tono:** el resto de la piel de TRELLIS (brazos, piernas, cuello y orejas) se corrige al tono de la cara de la imagen.
+   - cada texel de la cabeza que mira de frente (la cara y el pelo, hasta 0,20 m del centro) toma su píxel, mezclado con el de TRELLIS según lo de frente que mire;
+   - **también el cuello y el escote, hasta 1,33 m** (y 0,12 m del centro): el borde del cuello de TRELLIS dejaba una franja clara entre la piel y la equipación.
+   - Con la misma correspondencia, la máscara usa el color de la imagen en el cuello: lo que en TRELLIS es blanco y en la imagen es pelo (más cerca del color de su pelo que del de su cara), a los lados del cuello, es pelo (los brillos de una melena), no camiseta.
+   - **El pelo** que no se ve de frente (coronilla, nuca y lados) toma el color del pelo de la imagen, medido sobre la frente sin el fondo.
+   - **El tono:** el resto de la piel de TRELLIS (brazos, piernas, cuello y orejas) se corrige al tono de la cara de la imagen (medido solo en la cabeza) y se aclara hasta igualar su brillo.
    - **Antes de esto:** con el ajuste solo por la silueta, la cara salía doble y desplazada.
 5. **La máscara** (la de `persona.py`: piel, camiseta, pantalón, calzado y pelo), por triángulo:
    - **por el color de unas muestras:** blanco, marino, piel u oscuro (la piel morena en sombra es cálida; el pantalón, azulado);
    - **por la altura:** el blanco es camiseta por encima de 0,8 m y hasta el codo, calcetín por debajo y zapatilla bajo 0,125 m; en la cabeza, el pelo oscuro es pelo;
-   - **luego, dos pasadas por vecinos:** un triángulo cambia a la clase del 70 % de los que tocan. Quita las manchas sueltas de la camiseta.
+   - **luego, dos pasadas por vecinos:** un triángulo cambia a la clase del 70 % de los que tocan. Quita las manchas sueltas de la camiseta. El pelo no se contagia así (bajaba por la nuca hasta la camiseta).
+   - **el borde de la camiseta:** los texels blancos marcados como piel junto a ella pasan a camiseta (el cuello y las mangas, sin línea blanca).
+   - **el relleno:** una franja de 8 texels alrededor de cada isla de la textura toma la clase y el color del texel de la isla más cercano. El pintor lee la máscara a 1024 y la textura filtrada: en los bordes caía en el relleno blanco de TRELLIS y salían motas y líneas blancas en las costuras de la camiseta.
    - **`zones`:** manga a 0,29–0,31 m del centro, bajo de la camiseta a 0,86–0,89 m, del pantalón a 0,56–0,62 m y zapatilla hasta 0,13 m.
-   - **La camiseta, lisa** (`alisar` de `persona.py`), para pintar encima la equipación.
+   - **La camiseta, lisa:** sin rayas ni motas y con los pliegues a un tercio de contraste y suavizados, para pintar encima la equipación (las arrugas oscuras de TRELLIS parecían manchas).
+
+## Arreglos del 12 oct (tarde)
+
+Tras verlos en el juego: el pelo de Martín (castaño también detrás y a los lados), las motas y líneas blancas de la camiseta en las costuras, la franja clara del escote, las piernas oscuras de espaldas a los focos (tu piel, un 5–12 % más clara) y el pelo que bajaba por la nuca de Arturo. Comparado con `tools/closeups.py` en los mismos momentos (semilla 7, dobles contra la pareja 3).
 
 ## Comprobado
 
@@ -103,6 +112,7 @@ python3 art/blender/ver_modelo.py assets/chars/ia_jugador_x.json /tmp/ver.png   
   - **Conversor:** traído del pickleball 0.13 (`tools/video_pose.py`, `art/blender/video_fuente.py` y el modo `video` de `padel_clip.py`).
 - **Atribución:** al publicar, citar los vídeos de KNSU (CC BY) en los créditos.
 - **Más rivales con cuerpo propio** (Paco, Lola y Nuria). Si se quieren mujeres, el mismo método sirve.
-- **La costura del cuello de la camiseta:** se ve una línea clara entre piel y cuello en los primeros planos.
-- **La melena de Martín:** los mechones de los lados que miran de lado (no se ven en la imagen de frente) quedan con los brillos blanco-azulados de TRELLIS. La proyección cubre la cabeza de frente hasta 0,20 m del centro; los de detrás y de lado, no.
+- **La melena de Martín, de lado:** ya tiene el color de su pelo, pero los mechones que miran de lado conservan algo del dibujo de TRELLIS (brillos más claros). Solo se nota en primer plano.
+- **El escote** sigue el borde de los triángulos: a un lado del cuello se ve un pequeño escalón de cerca.
+- **Las sombras** del brazo y la pala sobre la camiseta salen con bordes duros (es el mapa de sombras del juego, no la textura).
 - **Medir en un Android flojo** la carga: 4 cuerpos de unos 1,3 MB cada uno, más el de siempre.

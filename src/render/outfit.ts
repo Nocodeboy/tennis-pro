@@ -476,6 +476,7 @@ export class KitPainter {
   private cam = new THREE.OrthographicCamera();
   private bake: THREE.ShaderMaterial;
   private src: THREE.Texture;
+  private maskTex: THREE.Texture | null = null;
   private kits = new Map<object, Entry>();
   private clock = 0;
   /**
@@ -505,7 +506,7 @@ export class KitPainter {
     const mm = own ? maskedMeans(image as HTMLImageElement, own.mask) : means(image as HTMLImageElement);
     let maskTex: THREE.Texture | null = null;
     if (own) {
-      maskTex = new THREE.Texture(own.mask);
+      maskTex = this.maskTex = new THREE.Texture(own.mask);
       maskTex.flipY = false;
       maskTex.colorSpace = THREE.NoColorSpace;
       maskTex.minFilter = maskTex.magFilter = THREE.NearestFilter;
@@ -686,6 +687,10 @@ export class KitPainter {
     r.setClearColor(prevClear, prevAlpha);
     r.autoClear = prevAuto;
     r.shadowMap.autoUpdate = prevShadow;
+    // the source and the mask are only read here: out of the GPU until the next kit (some 10 MB a body; three.js uploads
+    // them again from the images, which stay)
+    this.src.dispose();
+    this.maskTex?.dispose();
   }
 }
 

@@ -43,6 +43,9 @@ from persona import (CALZADO, CAMISETA, OTRO, PANTALON, PELO, PIEL, REPO, Jugado
 from ver_modelo import glb  # noqa: E402
 
 ALTURA = 1.70
+_ULTIMOS_TRIS = None
+_PELO_IMAGEN = None
+_PIEL_IMAGEN = None
 ATLAS = int(os.environ.get("ATLAS", "1024"))
 TRIS = int(os.environ.get("TRIS", "16000"))
 # de la muñeca a la punta de la mano en la imagen: 0,19 m con la mano abierta (la del jugador), 0,105 m con el puño
@@ -296,6 +299,17 @@ def tipo_color(c):
     return "otro"
 
 
+def pelo_en_imagen(c):
+    """si un color de la imagen es de pelo: no blanco y más cerca del pelo de la imagen que de su cara (el rubio es
+    «piel» para tipo_color; sin esos colores, lo que no es piel)"""
+    if tipo_color(c) == "blanco":
+        return False
+    if _PELO_IMAGEN is None or _PIEL_IMAGEN is None:
+        return tipo_color(c) != "piel"
+    c = np.asarray(c, np.float32)
+    return float(np.linalg.norm(c - _PELO_IMAGEN)) < float(np.linalg.norm(c - _PIEL_IMAGEN))
+
+
 def clasificar(atlas, m, uvl, P, S, color_imagen=None):
     """qué es cada texel: por triángulo, con los colores de unas muestras y dónde está en el cuerpo
 
@@ -324,16 +338,31 @@ def clasificar(atlas, m, uvl, P, S, color_imagen=None):
             t = tipo_color(col)
             votos[t] = votos.get(t, 0) + 1
         top = max(votos, key=votos.get)
+        Qn = P[vs]
+        nrm_t = np.cross(Qn[1] - Qn[0], Qn[2] - Qn[0])
+        nrm_t = nrm_t / (np.linalg.norm(nrm_t) + 1e-12)
         if z < 0.125:
             c = CALZADO
         elif z > 1.47:
-            # la cabeza: el pelo oscuro (castaño, negro) es lo más oscuro; el rubio queda como piel (solo cambia el brillo)
-            c = PELO if float(np.mean(medias)) < 0.24 else PIEL
+            # la cabeza: pelo lo oscuro, lo que mira arriba o atrás (la coronilla y la nuca, que la imagen de frente no
+            # enseña: TRELLIS los deja con brillos blancos) y, de frente, lo que en la imagen no es piel; las orejas
+            # y la cara, piel
+            Q = P[vs]
+            nrm = np.cross(Q[1] - Q[0], Q[2] - Q[0])
+            nrm = nrm / (np.linalg.norm(nrm) + 1e-12)
+            if float(np.mean(medias)) < 0.24 or nrm[1] > 0.25 or nrm[2] > 0.55:
+                c = PELO
+            elif color_imagen is not None and nrm[1] < -0.3:
+                c = PIEL if tipo_color(color_imagen(float(np.mean(Q[:, 0])), z)[0]) == "piel" else PELO
+            else:
+                c = PIEL
         elif top == "marino":
             c = PANTALON
-        elif top == "blanco" and z > 1.36 and color_imagen is not None and \
-                tipo_color(color_imagen(np.mean([P[i][0] for i in vs]), z)[0]) not in ("blanco",):
-            # (blanco en la textura de TRELLIS pero no en la imagen, a la altura del cuello: los brillos de una melena)
+        elif top == "blanco" and z > 1.36 and x > 0.06 and color_imagen is not None and nrm_t[1] < -0.2 and \
+                pelo_en_imagen(color_imagen(np.mean([P[i][0] for i in vs]), z)[0]):
+            # (blanco en la textura de TRELLIS y pelo en la imagen, a la altura del cuello: los brillos de una melena;
+            # si en la imagen es piel o camiseta, o está delante del cuello, es el cuello de la camiseta: antes salía
+            # pelo y se veía una línea blanca entre la piel y la equipación)
             c = PELO
         elif top == "blanco":
             # (los calcetines: piel, que el pintor pinta de calcetín; y la manga nunca pasa del codo)
@@ -363,15 +392,30 @@ def clasificar(atlas, m, uvl, P, S, color_imagen=None):
             for j in vec[i]:
                 cuenta[c_tri[j]] = cuenta.get(c_tri[j], 0) + 1
             mejor = max(cuenta, key=cuenta.get)
-            if mejor != c_tri[i] and cuenta[mejor] >= 0.7 * len(vec[i]):
+            # (el pelo no se contagia hacia abajo: en la nuca bajaba hasta el cuello de la camiseta)
+            if mejor != c_tri[i] and mejor != PELO and cuenta[mejor] >= 0.7 * len(vec[i]):
                 nuevo[i] = mejor
                 cambios += 1
         c_tri = nuevo
     print(f"máscara: {cambios} triángulos sueltos cambiados a la clase de sus vecinos")
+    global _ULTIMOS_TRIS
+    _ULTIMOS_TRIS = (tris, c_tri)
     cls = Image.new("L", (S, S), OTRO * 40)
     dr = ImageDraw.Draw(cls)
     for (pts, vs, z, x), c in zip(tris, c_tri):
         dr.polygon(pts, fill=c * 40)
+    # (el borde del cuello y de las mangas: texels blancos marcados como piel junto a la camiseta pasan a camiseta; si
+    # no, queda una línea blanca entre la piel y la equipación pintada)
+    import cv2
+    C_ = np.asarray(cls).copy()
+    cam = (C_ == CAMISETA * 40).astype(np.uint8)
+    cerca = cv2.dilate(cam, np.ones((7, 7), np.uint8)) > 0
+    mx_, mn_ = A_.max(2), A_.min(2)
+    blanco = (mx_ > 0.55) & (mx_ - mn_ < 0.16)
+    borde = (C_ == PIEL * 40) & cerca & blanco
+    C_[borde] = CAMISETA * 40
+    print(f"máscara: {int(borde.sum())} texels blancos del borde de la camiseta pasan a camiseta")
+    cls = Image.fromarray(C_)
     V = {c: set() for c in (CAMISETA, PANTALON, CALZADO)}
     for (pts, vs, z, x), c in zip(tris, c_tri):
         if c in V:
@@ -497,6 +541,23 @@ def cara_proyectada(atlas, m, uvl, P, imagen, me):
         print(f"cara: sin puntos (render {pr is not None}, imagen {pi is not None}); no se proyecta")
         return atlas, None, np.zeros(A.shape[:2], np.float32), None
     pi = pi / f + np.array([ua, va])
+    # el color del pelo en la imagen: entre lo alto de la cabeza (la silueta) y lo alto de la frente (punto 10 de la
+    # cara), en el centro, sin el fondo
+    global _PELO_IMAGEN
+    x10, y10 = pi[10]
+    fw = abs(pi[234][0] - pi[454][0])
+    col_ = int(x10)
+    filas_ = np.nonzero(dif[:, col_] > 0.08)[0]
+    _PELO_IMAGEN = None
+    if len(filas_):
+        yt = int(filas_.min())
+        y1_ = int(yt + 0.6 * max(4, y10 - yt))
+        reg_ = I[yt + 2: max(yt + 4, y1_), int(x10 - 0.2 * fw): int(x10 + 0.2 * fw)]
+        d_ = np.abs(reg_ - fondo).max(2)
+        px_ = reg_[d_ > 0.1]
+        if len(px_) > 20:
+            _PELO_IMAGEN = np.median(px_, 0)
+            print(f"pelo en la imagen: {np.round(_PELO_IMAGEN * 255)} ({len(px_)} píxeles, de la fila {yt} a la {y1_})")
     # semejanza (Umeyama) render -> imagen
     ma, mb = pr.mean(0), pi.mean(0)
     a0, b0 = pr - ma, pi - mb
@@ -525,11 +586,16 @@ def cara_proyectada(atlas, m, uvl, P, imagen, me):
         return q[0], q[1]
 
     n_tri = 0
+    cara_ = np.zeros(peso.shape, bool)
     for tri in m.loop_triangles:
         vs = [m.loops[li].vertex_index for li in tri.loops]
         Q = P[vs]
-        if Q[:, 2].min() < 1.40 or np.abs(Q[:, 0]).max() > 0.20:
+        # (la cabeza hasta 0,20 m del centro; y, por debajo, el cuello y el escote de la camiseta, hasta 1,33 m: con
+        # el borde de TRELLIS quedaba una franja clara entre la piel y la equipación)
+        zmin = Q[:, 2].min()
+        if zmin < 1.33 or np.abs(Q[:, 0]).max() > (0.20 if zmin >= 1.40 else 0.12):
             continue
+        es_cara = zmin >= 1.40
         nrm = cn[list(tri.loops)].mean(0)
         frente = -nrm[1] / (np.linalg.norm(nrm) + 1e-9)
         if frente < 0.25:
@@ -562,14 +628,21 @@ def cara_proyectada(atlas, m, uvl, P, imagen, me):
         col = (I[v0, u0] * (1 - fu) * (1 - fv) + I[v0, u0 + 1] * fu * (1 - fv) + I[v0 + 1, u0] * (1 - fu) * fv + I[v0 + 1, u0 + 1] * fu * fv)
         w = float(np.clip((frente - 0.12) / 0.33, 0, 1))
         w = w * w * (3 - 2 * w)
-        proy[px[:, 1], px[:, 0]] = col
-        peso[px[:, 1], px[:, 0]] = np.maximum(peso[px[:, 1], px[:, 0]], w)
-    sel = peso > 0.8
+        # (lo que en la imagen es fondo, en el borde de la silueta del pelo, no se proyecta)
+        wv = w * np.clip((np.abs(col - fondo).max(1) - 0.06) / 0.06, 0, 1)
+        nuevo = wv > peso[px[:, 1], px[:, 0]]
+        proy[px[nuevo, 1], px[nuevo, 0]] = col[nuevo]
+        peso[px[nuevo, 1], px[nuevo, 0]] = wv[nuevo]
+        cara_[px[nuevo, 1], px[nuevo, 0]] = es_cara
+    # (el tono de la piel se mide en la cabeza: el escote lleva la camiseta blanca)
+    sel = (peso > 0.8) & cara_
     corr = None
     if sel.any():
         # el tono de la piel de TRELLIS al de la imagen (media y desviación por canal, medidas en la cara): se aplica
         # luego a toda la piel (corregir_piel), y la cara proyectada se queda con el color de la imagen
         corr = (A[sel].mean(0), A[sel].std(0) + 1e-3, proy[sel].mean(0), proy[sel].std(0) + 1e-3)
+        global _PIEL_IMAGEN
+        _PIEL_IMAGEN = proy[sel].mean(0)
     out = A * (1 - peso[..., None]) + np.clip(proy, 0, 1) * peso[..., None]
     print(f"cara proyectada: {n_tri} triángulos, {int((peso > 0).sum())} texels ({k:.0f} px/m en la imagen)")
 
@@ -580,6 +653,106 @@ def cara_proyectada(atlas, m, uvl, P, imagen, me):
         return I[v, u]
 
     return Image.fromarray((np.clip(out, 0, 1) * 255).astype(np.uint8)), corr, peso, color_imagen
+
+
+def pelo_de_la_imagen(atlas, cls, peso, color_imagen, P):
+    """el pelo que la imagen no ve (nuca, coronilla, los lados de atrás) con el color del pelo de la imagen: la luz y la
+    sombra de TRELLIS (su brillo relativo), el tono de la imagen"""
+    from PIL import Image
+    tris, c_tri = _ULTIMOS_TRIS
+    muestras = []
+    for (pts, vs, z, x), c in zip(tris, c_tri):
+        if c != PELO:
+            continue
+        Q = P[vs]
+        nrm = np.cross(Q[1] - Q[0], Q[2] - Q[0])
+        nrm = nrm / (np.linalg.norm(nrm) + 1e-12)
+        if nrm[1] < -0.3 and z > 1.5:
+            muestras.append(color_imagen(float(np.mean(Q[:, 0])), z)[0])
+    if _PELO_IMAGEN is not None:
+        col = _PELO_IMAGEN
+    elif len(muestras) >= 10:
+        col = np.median(np.array(muestras), 0)
+    else:
+        print("pelo: sin muestras en la imagen; se deja el de TRELLIS")
+        return atlas
+    A = np.asarray(atlas).astype(np.float32) / 255
+    C = np.asarray(cls)
+    pel = C == PELO * 40
+    L = A.max(2)
+    Lm = float(np.median(L[pel]))
+    nuevo = col[None, None, :] * np.clip(L / max(Lm, 1e-3), 0.55, 1.5)[..., None]
+    w = (pel.astype(np.float32) * (1 - np.clip(peso, 0, 1)))[..., None]
+    out = A * (1 - w) + np.clip(nuevo, 0, 1) * w
+    print(f"pelo: color de la imagen {np.round(col * 255)} en {int((w[..., 0] > 0.5).sum())} texels")
+    return Image.fromarray((np.clip(out, 0, 1) * 255).astype(np.uint8))
+
+
+def igualar_piel(atlas, cls, peso):
+    """la piel del cuerpo (brazos, piernas) con el brillo de la de la cara: TRELLIS la deja más oscura"""
+    from PIL import Image
+    A = np.asarray(atlas).astype(np.float32) / 255
+    C = np.asarray(cls)
+    piel = C == PIEL * 40
+    Y = A @ np.array([0.299, 0.587, 0.114], np.float32)
+    cara = piel & (peso > 0.8)
+    resto = piel & (peso < 0.2)
+    if cara.sum() < 100 or resto.sum() < 100:
+        return atlas
+    k = float(np.clip(0.95 * np.median(Y[cara]) / max(np.median(Y[resto]), 1e-3), 1.0, 1.35))
+    w = (resto.astype(np.float32))[..., None]
+    out = A * (1 - w) + np.clip(A * k, 0, 1) * w
+    print(f"piel del cuerpo: ×{k:.2f} para igualar el brillo de la cara")
+    return Image.fromarray((np.clip(out, 0, 1) * 255).astype(np.uint8))
+
+
+def alisar_tela(atlas, cls):
+    """la camiseta lisa (las arrugas oscuras de TRELLIS parecían manchas una vez pintada la equipación): las rayas y
+    las motas fuera, y el contraste de sus pliegues a un tercio y suavizado; el pantalón, a un 70 %"""
+    from PIL import Image
+    import cv2
+    A_ = np.asarray(atlas).astype(np.float32)
+    C = np.asarray(cls)
+    out = A_.copy()
+    Y = A_ @ np.array([0.299, 0.587, 0.114], np.float32)
+    for clase, k, cont in ((CAMISETA, 15, 0.35), (PANTALON, 7, 0.7)):
+        m = C == clase * 40
+        if not m.any():
+            continue
+        med = float(np.median(Y[m]))
+        Yf = np.where(m, Y, med).astype(np.uint8)
+        Yc = cv2.morphologyEx(Yf, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8)).astype(np.float32)
+        Yc = cv2.GaussianBlur(Yc, (0, 0), 5.0 if clase == CAMISETA else 2.5)
+        Yc = med + (Yc - med) * cont
+        if clase == CAMISETA:
+            for c in range(3):
+                out[..., c] = np.where(m, Yc, out[..., c])
+        else:
+            f = np.clip(Yc / np.maximum(Y, 1), 0.5, 2.0)
+            for c in range(3):
+                out[..., c] = np.where(m, A_[..., c] * f, out[..., c])
+    print("tela: camiseta lisa (contraste 0,35) y pantalón (0,7)")
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
+
+
+def rellenar_bordes(atlas, cls, r=8):
+    """una franja de r texels alrededor de cada isla toma la clase y el color del texel de la isla más cercano: el
+    pintor lee la máscara reducida a 1024 y la textura filtrada, y en el borde de las islas caía en «otro» o en el
+    relleno blanco de TRELLIS (motas y líneas blancas en las costuras de la camiseta y en el cuello)"""
+    from PIL import Image
+    from scipy.ndimage import distance_transform_edt
+    C = np.asarray(cls)
+    fuera = C == OTRO * 40
+    if not fuera.any() or fuera.all():
+        return atlas, cls
+    d, (iy, ix) = distance_transform_edt(fuera, return_indices=True)
+    sel = fuera & (d <= r)
+    A_ = np.asarray(atlas).copy()
+    C2 = C.copy()
+    A_[sel] = A_[iy[sel], ix[sel]]
+    C2[sel] = C[iy[sel], ix[sel]]
+    print(f"bordes: {int(sel.sum())} texels de relleno junto a las islas")
+    return Image.fromarray(A_), Image.fromarray(C2)
 
 
 def corregir_piel(atlas, cls, corr, peso, fuerza=0.8):
@@ -661,8 +834,12 @@ def exportar(J, me, P, tex_img, salida, fuente, imagen=None):
         color_imagen = None
     cls, zonas = clasificar(atlas, m, uvl, P, S, color_imagen)
     if imagen and corr is not None:
-        atlas = corregir_piel(atlas, cls, corr, peso)
-    atlas = alisar(atlas, cls)
+        atlas = corregir_piel(atlas, cls, corr, peso, fuerza=1.0)
+        atlas = igualar_piel(atlas, cls, peso)
+    if imagen and color_imagen is not None:
+        atlas = pelo_de_la_imagen(atlas, cls, peso, color_imagen, P)
+    atlas = alisar_tela(atlas, cls)
+    atlas, cls = rellenar_bordes(atlas, cls)
     Mx = 1024
     mask = Image.merge("RGB", (cls.resize((Mx, Mx), Image.NEAREST), Image.new("L", (Mx, Mx), 255), Image.new("L", (Mx, Mx), 0)))
 
