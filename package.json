@@ -1,8 +1,8 @@
 {
-  "name": "pickleball",
+  "name": "padel-pro",
   "version": "0.1.0",
   "private": true,
-  "description": "Pickleball arcade 3D low-poly (prototipo de encargo) sobre el motor del estudio NocodeBoy",
+  "description": "Pádel arcade 3D (prototipo) de Nocodeboy Games, sobre el motor del estudio",
   "scripts": {
     "build": "node build.mjs",
     "build:dev": "node build.mjs --dev",

@@ -1,6 +1,6 @@
-# Pádel · Pro Tour (prototipo de encargo)
+# Pádel · Pro Tour (prototipo)
 
-Juego de pádel en 3D para web y móvil del estudio NocodeBoy, hecho por encargo. El nombre y la marca son provisionales: los pone el cliente y se cambian en `src/tour.ts` (y el título de la página en `build.mjs`).
+Juego de pádel en 3D para web y móvil, propio del estudio Nocodeboy Games. El nombre y la marca son provisionales: los decide el estudio y se cambian en `src/tour.ts` (y el título de la página en `build.mjs`).
 
 - **Origen:** copia del juego de pickleball del estudio (`Nocodeboy/Pickleball@2f15030`, versión 0.10), convertida en pádel. Las notas de diseño del pickleball siguen en `docs/pickleball/` como referencia (la interfaz que se hereda: `notas-09-interfaz.md`).
 - **Versión:** 0.3 (12 oct 2026): atributos 0–99 visibles en fichas de jugador, la fuerza del golpe según la velocidad del gesto, la bajada de pared y los remates por 3 y por 4 (`docs/notas-03-interfaz.md` y `docs/notas-03-simulacion.md`).

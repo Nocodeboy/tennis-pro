@@ -1,5 +1,5 @@
 // The tournament the ladder is dressed as. PROVISIONAL BRAND: a neutral, made-up padel circuit («PÁDEL · PRO TOUR»)
-// until the client sets the final name and brand. The rivals keep their first name (brain.ts), id and way of playing;
+// until the studio sets the final name and brand. The rivals keep their first name (brain.ts), id and way of playing;
 // here they only get a surname, a ranking and a seed so they read like touring pros. The ladder of four pairs is a
 // 16-pair draw (round of 16 to final).
 

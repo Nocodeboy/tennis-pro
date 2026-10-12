@@ -1,17 +1,15 @@
-# Pádel (encargo) · ficha de concepto y estado
+# Pádel · ficha de concepto y estado
 
-*Nombre provisional:* **Pádel · Pro Tour**. El nombre y la marca finales los pone el cliente (el mismo del pickleball); están en `src/tour.ts`.
+*Nombre provisional:* **Pádel · Pro Tour**. Es un juego propio del estudio Nocodeboy Games (Germán, 12 oct: «el pádel también es propio»): el nombre, la marca, las tiendas y la publicación los decide el estudio con sus protocolos. La marca está en `src/tour.ts`.
 *Estado (12 oct 2026):* **prototipo 0.2 jugable en web**, hecho a partir del pickleball 0.10 (`Nocodeboy/Pickleball@2f15030`). La 0.2 trae de la 0.12 del pickleball (`cc00ccb`) las animaciones de captura de movimiento y el trabajo de Blender: ver «0.2» al final.
 
-## El encargo
+## El origen
 
 Germán (11 oct): clonar el juego de pickleball y usarlo de inspiración para uno de pádel. Decisiones:
 
-- **Repositorio:** uno nuevo (`Nocodeboy/padel`, privado) con una copia del motor; cada juego evoluciona por su lado.
+- **Repositorio:** uno nuevo con una copia del motor; cada juego evoluciona por su lado. Es `Nocodeboy/padel-pro` (privado, rama `main`) desde el 12 oct.
 - **Primera entrega:** prototipo jugable de dobles contra la CPU, con paredes, reglas de pádel y pista de cristal.
-- **Proyecto:** encargo del mismo cliente que el pickleball. Marca provisional.
-
-**Antes de publicarlo**, hay que confirmar con el cliente que el motor del estudio se puede reutilizar entre sus dos encargos (si el contrato del pickleball le cede el código, haría falta su permiso).
+- **Proyecto:** al principio se trató como encargo del mismo cliente que el pickleball; desde el 12 oct los dos juegos son propios del estudio, así que el motor se reutiliza sin permisos de nadie.
 
 ## Qué se reutiliza y qué es nuevo
 
@@ -38,7 +36,7 @@ Detalle: `notas-01-simulacion.md` (física, reglas, IA y números) y `notas-01-g
 
 Tu pareja es **Martín Di Neno** (suena a Martín Di Nenno).
 
-**Riesgo legal:** igual que en el pickleball, son nombres que evocan a deportistas reales. Para la versión que se publique lo decide el cliente; cambiarlos es tocar `src/sim/brain.ts` (nombres de pila) y `src/tour.ts` (apellidos).
+**Riesgo legal:** igual que en el pickleball, son nombres que evocan a deportistas reales. Para la versión que se publique lo decide el estudio; cambiarlos es tocar `src/sim/brain.ts` (nombres de pila) y `src/tour.ts` (apellidos).
 
 ## Dificultad medida con el bot (16 partidos por celda, set a 3 juegos, punto de oro)
 
