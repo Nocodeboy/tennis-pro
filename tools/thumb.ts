@@ -11,11 +11,10 @@
 //    reset, and so is any ball that comes too fast to aim. The three gestures (docs/notas-08-ataque.md): on a ball the
 //    game marks as attackable (the orange ring) it flicks, more or less often by level, and now and then it flicks one
 //    that is not (impatience); an attack coming at him it blocks with a tap, if it reacts in time.
-//  · The power of the gesture (0.3, docs/notas-03-simulacion.md): an aimed release is still (a placed ball) or, now and
-//    then (`moving`), on the move (a plain one); a flick's stroke has its speed (the harder, the faster). Over the
-//    head, on a ball that allows it, he goes for the remate por 3 (a straight flick at full speed, `por3`) or por 4 (a
-//    down-flick, `por4`); a ball come back high off the back glass (the cue «bajada») he hits down with a flick
-//    (`bajada`) or places to a corner.
+//  · The power of the gesture (docs/notas-03-simulacion.md): an aimed release is still (a placed ball) or, now and
+//    then (`moving`), on the move (a plain one); a flick's stroke has its speed (the harder, the faster). Tennis: a
+//    ball dug out at full stretch he slices now and then with a down-flick (`slice`); he serves flat (a flick), sliced
+//    or with kick (a still release) as `serve` says, and comes in behind an approach or a serve as `netRush` says.
 //  · A phone in between: what the thumbs react to is on screen a little late and the lift reaches the game a little
 //    after it happens (DEVICE_LAG); the game dates releases back by its own estimate of that (Input LAG).
 
@@ -24,8 +23,8 @@ g.window ??= { addEventListener() {} };
 
 import { Input } from '../src/input';
 import { AIM_D0, AIM_LOB, AIM_Z, HumanController, SERVE_PERIOD } from '../src/human';
-import { AT_NET, DEPTH_Z, HL, NET_C, SERVICE, W } from '../src/sim/court';
-import { ballCue, specialOk } from '../src/sim/brain';
+import { AT_NET, DEPTH_Z, HL, NET_C, SERVICE, halfW } from '../src/sim/court';
+import { HUMAN_MOVER, ballCue } from '../src/sim/brain';
 import { IDEAL_RELEASE, type Match } from '../src/sim/match';
 import { Rng } from '../src/sim/rng';
 
@@ -53,12 +52,12 @@ export interface Thumbs {
   bias: number;
   /** px: how far the drag lands from the target they meant */
   aimPx: number;
-  /** shot sense, 0 … 1: soft game (chiquitas, dejadas), attacking high balls, globos, aiming wide and deep */
+  /** shot sense, 0 … 1: soft game (drop shots and volleys), attacking high balls, lobs, aiming wide and deep */
   touch: number;
   attack: number;
   lob: number;
   risk: number;
-  /** chance of moving up to the net behind a good globo or chiquita of his own (otherwise he follows the partner) */
+  /** how readily he comes in to the net (behind an approach, a serve; Mover.netRush of his controller) */
   netRush: number;
   /** the attack: chance of flicking a ball marked attackable, and of flicking one at the net that is not (impatience) */
   flick: number;
@@ -78,13 +77,11 @@ export interface Thumbs {
   blockBias: number;
   /** an aimed release on the move (a plain power) rather than with the finger still (placed) */
   moving: number;
-  /** over the head, on a ball that allows it: chance of going for por 3 (a full flick) and por 4 (a down-flick) */
-  por3: number;
-  por4: number;
-  /** px/s: his fullest flick (the por 3, a hard bajada) */
-  fullV: number;
-  /** a bajada (the cue): chance of hitting it down with a flick rather than placing it */
-  bajada: number;
+  /** a ball dug out at full stretch from the back: chance of a down-flick (a slice) */
+  slice: number;
+  /** the serve: chance of a flat first serve (a flick), and of a kick serve (a still release) on the second */
+  flat: number;
+  kick: number;
 }
 
 /** s from the finger's last move to the lift reaching the page (the pointerup repeats the last position) */
@@ -112,7 +109,7 @@ export class ThumbBot {
   private released = false;
   /** this ball: what the right thumb does (aim and drag, a flick, a tap to block, nothing) and where the drag goes */
   private act: 'aim' | 'flick' | 'tap' | 'none' | null = null;
-  /** the flick's stroke goes down the screen (a down-flick: por 4) */
+  /** the flick's stroke goes down the screen (a down-flick: a slice) */
   private down = false;
   /** the aimed release is on the move (a plain power) */
   private moveRel = false;
@@ -122,15 +119,14 @@ export class ThumbBot {
   private stroking = false;
   private tapE = 0;
   private wantBlock = false;
-  // the rally: has he moved up to the net behind his own globo or chiquita
-  private up = false;
-  private lastShots = -1;
+
   // the serve
+  private serveHow: 'flat' | 'slice' | 'kick' = 'slice';
   private serveKey = '';
   private serveAt = -1;
   private serveRel = -1;
   /** counts for the report: balls aimed, left to the automatic shot, flicked (attacks), tapped (blocks) */
-  readonly stats = { aimed: 0, auto: 0, flicks: 0, taps: 0, por3: 0, por4: 0, bajadas: 0 };
+  readonly stats = { aimed: 0, auto: 0, flicks: 0, taps: 0, slices: 0 };
 
   constructor(
     readonly level: Thumbs,
@@ -144,6 +140,8 @@ export class ThumbBot {
     this.ctl.mode = 'assist';
     this.ctl.assist = assist;
     this.ctl.pxPerM = 33; // a 390 px wide phone
+    // (how readily he comes in: the match reads it off his controller, afterHit)
+    (this.ctl as unknown as { mover: typeof HUMAN_MOVER }).mover = { ...HUMAN_MOVER, netRush: level.netRush };
     this.rng = new Rng(seed);
   }
 
@@ -214,24 +212,17 @@ export class ThumbBot {
         this.tapE = IDEAL_RELEASE + this.gauss() * L.blockSigma - L.blockBias;
       } else if (el >= this.pressAt && tg.t - m.t > 0.08) {
         const atNet = Math.abs(tg.fz) < (L.rashNear ?? AT_NET) && m.rally!.shots >= 2;
-        const rash = cue !== 'attack' && cue !== 'bajada' && atNet && tg.by > NET_C + (L.rashFloor ?? -0.2) && this.rng.chance(L.rash);
+        const rash = cue !== 'attack' && atNet && tg.by > NET_C + (L.rashFloor ?? -0.2) && this.rng.chance(L.rash);
         this.down = false;
-        // over the head, a ball that allows it: the remate por 3 (a straight flick at full speed) or por 4 (down)
-        const por3 = cue === 'attack' && specialOk('por3', tg) && this.rng.chance(L.por3);
-        const por4 = !por3 && tg.overhead && specialOk('por4', tg) && m.rally!.shots >= 2 && this.rng.chance(L.por4);
-        if (por3 || por4) {
+        // a ball dug out at full stretch from the back: a slice now and then (a down-flick)
+        const far = Math.hypot(tg.fx - p.x, tg.fz - p.z) > 2.5;
+        const dig = !tg.volley && Math.abs(tg.fz) > SERVICE && far && m.rally!.shots >= 2 && this.rng.chance(L.slice);
+        if (dig) {
           this.act = 'flick';
-          this.down = por4;
-          this.goal = { dx: this.gauss() * 3, dy: this.gauss() * 3 };
-          this.strokeV = Math.max(650, L.fullV + this.gauss() * L.flickVar * 0.6);
-          if (por3) this.stats.por3++;
-          else this.stats.por4++;
-        } else if (cue === 'bajada' && this.rng.chance(L.bajada)) {
-          // the bajada hit down: a flick at the body (or the middle)
-          this.act = 'flick';
-          this.goal = { dx: this.gauss() * 3, dy: this.gauss() * 3 };
-          this.strokeV = Math.max(650, (L.flickV + L.fullV) / 2 + this.gauss() * L.flickVar);
-          this.stats.bajadas++;
+          this.down = true;
+          this.goal = this.choose(m, p, tg);
+          this.strokeV = Math.max(780, L.flickV * 0.9 + this.gauss() * L.flickVar * 0.5);
+          this.stats.slices++;
         } else if ((cue === 'attack' && this.rng.chance(L.flick)) || rash) {
           this.act = 'flick';
           // aimed now and then (the open side), otherwise the thumb stays put (at the body)
@@ -296,8 +287,6 @@ export class ThumbBot {
         this.input.clear();
         this.stick(0, 0);
         this.ball = '';
-        this.up = false;
-        this.lastShots = -1;
       }
       if (e.type === 'hit' && e.pid === this.pid && e.kind !== 'serve' && e.timing === 'auto') this.stats.auto++;
       // a new serve (the next point, a second serve after a fault, the same serve after a let): a new routine
@@ -344,18 +333,12 @@ export class ThumbBot {
   }
 
   /**
-   * Where he waits while his side's ball is on the other side: across, his half (Match.cover); in depth, with his
-   * partner (the match sets homeZ to the depth the pair goes to), except that behind a good globo or chiquita of his
-   * own he goes up himself (netRush), and a lob over him sends him back.
+   * Where he waits while his side's ball is on the other side: across, the middle of the reply's angles (singles) or
+   * his half (doubles) (Match.cover); in depth, where the match sent him after his shot (afterHit, by his netRush): back
+   * behind the baseline, or up at the net behind an approach or a serve.
    */
-  private waitSpot(m: Match, p: Player): { x: number; z: number } {
-    const r = m.rally!;
-    if (r.shots !== this.lastShots) {
-      this.lastShots = r.shots;
-      const lh = r.last?.id === p.id ? p.lastHit : null;
-      this.up = !!lh && (lh.kind === 'lob' || lh.kind === 'dink' || lh.kind === 'drop') && this.rng.chance(this.level.netRush);
-    }
-    const z = this.up ? p.side * DEPTH_Z[2] : p.homeZ;
+  private waitSpot(_m: Match, p: Player): { x: number; z: number } {
+    const z = p.depth === 2 ? p.side * DEPTH_Z[2] : p.homeZ;
     return { x: p.homeX, z };
   }
 
@@ -368,93 +351,80 @@ export class ThumbBot {
     const rng = this.rng;
     const r = m.rally!;
     const opps = m.players.filter((o) => o.team !== p.team);
-    const opp = opps[rng.chance(0.5) ? 0 : 1];
-    const oppNet = opps.every((o) => Math.abs(o.z) < AT_NET + 0.4);
-    const oppBack = opps.every((o) => Math.abs(o.z) > AT_NET + 0.4);
+    const opp = opps[rng.chance(0.5) ? 0 : opps.length - 1];
+    const oppNet = opps.some((o) => Math.abs(o.z) < AT_NET + 0.8);
     const meNet = Math.abs(tg.fz) < AT_NET;
     const high = tg.overhead || tg.by > NET_C + 0.3;
-    const open = () => -Math.sign(opp.x || rng.next() - 0.5) * (1.4 + L.risk * 1.8 + rng.next() * 0.5);
+    const hw = halfW();
+    const open = () => -Math.sign(opp.x || rng.next() - 0.5) * (1.6 + L.risk * 2.2 + rng.next() * 0.6);
+    const cross = () => -(Math.sign(tg.bx) || 1) * (1.2 + L.risk * 2 + rng.next() * 0.8);
     const feet = () => opp.x + (rng.next() - 0.5) * 0.8;
-    const deep = () => HL - 1.2 - rng.next() * 1.6 + L.risk * 0.5;
+    const deep = () => HL - 1.6 - rng.next() * 1.8 + L.risk * 0.6;
     let x: number;
     let d: number;
     let lob = false;
     if (r.shots === 1) {
-      // the return: low at the server's feet (a soft one, aimed short) or a globo over the net player
-      if (rng.chance(L.lob * 0.6)) {
+      // the return: deep, cross-court or down the middle (a lob over a net player now and then in doubles)
+      if (m.doubles && rng.chance(L.lob * 0.2)) {
         lob = true;
-        x = opp.x * 0.5;
+        x = (rng.next() - 0.5) * 2;
         d = 0;
       } else {
-        x = (rng.next() - 0.5) * 3;
-        d = rng.chance(L.touch * 0.5) ? 3.4 + rng.next() * 0.6 : SERVICE - 1 + rng.next() * 1.4;
+        x = rng.chance(0.5) ? cross() : (rng.next() - 0.5) * 2;
+        d = deep() - 0.6;
       }
-    } else if (ballCue(m, p, tg) === 'bajada') {
-      // a bajada placed: firm to a corner, short of their glass (or at the feet of a net player)
-      x = rng.chance(0.5) ? open() : feet();
-      d = oppBack ? 6 + rng.next() * 1.5 : Math.max(3, Math.abs(opp.z) + 0.5 + rng.next());
     } else if (tg.overhead) {
-      // over the head: a bandeja deep to a corner or the middle (the flick is the remate, see tick)
-      x = rng.chance(0.5) ? open() : (rng.next() - 0.5) * 2;
+      // over the head: a smash deep to the open court or the middle (the flick is the hard one, see tick)
+      x = rng.chance(0.6) ? open() : (rng.next() - 0.5) * 2;
       d = deep();
     } else if (high && meNet && rng.chance(L.attack)) {
-      // a ball up at the net: at the feet or the open side, behind them
-      x = rng.chance(0.5) ? feet() : open();
-      d = oppNet ? Math.min(HL - 1, Math.abs(opp.z) + 0.6 + rng.next() * 1.5) : deep();
-    } else if (meNet && oppNet) {
-      const u = rng.next();
-      if (u < L.touch) {
-        // a soft volley at the feet
-        x = feet();
-        d = 2.6 + rng.next() * 1.2;
-      } else if (u < L.touch + L.lob * 0.2) {
-        lob = true;
-        x = open() * 0.5;
-        d = 0;
-      } else {
-        x = feet();
-        d = Math.max(4.5, Math.abs(opp.z) + 1);
-      }
+      // a ball up at the net: the open side, short and angled or deep
+      x = open();
+      d = oppNet ? Math.min(HL - 1, Math.abs(opp.z) + 1 + rng.next() * 2) : rng.chance(0.4) ? 4 + rng.next() * 1.5 : deep();
     } else if (meNet) {
-      // they are back: deep to the corners, now and then a short angled one
+      // at the net: deep to the corners, now and then a drop volley
       if (rng.chance(L.touch * 0.25)) {
         x = open();
-        d = 2.6 + rng.next() * 1.2;
+        d = 2.2 + rng.next() * 1.2;
       } else {
-        x = open();
-        d = deep();
+        x = rng.chance(0.5) ? open() : feet();
+        d = oppNet ? Math.max(5, Math.abs(opp.z) + 1) : deep();
       }
-    } else if (!oppBack) {
-      // from the back against a pair at the net: a globo, a chiquita at the feet, or a drive
+    } else if (oppNet) {
+      // from the back against a player at the net: a lob, a ball at his feet, or a passing shot
       const u = rng.next();
-      if (u < L.lob) {
+      if (u < L.lob * 0.7) {
         lob = true;
         x = open() * 0.5;
         d = 0;
-      } else if (u < L.lob + L.touch * 0.6) {
+      } else if (u < L.lob * 0.7 + L.touch * 0.4) {
         x = feet();
-        d = 2.8 + rng.next() * 1.2;
+        d = Math.max(4, Math.abs(opp.z) + 1);
       } else {
-        x = rng.chance(0.5) ? feet() : open();
-        d = 5 + rng.next() * 2;
+        x = Math.sign(open()) * (hw - 0.6 - (1 - L.risk) * 0.6);
+        d = deep();
       }
-    } else if (rng.chance(L.lob * 0.3)) {
-      lob = true;
+    } else if (Math.abs(tg.fz) < HL - 1.6 && tg.by > 0.6 && rng.chance(L.attack * 0.7)) {
+      // a short ball: an approach (or a winner) deep into the open court
+      x = open();
+      d = deep();
+    } else if (rng.chance(L.touch * 0.06)) {
+      // a drop shot
       x = (rng.next() - 0.5) * 3;
-      d = 0;
+      d = 2.4 + rng.next() * 1.2;
     } else {
-      // both pairs back: deep, down the middle or to a corner
-      x = rng.chance(0.5) ? open() : (rng.next() - 0.5) * 2;
+      // the rally: deep, cross-court or to the open court
+      x = rng.chance(0.55) ? cross() : rng.chance(0.5) ? open() : (rng.next() - 0.5) * 2;
       d = deep();
     }
     const px = this.ctl.pxPerM;
-    // a globo: dragged past the back glass, further for a deeper (riskier) one; any other shot keeps a margin from
-    // the glass that grows with how far off their drag tends to land
+    // a lob: dragged past the baseline, further for a deeper (riskier) one; any other shot keeps a margin from the
+    // lines that grows with how far off their drag tends to land
     const margin = L.aimPx / px;
     if (lob) d = HL + AIM_LOB + 0.3 + Math.min(1, 0.2 + rng.next() * 0.8 * (0.4 + L.risk)) * 1.6;
     else {
-      d = Math.min(d, HL - 0.7 - margin / AIM_Z);
-      x = Math.max(-(W / 2 - 0.4 - margin), Math.min(W / 2 - 0.4 - margin, x));
+      d = Math.min(d, HL - 0.8 - margin / AIM_Z);
+      x = Math.max(-(hw - 0.4 - margin), Math.min(hw - 0.4 - margin, x));
     }
     return { dx: x * p.side * px + this.gauss() * L.aimPx, dy: (AIM_D0 - d) * px * AIM_Z + this.gauss() * L.aimPx };
   }
@@ -471,12 +441,25 @@ export class ThumbBot {
     }
     const L = this.level;
     if (!this.input.pressing && this.serveRel < 0 && m.t >= this.serveAt) {
-      // drag a little deeper than the middle of the box (towards the service line), a few px off
+      // drag a little deeper than the middle of the box (towards the service line), to the T, the body or wide, a few
+      // px off
       this.input.aimDown(m.t);
-      this.input.aimMove(this.gauss() * L.aimPx * 0.6, -(0.2 + this.rng.next() * 0.8) * this.ctl.pxPerM * AIM_Z + this.gauss() * L.aimPx, m.t);
-      // let go when the pulsing ring is at its smallest, with the timing error
+      const across = (this.rng.next() - 0.5) * 2.4 * this.ctl.pxPerM;
+      // (the arc preview shows where it lands: a second serve is kept further inside the line)
+      const inside = (m.serveNum === 2 ? 0.5 : 0.1) + this.rng.next() * 0.6;
+      this.input.aimMove(across + this.gauss() * L.aimPx * 0.5, inside * this.ctl.pxPerM * AIM_Z + this.gauss() * L.aimPx * 0.3, m.t);
+      // let go when the pulsing ring is at its smallest, with the timing error: a flick (flat), on the move (sliced)
+      // or still (kick)
       const k = Math.ceil((m.t + 0.35) / SERVE_PERIOD);
       this.serveRel = k * SERVE_PERIOD + this.gauss() * L.sigma + L.bias;
+      const second = m.serveNum === 2;
+      this.serveHow = !second && this.rng.chance(L.flat) ? 'flat' : second && this.rng.chance(L.kick) ? 'kick' : 'slice';
+    }
+    if (this.input.pressing && this.serveRel >= 0) {
+      // the stroke of a flat serve (a flick up), the drift of a sliced one (a plain release)
+      const left = this.serveRel + DEVICE_LAG - m.t;
+      if (this.serveHow === 'flat' && left < 0.075) this.input.aimMove(this.input.dx, this.input.dy - L.flickV / 60, m.t);
+      else if (this.serveHow === 'slice' && left < 0.1) this.input.aimMove(this.input.dx, this.input.dy - 260 / 60, m.t);
     }
     if (this.input.pressing && this.serveRel >= 0 && m.t >= this.serveRel + DEVICE_LAG) this.lift();
   }

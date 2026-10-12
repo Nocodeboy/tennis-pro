@@ -82,6 +82,11 @@ export interface Plan {
   out?: boolean;
   /** CPU players: seconds in hand when the contact was planned (time to set up; brain.ts CARD) */
   spare?: number;
+  /**
+   * CPU players: the shot they have already decided on for this ball, when they set off for it (brain.ts,
+   * AIController.read: a slice, so the view prepares the swing from high up). Absent: decided at the contact.
+   */
+  kind?: ShotKind;
 }
 
 export interface Player {

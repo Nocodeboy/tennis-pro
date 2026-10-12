@@ -1,33 +1,52 @@
 // Ball flight with gravity, air drag and spin, solved in closed form (no integration error, so the game, the
-// bot, the AI's predictions and a future online server all agree on where the ball goes).
+// bot, the AI's predictions and a future online server all agree on where the ball goes). Tennis (ITF ball, the
+// court's surface: GROUND).
 //
 // Each stretch of flight (a Seg) carries its own drag k and effective gravity g:
 //   v(t) = v0·e^(−kt) + (g/k)(e^(−kt) − 1)·ŷ
 //   p(t) = p0 + v0·f(t) − (g/k)·t·ŷ   with f(t) = (1 − e^(−kt))/k   (the vertical term uses v0y + g/k)
 //
-// · Drag. A padel ball (a pressurised felt ball, a little softer than a tennis ball) has quadratic drag
-//   (≈ 0.02·v² m/s²: ½ρ·Cd·A/m with Cd 0.55, r 33.5 mm, 57 g). Linear drag with k picked from the launch stands in for it
-//   over one flight (the fit came from the pickleball engine, scaled to this ball's coefficient).
-// · Spin. Topspin (+) presses the ball down (Magnus), backspin (−) holds it up a little: a heavier or lighter g.
-// · Bounce on the floor (artificial grass with sand). Restitution for the height, friction at the contact patch for the
-//   pace: a sliced ball grips and sits up, a topspin ball kicks on, a flat fast one skids.
-// · Walls (padel). The flight runs until the ball meets the floor, the net or a wall (wallTime, closed form like the
-//   net). Glass sends it back with most of its pace (restitution 0.72 at a gentle touch, less off a hard one) and the
-//   friction on the glass turns spin into height: a topspin ball climbs off the back glass, a sliced one drops («se
-//   queda»). The mesh takes most of the pace and sends it back a little off line (deterministic: the same contact
-//   always does the same, so the AI's prediction is the truth).
+// · Drag. A tennis ball (57.5 g, r 33.5 mm, Cd about 0.55) has quadratic drag (≈ 0.02·v² m/s²: ½ρ·Cd·A/m). Linear drag
+//   with k picked from the launch stands in for it over one flight (dragFor, fitted on tennis shots from a 7 m/s drop
+//   volley to a 60 m/s serve: docs/tenis/notas-01-simulacion.md).
+// · Spin. Topspin (+) presses the ball down (Magnus), backspin (−) holds it up: a heavier or lighter g. A tennis
+//   topspin drive dips hard (1.55 g at spin 1), a slice floats (0.7 g at −1).
+// · Bounce on the court (GROUND, by surface). Restitution for the height, friction at the contact patch for the pace:
+//   a sliced ball grips and stays low, a topspin ball kicks on and up, a fast flat one skids. Clay grips (slow, high),
+//   grass slips (fast, low), the hard court is in between (ITF court pace: docs/tenis/notas-01-simulacion.md).
+// · No walls: the dead ball stops at the boards of the stands (boardTime, boardBounce).
 
-import { HL, NET_C, R, W, netHeight } from './court';
+import { NET_C, R, netHeight, type CourtSurface } from './court';
 
 export const G = 9.81;
-/** quadratic drag coefficient of a padel ball (½ρ·Cd·A/m), m⁻¹ */
+/** quadratic drag coefficient of a tennis ball (½ρ·Cd·A/m), m⁻¹ */
 const C_DRAG = 0.02;
-/** Vertical restitution on the floor (FIP: dropped from 2.54 m it comes back 1.35–1.45 m). */
-export const BOUNCE_Y = 0.74;
-/** spin 1 as the speed of the ball's surface (ω·r, m/s): a heavy topspin ball turns at about 1,700 rpm */
-export const SPIN_SURF = 6;
-/** friction of the ball on the sanded grass, and the ball's moment of inertia over m·r² (a thin hollow shell) */
-const MU = 0.55;
+/**
+ * The court's surface: `e` the vertical restitution at a gentle landing (ITF: dropped from 2.54 m a ball comes back
+ * 1.35–1.47 m, e ≈ 0.73–0.76 on a hard floor; less off a hard landing, `drop` per m/s over 6), `mu` the friction of
+ * the ball on it. ITF court pace (CPR = 100·(1 − μ) + 150·(0.81 − e), the test ball at 30 m/s and 16°): clay about 25
+ * (slow), hard about 40 (medium-fast), grass about 48 (fast).
+ */
+export const GROUND: Record<CourtSurface, { e: number; mu: number; drop: number }> = {
+  hard: { e: 0.76, mu: 0.6, drop: 0.006 },
+  clay: { e: 0.81, mu: 0.78, drop: 0.005 },
+  grass: { e: 0.69, mu: 0.48, drop: 0.007 },
+};
+/** the surface the ball bounces on now (Match sets it: setGround) */
+let ground = GROUND.hard;
+let groundName: CourtSurface = 'hard';
+export function setGround(s: CourtSurface = 'hard') {
+  ground = GROUND[s] ?? GROUND.hard;
+  groundName = GROUND[s] ? s : 'hard';
+}
+export function groundOf(): CourtSurface {
+  return groundName;
+}
+/** Vertical restitution on the hard court at a gentle landing (the default surface). */
+export const BOUNCE_Y = GROUND.hard.e;
+/** spin 1 as the speed of the ball's surface (ω·r, m/s): a heavy topspin ball turns at about 3,000 rpm */
+export const SPIN_SURF = 10;
+/** the ball's moment of inertia over m·r² (a thin hollow shell) */
 const ALPHA = 0.67;
 
 export interface Vec3 {
@@ -57,15 +76,15 @@ export interface Seg {
 
 /**
  * Drag for a ball launched at `speed` m/s, `hspeed` of it horizontal (linear stand-in for the quadratic drag over
- * one flight, fitted on the game's shots from 6 to 22 m/s and −12° to 50°).
+ * one flight, fitted on the game's shots from 6 to 22 m/s and −12° to 50° and checked up to a 60 m/s serve).
  */
 export function dragFor(speed: number, hspeed = speed): number {
-  return Math.min(0.6, Math.max(0.06, C_DRAG * (0.32 * speed + 0.54 * hspeed)));
+  return Math.min(1.4, Math.max(0.06, C_DRAG * (0.32 * speed + 0.54 * hspeed)));
 }
 const dragOf = (v: Vec3) => dragFor(Math.hypot(v.x, v.y, v.z), Math.hypot(v.x, v.z));
-/** Effective gravity with spin: topspin 1 → 1.3 g, backspin −1 → 0.75 g. */
+/** Effective gravity with spin: topspin 1 → 1.55 g, backspin −1 → 0.7 g. */
 export function gravityFor(spin: number): number {
-  return G * (1 + (spin > 0 ? 0.3 : 0.25) * spin);
+  return G * (1 + (spin > 0 ? 0.55 : 0.3) * spin);
 }
 
 const fk = (k: number, dt: number) => (1 - Math.exp(-k * dt)) / k;
@@ -229,9 +248,9 @@ export function clearOver(from: Vec3, tx: number, tz: number, zp: number, h: num
   return clearanceFor(from, l.v, l.k, g);
 }
 
-/** Fastest sensible flight time over a horizontal distance (≈ 19 m/s average, about 25 off the paddle at most). */
+/** Fastest sensible flight time over a horizontal distance (≈ 30 m/s average, a hard flat groundstroke). */
 export function minFlight(d: number): number {
-  return Math.max(0.3, d / 19);
+  return Math.max(0.2, d / 30);
 }
 
 /** A segment that starts at `p` with velocity `v` at time t0 (drag from the speed unless given). */
@@ -252,42 +271,37 @@ export function bounce(s: Seg, t: number): Seg {
   const vh = Math.hypot(v.x, v.z);
   const vn = Math.max(0, -v.y);
   // (a sliced ball skids: it comes up a little lower, SLICE)
-  const ey = (BOUNCE_Y - 0.005 * Math.max(0, vn - 6)) * (s.spin <= SLICE.from ? 1 + SLICE.low * s.spin : 1);
+  const ey = (ground.e - ground.drop * Math.max(0, vn - 6)) * (s.spin <= SLICE.from ? 1 + SLICE.low * s.spin : 1);
   const wr = s.spin * SPIN_SURF;
   const jRoll = (ALPHA * (vh - wr)) / (1 + ALPHA);
-  const jMax = MU * (1 + ey) * vn;
+  const jMax = ground.mu * (1 + ey) * vn;
   const j = Math.max(-jMax, Math.min(jMax, jRoll));
   const vh2 = Math.max(0, vh - j);
   const kh = vh > 1e-6 ? vh2 / vh : 0;
   const nv = { x: v.x * kh, y: vn * ey, z: v.z * kh };
   let spin = Math.max(-1, Math.min(1, (wr + j / ALPHA) / SPIN_SURF));
-  // a sliced ball keeps part of its slice through the skid (the rigid-ball friction would turn it into topspin): off
-  // the back glass it then drops («se queda», wallBounce), a bandeja or a víbora does not kick up like a drive
+  // a sliced ball keeps part of its slice through the skid (the rigid-ball friction would turn it into topspin): it
+  // stays low and does not kick up like a drive
   if (s.spin <= SLICE.from) spin = Math.min(spin, SLICE.keep * s.spin);
   return { t0: t, x: p.x, y: R, z: p.z, vx: nv.x, vy: nv.y, vz: nv.z, spin, k: dragOf(nv), g: gravityFor(spin * 0.3) };
 }
 /**
- * A sliced ball on the floor (bounce), one cut at least `from` (a bandeja, a víbora, a dejada; not the serve's touch of
- * slice): `keep` of its backspin is left after the skid (at least), and it comes up `low` × the slice lower (a bandeja,
- * −0.55: 7 % lower).
+ * A sliced ball on the floor (bounce), one cut at least `from` (a slice, a drop shot, a drop volley): `keep` of its
+ * backspin is left after the skid (at least), and it comes up `low` × the slice lower (a slice, −0.55: 10 % lower).
  */
-export const SLICE = { from: -0.3, keep: 0.6, low: 0.12 };
+export const SLICE = { from: -0.3, keep: 0.6, low: 0.18 };
 
 export const NET_TOP = NET_C;
 
-// ------------------------------------------------------------------ walls
-
-/** Glass: restitution at a gentle touch and how much it drops per m/s of impact; the friction of the glass. */
-export const GLASS = { e: 0.72, eDrop: 0.008, eMin: 0.5, mu: 0.3 };
-/** Mesh: restitution, how much of the pace along it is left, and how far off line it sends the ball (rad). */
-export const MESH = { e: 0.32, keep: 0.55, scatter: 0.35 };
-
-/** which wall: the side walls (x = ±W/2) or the back walls (z = ±HL), and the sign of that coordinate */
-export interface WallHit {
-  t: number;
-  axis: 'x' | 'z';
-  sign: 1 | -1;
+/** What the ball meets next on a stretch: the floor, or nothing within `tMax`. */
+export type NextEvent = { kind: 'floor'; t: number };
+export function nextEvent(s: Seg, tMax = s.t0 + 12): NextEvent | null {
+  const tg = groundTime(s);
+  if (tg <= tMax) return { kind: 'floor', t: tg };
+  return null;
 }
+
+// ------------------------------------------------------------------ the boards (the dead ball only)
 
 /** Time (after t0) the centre of the ball on coordinate p0 moving at v0 (drag k) reaches c, or null. */
 function planeTime(p0: number, v0: number, k: number, c: number): number | null {
@@ -298,95 +312,27 @@ function planeTime(p0: number, v0: number, k: number, c: number): number | null 
   return -Math.log(u) / k;
 }
 
-/** First wall the ball meets on this stretch (its centre one radius off the wall), or null. */
-export function wallTime(s: Seg): WallHit | null {
-  let best: WallHit | null = null;
+/**
+ * The boards of the stands (court.ts, BOARDS) on this stretch: the time the ball meets them and which one, or null. Only
+ * the dead ball meets them (a live ball has bounced out, or been played, long before).
+ */
+export function boardTime(s: Seg, bx: number, bz: number): { t: number; axis: 'x' | 'z' } | null {
+  let best: { t: number; axis: 'x' | 'z' } | null = null;
   if (Math.abs(s.vx) > 1e-6) {
-    const sg = (s.vx > 0 ? 1 : -1) as 1 | -1;
-    const dt = planeTime(s.x, s.vx, s.k, sg * (W / 2 - R));
-    if (dt !== null) best = { t: s.t0 + dt, axis: 'x', sign: sg };
+    const dt = planeTime(s.x, s.vx, s.k, Math.sign(s.vx) * (bx - R));
+    if (dt !== null) best = { t: s.t0 + dt, axis: 'x' };
   }
   if (Math.abs(s.vz) > 1e-6) {
-    const sg = (s.vz > 0 ? 1 : -1) as 1 | -1;
-    const dt = planeTime(s.z, s.vz, s.k, sg * (HL - R));
-    if (dt !== null && (!best || s.t0 + dt < best.t)) best = { t: s.t0 + dt, axis: 'z', sign: sg };
+    const dt = planeTime(s.z, s.vz, s.k, Math.sign(s.vz) * (bz - R));
+    if (dt !== null && (!best || s.t0 + dt < best.t)) best = { t: s.t0 + dt, axis: 'z' };
   }
   return best;
 }
-
-/** a deterministic number in [0, 1) from a contact point (the mesh's irregular bounce) */
-function hash3(x: number, y: number, z: number): number {
-  const h = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453;
-  return h - Math.floor(h);
-}
-
-/**
- * The segment after meeting a wall at time t. The velocity into the wall comes back × restitution; along the wall the
- * friction acts on the slip of the contact patch (the ball's surface turning, ω × r, plus its own velocity along the
- * wall): topspin into the back glass makes it climb, backspin makes it drop. The mesh takes the pace off and sends the
- * ball off line.
- */
-export function wallBounce(s: Seg, hit: WallHit, surface: 'glass' | 'mesh'): Seg {
-  const t = hit.t;
+/** The dead ball off a board: it comes back slowly (the board is padded), its spin gone. */
+export function boardBounce(s: Seg, t: number, axis: 'x' | 'z'): Seg {
   const p = posAt(s, t);
   const v = velAt(s, t);
-  // the unit vector towards the wall
-  const dx = hit.axis === 'x' ? hit.sign : 0;
-  const dz = hit.axis === 'z' ? hit.sign : 0;
-  const vn = v.x * dx + v.z * dz; // > 0: into the wall
-  let tx = v.x - vn * dx;
-  let ty = v.y;
-  let tz = v.z - vn * dz;
-  // the surface of the ball at the contact: ω̂ = ŷ × û (û: the way it travels across the court), ω × (R·d)
-  const vh = Math.hypot(v.x, v.z);
-  const ux = vh > 1e-6 ? v.x / vh : 0;
-  const uz = vh > 1e-6 ? v.z / vh : 0;
-  // ŷ × û = (uz, 0, −ux); (ŷ × û) × d = (0·dz − (−ux)·0, (−ux)·dx − uz·dz, uz·0 − 0·dx) = (0, −ux·dx − uz·dz, 0)
-  const surfY = s.spin * SPIN_SURF * -(ux * dx + uz * dz);
-  let spin: number;
-  let nv: number;
-  if (surface === 'glass') {
-    const e = Math.max(GLASS.eMin, GLASS.e - GLASS.eDrop * Math.max(0, vn - 5));
-    nv = -vn * e;
-    // slip of the patch along the wall (vertical part carries the spin; the horizontal part only the glide)
-    const sy = ty + surfY;
-    const sh = Math.hypot(tx, tz);
-    const slip = Math.hypot(sy, sh);
-    if (slip > 1e-6) {
-      const j = Math.min(GLASS.mu * (1 + e) * vn, (ALPHA / (1 + ALPHA)) * slip);
-      ty -= (j * sy) / slip;
-      const kh = sh > 1e-6 ? Math.max(0, 1 - j / slip) : 1;
-      tx *= kh;
-      tz *= kh;
-    }
-    spin = s.spin * 0.4;
-  } else {
-    nv = -vn * MESH.e;
-    const a = (hash3(p.x, p.y, p.z) - 0.5) * 2 * MESH.scatter;
-    // off line: turn the pace along the wall and a little of the vertical
-    const c = Math.cos(a);
-    const sn = Math.sin(a);
-    const along = hit.axis === 'x' ? tz : tx;
-    const turned = along * MESH.keep * c + ty * MESH.keep * sn * 0.5;
-    ty = ty * MESH.keep * c - along * MESH.keep * sn * 0.3;
-    if (hit.axis === 'x') tz = turned;
-    else tx = turned;
-    spin = 0;
-  }
-  const nvx = tx + nv * dx;
-  const nvz = tz + nv * dz;
-  const out = { x: nvx, y: ty, z: nvz };
-  // (a hair off the wall so the next search does not find it again)
-  const from = { x: p.x - dx * 1e-4, y: p.y, z: p.z - dz * 1e-4 };
-  return seg(t, from, out, spin, undefined, gravityFor(spin * 0.3));
-}
-
-/** What the ball meets next on a stretch: the floor, a wall or nothing within `tMax`. */
-export type NextEvent = { kind: 'floor'; t: number } | { kind: 'wall'; t: number; hit: WallHit };
-export function nextEvent(s: Seg, tMax = s.t0 + 12): NextEvent | null {
-  const tg = groundTime(s);
-  const w = wallTime(s);
-  if (w && w.t < tg && w.t <= tMax) return { kind: 'wall', t: w.t, hit: w };
-  if (tg <= tMax) return { kind: 'floor', t: tg };
-  return null;
+  const nv = axis === 'x' ? { x: -v.x * 0.25, y: v.y * 0.6, z: v.z * 0.5 } : { x: v.x * 0.5, y: v.y * 0.6, z: -v.z * 0.25 };
+  const from = { x: p.x - Math.sign(v.x) * (axis === 'x' ? 1e-3 : 0), y: p.y, z: p.z - Math.sign(v.z) * (axis === 'z' ? 1e-3 : 0) };
+  return seg(t, from, nv, 0);
 }

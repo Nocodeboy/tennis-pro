@@ -1,42 +1,53 @@
 // The match: positions, the ball, the rules of a rally and the score. Deterministic for a given seed and the same
 // shot decisions, so the bot, the browser and (later) an online server run exactly the same code.
 //
-// Padel doubles (FIP rules), always four players: everything goes through `players` and `team`, never "the player"
-// and "the CPU".
-//  · The serve: underhand after a bounce, from behind the service line, diagonally into the box. Two serves; a let if
-//    it touches the net and bounces in; a fault if, after bouncing in, it hits the mesh before the second bounce.
-//  · The rally: the ball must bounce in the other half before touching anything else there; after the bounce it can
-//    come back off the glass or the mesh and is still live until it bounces a second time. Out of the court over the
-//    walls after bouncing («por 3») or back over the net («por 4»): the hitter's point. The return must bounce.
-//  · The score: 15-30-40, golden point at 40-40 (or advantages), games to a short set with a tie-break.
-//  · Each player keeps his side for the set (right, «drive», or left, «revés»); the receiver is the one in the box the
-//    serve goes to, the server serves from the right on even points of the game and the serve goes round the four.
+// Tennis (ITF rules), singles (two players) or doubles (four): everything goes through `players` and `team`, never
+// "the player" and "the CPU".
+//  · The serve: overhand from behind the baseline, diagonally into the service box. Two serves; a let if it touches the
+//    net and bounces in the box.
+//  · The rally: the ball must bounce inside the lines of the other half (singles or doubles sidelines, COURT) before
+//    touching anything else there, and be played before it bounces a second time; it may be volleyed. A ball that
+//    bounces out is the hitter's error. The return must bounce.
+//  · The score: 15-30-40, advantages (or the deciding point, no-ad), games to a set with a tie-break at games-games
+//    (to 10 in the deciding set of a best of five, as the Grand Slams do), one set or the best of three or five.
+//  · The serve: in singles it changes every game; in doubles it goes round the four, and each player keeps his side for
+//    the set (deuce or ad court) to receive. The server serves from the right on even points of the game.
+//  · The court's surface (Rules.surface) sets how the ball bounces (ball.ts, GROUND) and how deep the players wait.
 
-import { bounce, groundTime, minFlight, netTime, nextEvent, posAt, seg, shotByClearance, velAt, wallBounce, wallTime, type Seg, type Vec3, type WallHit } from './ball';
-import { AT_NET, DEPTH_Z, HL, NET_C, R, SERVICE, W, backSurface, inHalf, inServiceCourt, netHeight, serveOutBy, sideSurface, type Side, type Surface } from './court';
-import { BAJADA, LAUNCH, POR, POWER, Q_FLOOR, blockShot } from './brain';
+import { boardBounce, boardTime, bounce, groundTime, minFlight, netTime, nextEvent, posAt, seg, setGround, shotByClearance, velAt, type Seg, type Vec3 } from './ball';
+import { AT_NET, BOARDS, COURT, DEPTH_Z, HL, NET_C, R, SERVICE, halfW, inHalf, inServiceCourt, netHeight, outBy, serveOutBy, type CourtSurface, type Side } from './court';
+import { LAUNCH, POWER, Q_FLOOR, blockShot } from './brain';
 export { LAUNCH };
 import { Rng } from './rng';
 import type { MatchEvent, Plan, Player, PointReason, Rules, ServeFault, ShotKind, ShotSpec, Timing } from './types';
 import type { Attributes } from './attributes';
 
-/** Spin each kind of shot carries: topspin drives, sliced volleys, bandejas, víboras and chiquitas. */
-export const SPIN: Record<ShotKind, number> = { serve: -0.2, return: 0.2, drive: 0.6, speedup: 0.2, smash: 0.25, bandeja: -0.55, vibora: -0.75, bajada: 0.15, lob: 0.35, dink: -0.3, drop: -0.6, auto: -0.35 };
+/**
+ * Spin each kind of shot carries (a shot may ask for its own: ShotSpec.spin, the serve's flat, slice or kick):
+ * topspin groundstrokes and lobs, sliced backhands, drop shots and volleys, a flat smash.
+ */
+export const SPIN: Record<ShotKind, number> = { serve: 0.25, return: 0.4, drive: 0.65, slice: -0.6, speedup: 0.05, smash: 0.15, lob: 0.5, dink: -0.45, drop: -0.75, auto: -0.3 };
 const SOFT = new Set<ShotKind>(['dink', 'drop']);
 /**
- * A hard shot gone wrong (Match.launch) carries up to this × (0.3 + 1) × (1 − q) m long: on a 10 m half a deep drive
- * of a poor contact lands in the back glass on the fly (a fault), a short one only sits up.
+ * A hard shot gone wrong (Match.launch) carries up to this × (0.3 + 1) × (1 − q) m long: a deep drive of a poor contact
+ * lands past the baseline (out), a short one only sits up.
  */
-const LONG = 2.0;
+const LONG = 1.4;
 /**
- * Where a poor contact (and a shank) goes, by where it was hit (Match.launch). In padel most errors go into the net;
- * the back glass on the fly is a minority (a drive or a lob from the back that carries).
+ * Where a shot lands around its target (Match.launch): a gaussian, σ = (`base` + (1 − q) × `k`) m across, `deep` × as
+ * much along the court, × the power model (POWER.spread, calm); the height over the tape `height` × σ (and each metre
+ * higher carries the ball `carry` m deeper; a serve `serveCarry` of it, less with kick). The serve × `serve` (a short
+ * target, a rehearsed motion), the soft shots
+ * × `soft`, the lob × `lob`. A clean contact (q 0.9) scatters about 0.3 m across, a poor one (0.6) 0.8 m.
+ */
+export const SCATTER = { base: 0.14, k: 1.9, deep: 1.3, height: 0.85, carry: 1.5, serve: 0.6, serveCarry: 0.6, soft: 0.6, lob: 0.8 };
+/**
+ * Where a poor contact (and a shank) goes, by where it was hit (Match.launch). In tennis the errors from the back are
+ * long, wide and into the net, about as many each (a deep ball has the most room to go out).
  *  · From the net (a volley, an overhead): `closeUp` of the poor ones sit up (high and short, a ball to attack), the
- *    rest go low (into the net). A shank (`shankClose`): into the net, a sitter, the rest off the frame wide over the
- *    side mesh.
+ *    rest go low (into the net). A shank (`shankClose`): into the net, a sitter, the rest off the frame wide.
  *  · From the back: a poor hard shot sails long with chance `long` (`longLow` off a low ball), floats up short up to
- *    `backUp` (cumulative), the rest go low. A shank (`shankBack`): into the net, long into the back glass, the rest
- *    off the frame into the side glass.
+ *    `backUp` (cumulative), the rest go low. A shank (`shankBack`): into the net, long, the rest off the frame wide.
  */
 export const MISHIT = { closeUp: 0.7, long: 0.3, longLow: 0.4, backUp: 0.6, shankClose: [0.4, 0.48] as [number, number], shankBack: [0.55, 0.25] as [number, number] };
 
@@ -70,23 +81,26 @@ export interface Controller {
   read?(m: Match, p: Player, plan: Plan): { dx: number; dz: number; at: number } | null;
   /** the player's card (attributes 0 … 99), when he has one: how heavy his balls are to handle (brain.ts, CARD.weight) */
   readonly card?: Attributes;
-  /** m: the highest ball this player can meet over the head (the jump; the card's rem). Default 2.9 */
+  /** m: the highest ball this player can meet over the head (the jump; the card's red). Default 3.0 */
   readonly reachH?: number;
   /**
-   * 0 … 1: how much the planner values a bajada for this player (a ball come back high off the back glass: the card's
-   * par), so they wait for it at a good height instead of letting it drop (BAJADA). Default 0
+   * CPU players in singles: where to go after their own shot (the depth and the spot across), decided with the shot
+   * (brain.ts, placeSingles). null or absent: the match's own habits (afterHit).
    */
-  readonly bajada?: number;
+  place?(m: Match, p: Player, spec: ShotSpec): { depth: 0 | 1 | 2; x: number } | null;
+  /** m: how much further back than usual this player waits for a first serve (a returner who stands deep). Default 0 */
+  readonly retBack?: number;
 }
 
 /**
- * Over the head, the planner prefers a contact no higher than `ideal` m (`k` per metre above it): a bandeja or a
- * víbora is met at 2.3–2.6 m in real padel, not at the top of the jump. A ball come back off the back glass is never
- * met above `fromBehind` m: it comes from behind the player, over his head.
+ * Over the head, the planner prefers a contact no higher than `ideal` m (`k` per metre above it): a smash is met with
+ * the arm up, not at the top of a jump. A lob over a player at the net is smashed before it bounces when he can get
+ * under it within `keepTo` m of the net (`keep` off the cost); further back, running back for it, it is a scramble
+ * (`deep` per metre): letting it bounce is the better ball.
  */
-export const OVERHEAD = { ideal: 2.5, k: 0.8, fromBehind: 2.2, keep: 1.3, keepTo: 6.8, deep: 0.5 };
+export const OVERHEAD = { ideal: 2.6, k: 0.6, keep: 0.8, keepTo: 7.5, deep: 0.35 };
 /**
- * The ball and the players' bodies (FIP: a live ball that touches a player is the point of the other team).
+ * The ball and the players' bodies (ITF: a live ball that touches a player is the point of the other side).
  *  · `r`, `lo`, `hi`: the body, a cylinder of radius r (m) from lo to hi (m) around the player's axis (`rLegs` below
  *    `legs` m).
  *  · The planner (planContact) keeps CPU players out of the ball's way: a contact whose way there (and the wait on the
@@ -101,8 +115,7 @@ export const OVERHEAD = { ideal: 2.5, k: 0.8, fromBehind: 2.2, keep: 1.3, keepTo
  *    more, at most]: only the truly unplayable ones (very fast, very close, no time) are body points.
  *  · The rule (Match.bodyHit): the ball touching a receiving player is the hitter's point (PointReason 'body'), except
  *    at his own contact (within `contact` s of it: the paddle is there), a ball he reached for and missed (it went past
- *    the paddle), a ball on its way to the glass he is waiting to play off it, and, after the bounce, the human's player
- *    (his feet are his thumb's; nobody steps him aside).
+ *    the racket), and, after the bounce, the human's player (his feet are his thumb's; nobody steps him aside).
  */
 export const BODY = { r: 0.2, legs: 0.7, rLegs: 0.14, lo: 0.12, hi: 1.75, clear: 0.42, plan: 1.5, near: 0.32, step: 0.6, look: 0.6, before: 0.3, contact: 0.12, reflexAt: 0.5, reflex: 0.6, block: 0.14, blockQ: [0.45, 1.0, 0.7] as [number, number, number] };
 /**
@@ -123,10 +136,15 @@ export const FIT = { k: 1, run: 0.0032, sprint: 1.6, hit: 0.03, rest: 0.045, gam
 export interface Mover {
   /** 0 … 1: how readily they move up to the net */
   netRush: number;
-  /** chance of volleying a ball that was going straight into the glass (the other side's fault if left alone) */
+  /** chance of volleying a ball that was going out (the other side's error if left alone) */
   misjudge: number;
   /** CPU players: how far past the spot they can still reach with a lunge (m) */
   lunge?: number;
+  /**
+   * Singles, CPU players: how much they lean towards the ball's side when they wait (0: on the bisector of the reply's
+   * angles; more: guarding the line, leaving the cross-court open). Court sense keeps it low. Default 0.3
+   */
+  shade?: number;
 }
 
 export interface PlayerCfg {
@@ -314,8 +332,14 @@ export function footStep(p: { vx: number; vz: number }, wx: number, wz: number, 
 }
 /** how close the feet must be to the planned spot to make the contact */
 const REACH_TOL = 0.5;
-/** manual players: how far from the ideal spot they can still reach with a lunge */
-export const LUNGE = 1.0;
+/** manual players: how far from the ideal spot they can still reach with a lunge (a racket's reach) */
+export const LUNGE = 1.15;
+/**
+ * Where the feet are for a contact (planContact): `ground` m to the side of the ball after the bounce (a groundstroke,
+ * the racket at the end of a bent arm), `volley` m for a volley, `over` m for a smash; the ball `front` m in front of the
+ * body (met in front, not beside him).
+ */
+export const REACH = { ground: 0.72, volley: 0.62, over: 0.3, front: 0.3 };
 /**
  * The suggested spot (the circle) is planned for a person, not for a thumb that reacts at once
  * (docs/concepto.md, «Control y simulación 0.7»):
@@ -349,8 +373,7 @@ export const POACH = { chance: 0.5 };
 export const CPU_LUNGE = { time: 0.25, min: 0 };
 /**
  * CPU players choose among the contacts they can make (planContact): one with less than `want` s to spare costs `cost`
- * per second short. Padel has more choice than pickleball (volley it, let it bounce, let it come off the glass), and
- * without this they went for the earliest volley at full stretch and missed one in eleven balls.
+ * per second short. Without this they went for the earliest volley at full stretch and missed one in eleven balls.
  */
 export const PLAN_SPARE = { want: 0.2, cost: 4 };
 /**
@@ -370,11 +393,14 @@ function lungeAt(lunge: number, dt: number): number {
   if (CPU_LUNGE.time <= 0) return lunge;
   return lunge * Math.max(0, Math.min(1, CPU_LUNGE.min + ((1 - CPU_LUNGE.min) * dt) / CPU_LUNGE.time));
 }
-/** the playing area inside the walls: nobody runs through the glass */
-export const AREA_X = W / 2 - 0.3;
-export const AREA_Z = HL - 0.3;
-/** a ball closer than this to a wall cannot be swung at (the paddle would hit the glass) */
-const WALL_GAP = { side: 0.3, back: 0.38 };
+/**
+ * How much deeper than DEPTH_Z[0] the players wait at the back on each surface (m): on clay the ball kicks up high and
+ * they rally further back; on grass it stays low and they stand closer to the baseline.
+ */
+export const BACK_Z: Record<CourtSurface, number> = { hard: 0, clay: 0.9, grass: -0.4 };
+/** the playing area: the court and its run-off, short of the boards of the stands */
+export const AREA_X = BOARDS.x - 0.7;
+export const AREA_Z = BOARDS.z - 0.9;
 /** pause after a point before the next serve */
 const DEAD_TIME = 1.6;
 /** the human can cut the pause short with a tap (Match.hurry), but not below this: the banner says why the point ended */
@@ -397,13 +423,18 @@ const FRESH_OFF = cosd(35);
  */
 export const ASSIST = { see: 0.18, idle: [0, 1.2, 2.4] };
 /**
- * The serve's wind-up: from the moment the server lets go (the controller returns the serve) to the contact. It is
- * the contact frame of the serve clip (assets/anims/serve.json, measured in render/chars.ts), so the view can play
- * the backswing and drop the ball from the free hand in time.
+ * The serve's wind-up: from the moment the server lets go (the controller returns the serve) to the contact: the toss,
+ * the trophy position and the racket drop. It is the contact of the serve clip (render/keyposes.ts, SERVE_CLIP), so
+ * the view can toss the ball and swing in time.
  */
-export const SERVE_WINDUP = 0.87;
-/** height of the serve contact (m): underhand, below the waist, where the serve clip's paddle can get to */
-export const SERVE_HEIGHT = 0.7;
+export const SERVE_WINDUP = 1.05;
+/** height of the serve contact (m): overhand, the arm and the racket up and a little jump */
+export const SERVE_HEIGHT = 2.75;
+/**
+ * Where the server stands and meets the ball: `back` m behind the baseline, the contact `in` m inside it (he leans and
+ * jumps in) and `right` m to his right; across, `x` m from the centre mark in singles, `xD` in doubles (wider).
+ */
+export const SERVE_SPOT = { back: 0.15, in: 0.35, right: 0.25, x: 0.55, xD: 2.4 };
 /** the pause after a serve fault before the second serve */
 const FAULT_TIME = 1.0;
 
@@ -417,18 +448,14 @@ interface Rally {
   tNet: number | null;
   netDone: boolean;
   tGround: number;
-  /** next wall on this stretch */
-  wall: WallHit | null;
+  /** when (and which) the ball meets the boards of the stands on this stretch (null: it does not) */
+  board: { t: number; axis: 'x' | 'z' } | null;
   /** the ball has crossed the net since the last hit */
   crossed: boolean;
-  /** walls met since the last hit */
-  walls: number;
   /** the serve clipped the net (a let if it then bounces in the box) */
   tape: boolean;
   /** the serve must land in this half of the receiver's service courts (sign of x) */
   serveHalf: 1 | -1;
-  /** the wall the ball last came off since it bounced (x: a side wall, z: the back glass), null: none yet */
-  lastWall: 'x' | 'z' | null;
 }
 
 /** One stretch of the ball's coming path (Match.path): from t0 to t1, after `floor` floor bounces since the hit. */
@@ -437,8 +464,6 @@ interface Leg {
   t0: number;
   t1: number;
   floor: number;
-  /** the wall this stretch starts from (absent: it starts from the hit, the floor or the tape) */
-  wall?: 'x' | 'z';
 }
 
 export class Match {
@@ -478,8 +503,12 @@ export class Match {
     perfectBy: [] as number[],
     errorsBy: [] as number[],
   };
-  /** always true in padel (kept for the code that reads it) */
-  readonly doubles = true;
+  /** four players (doubles) or two (singles): the lines in play (COURT) and who covers what */
+  readonly doubles: boolean;
+  /** the court's surface (Rules.surface): the bounce (ball.ts, GROUND) and how deep they wait at the back */
+  readonly surface: CourtSurface;
+  /** how far from the net the players wait at the back (DEPTH_Z[0] on a hard court; deeper on clay, closer on grass) */
+  readonly backZ: number;
   /** who serves now */
   serverId = -1;
   /** first or second serve */
@@ -490,7 +519,7 @@ export class Match {
   owner = -1;
   /** the coming ball was already passed on once (to the partner of a player who could not make it) */
   private passed = -1;
-  /** the order of the servers round the four (set at the toss): game g is served by order[g % 4] */
+  /** the order of the servers (set at the toss): game g is served by order[g % n] (two in singles, four in doubles) */
   private order: number[] = [];
   /** games played in the set (whose turn it is to serve) */
   private played = 0;
@@ -506,8 +535,12 @@ export class Match {
     readonly rules: Rules,
     seed: number,
   ) {
-    if (cfgs.length !== 4) throw new Error('padel is played two a side');
+    if (cfgs.length !== 2 && cfgs.length !== 4) throw new Error('tennis is played one or two a side');
     this.rng = new Rng(seed);
+    this.doubles = cfgs.length === 4;
+    this.surface = rules.surface ?? 'hard';
+    this.backZ = DEPTH_Z[0] + BACK_Z[this.surface];
+    this.apply();
     cfgs.forEach((c, i) => {
       const side: Side = c.team === 0 ? 1 : -1;
       this.players.push({
@@ -516,7 +549,7 @@ export class Match {
         side,
         human: c.human,
         x: 0,
-        z: side * DEPTH_Z[0],
+        z: side * this.backZ,
         vx: 0,
         vz: 0,
         speed: c.speed,
@@ -524,7 +557,7 @@ export class Match {
         plan: null,
         moveFrom: 0,
         homeX: 0,
-        homeZ: side * DEPTH_Z[0],
+        homeZ: side * this.backZ,
         depth: 0,
         lastHit: null,
         look: c.look,
@@ -535,6 +568,20 @@ export class Match {
       this.stats.perfectBy.push(0);
       this.stats.errorsBy.push(0);
     });
+  }
+
+  /**
+   * This match's court for the shared sim modules: the lines in play (COURT.singles) and the surface the ball bounces on
+   * (ball.ts, setGround). Called on every step, so a second match alive at the same time (the menu's) cannot leave its
+   * court behind.
+   */
+  apply() {
+    COURT.singles = !this.doubles;
+    setGround(this.surface);
+  }
+  /** how far from the net a player waits at each depth (0 back, 1 halfway, 2 at the net), on this surface */
+  depthZ(d: 0 | 1 | 2): number {
+    return d === 0 ? this.backZ : DEPTH_Z[d];
   }
 
   setControllers(cs: Controller[]) {
@@ -553,8 +600,8 @@ export class Match {
     return this.players.find((q) => q.team === p.team && q !== p) ?? p;
   }
   /**
-   * Who plays the right side («drive») of `team` (right from the team's own view): the team's first player, for the
-   * whole set; the other one plays the left («revés»).
+   * Doubles: who receives in the deuce court (the right, from the team's own view) for `team`: the team's first player,
+   * for the whole set; the other one receives in the ad court (the left). Singles: the one player.
    */
   rightOf(team: 0 | 1): Player {
     return this.team(team)[0];
@@ -653,9 +700,9 @@ export class Match {
   }
 
   /**
-   * The golden point: the receiving pair chooses who returns (Premier Padel), and the serve goes to his box (from the
-   * server's right or left). A CPU pair picks its better returner (con, ref and par of the cards); the human's pair
-   * keeps `goldenSide` (the right-side player unless the UI lets the player choose).
+   * The deciding point (no-ad, Rules.golden): the receiving side chooses the box (ITF, Appendix: in doubles, who
+   * returns), and the serve goes to it. A CPU pair picks its better returner (con and ref of the cards); a CPU in singles
+   * the deuce court; the human keeps `goldenSide` (the right, the deuce court, unless the UI lets the player choose).
    */
   goldenSide: 'right' | 'left' = 'right';
   /** this point is a golden point and the serve goes to the right box (true) or the left one (false); null: as usual */
@@ -668,50 +715,54 @@ export class Match {
     const ca = this.controllers[a.id]?.card;
     const cb = this.controllers[b.id]?.card;
     if (!ca || !cb) return true;
-    const sc = (c: Attributes) => c.con + c.ref + c.par * 0.5;
+    const sc = (c: Attributes) => c.con + c.ref;
     return sc(ca) >= sc(cb);
   }
 
   /** Puts everybody in place for the next serve. */
   setupServe() {
+    this.apply();
     this.goldenRight = null;
     if (this.goldenPoint()) this.goldenRight = this.goldenReturner();
     const st = this.serverTeam;
     const srv = this.server();
     const sx = this.serveX(st);
-    // the receiver: the opponent who plays the box the serve goes to (right court to right court)
-    const rcv = this.team(st === 0 ? 1 : 0).find((q) => this.courtX(q) === this.serveX(q.team))!;
+    // the receiver: the opponent who plays the box the serve goes to (deuce court to deuce court); singles: the one
+    const rt = this.other(st);
+    const rcv = this.doubles ? this.team(rt).find((q) => this.courtX(q) === this.serveX(q.team))! : this.team(rt)[0];
     this.receiverId = rcv.id;
     this.owner = -1;
     this.passed = -1;
+    // (a second serve is slower: the receiver steps in)
+    const second = this.serveNum === 2 || this.reserve === 'fault';
     for (const p of this.players) {
       p.plan = null;
       p.vx = p.vz = 0;
       p.lastHit = null;
       if (p === srv) {
-        // behind the service line, a step off the centre line
-        p.x = sx * 1.3;
-        p.z = p.side * (SERVICE + 1.0);
-        p.depth = 1;
+        // just behind the baseline, beside the centre mark (wider in doubles)
+        p.x = sx * (this.doubles ? SERVE_SPOT.xD : SERVE_SPOT.x);
+        p.z = p.side * (HL + SERVE_SPOT.back);
+        p.depth = 0;
         p.lane = sx;
       } else if (p.team === st) {
         // the server's partner waits at the net, in the other half
-        p.x = -sx * 2.4;
-        p.z = p.side * DEPTH_Z[2];
+        p.x = -sx * 2.9;
+        p.z = p.side * (DEPTH_Z[2] + 0.4);
         p.depth = 2;
         p.lane = -sx as 1 | -1;
       } else {
-        const c = this.courtX(p);
+        const c = this.doubles ? this.courtX(p) : this.serveX(rt);
         p.lane = c;
         if (p === rcv) {
-          // the receiver, a good step in front of the back glass
-          p.x = c * 2.7;
-          p.z = p.side * (HL - 1.4);
+          // the receiver: across from the server's angle, behind the baseline (further back on clay and for a first serve)
+          p.x = c * (this.doubles ? 3.3 : 2.7);
+          p.z = p.side * (HL + (second ? 0.2 : 0.9 + (this.controllers[p.id]?.retBack ?? 0)) + BACK_Z[this.surface] * 0.6);
           p.depth = 0;
         } else {
-          // the receiver's partner, around the service line in the other half
-          p.x = c * 2.5;
-          p.z = p.side * (SERVICE + 0.3);
+          // the receiver's partner, on the service line in the other half
+          p.x = c * 2.3;
+          p.z = p.side * (SERVICE + 0.4);
           p.depth = 1;
         }
       }
@@ -730,10 +781,10 @@ export class Match {
 
   start() {
     this.serverTeam = this.rng.chance(0.5) ? 0 : 1;
-    // the order round the four: the first server, then the other team, then the partners
+    // the order of the servers: the first server, then the other side (doubles: then the partners)
     const a = this.team(this.serverTeam);
     const b = this.team(this.serverTeam === 0 ? 1 : 0);
-    this.order = [a[0].id, b[0].id, a[1].id, b[1].id];
+    this.order = this.doubles ? [a[0].id, b[0].id, a[1].id, b[1].id] : [a[0].id, b[0].id];
     this.played = 0;
     this.serverId = this.order[0];
     this.serveNum = 1;
@@ -754,15 +805,18 @@ export class Match {
   }
 
   step(h: number) {
+    this.apply();
     const t1 = this.t + h;
     if (this.phase === 'serve') {
       const s = this.server();
       if (this.servePending) {
         const spec = this.controllers[s.id].serve(this, s);
         if (spec) {
-          // the shot (and the human's timing) is decided now; the ball leaves the paddle after the wind-up
+          // the shot (and the human's timing) is decided now; the ball leaves the racket after the wind-up: the toss,
+          // the trophy position, the racket drop (the contact up and in front, inside the baseline, to his right)
           this.servePending = false;
-          this.windup = { pid: s.id, at: this.t + SERVE_WINDUP, x: s.x - s.side * 0.15, y: SERVE_HEIGHT, z: s.z - s.side * 0.35, spec };
+          const c = Match.serveContact(s);
+          this.windup = { pid: s.id, at: this.t + SERVE_WINDUP, ...c, spec };
           this.events.push({ type: 'serveStart', pid: s.id, at: this.windup.at });
         }
       }
@@ -793,12 +847,17 @@ export class Match {
     this.t = t1;
   }
 
+  /** Where a server standing at `s` meets the ball (SERVE_SPOT): up, in front, inside the baseline, to his right. */
+  static serveContact(s: { x: number; z: number; side: Side }): Vec3 {
+    return { x: s.x + s.side * SERVE_SPOT.right, y: SERVE_HEIGHT, z: s.side * (HL - SERVE_SPOT.in) };
+  }
+
   // ------------------------------------------------------------------ the rally
-  /** A new stretch of flight for the rally: when it meets the net's plane, the floor and the walls. */
+  /** A new stretch of flight for the rally: when it meets the net's plane and the floor. */
   private setSeg(r: Rally, s: Seg) {
     r.seg = s;
     r.tGround = groundTime(s);
-    r.wall = wallTime(s);
+    r.board = boardTime(s, BOARDS.x, BOARDS.z);
     r.tNet = netTime(s);
     r.netDone = r.tNet === null;
   }
@@ -807,7 +866,7 @@ export class Match {
     for (let guard = 0; guard < 12 && this.phase === 'rally'; guard++) {
       const r = this.rally!;
       let te = Infinity;
-      let kind: 'net' | 'ground' | 'wall' | 'hit' | null = null;
+      let kind: 'net' | 'ground' | 'board' | 'hit' | null = null;
       let hitter: Player | null = null;
       if (!r.netDone && r.tNet !== null && r.tNet < te) {
         te = r.tNet;
@@ -817,9 +876,9 @@ export class Match {
         te = r.tGround;
         kind = 'ground';
       }
-      if (r.wall && r.wall.t < te) {
-        te = r.wall.t;
-        kind = 'wall';
+      if (r.board && r.board.t < te) {
+        te = r.board.t;
+        kind = 'board';
       }
       for (const p of this.players) {
         if (p.plan && p.plan.t < te) {
@@ -838,7 +897,7 @@ export class Match {
       if (te > t1 || kind === null) return;
       if (kind === 'net') this.onNet(te);
       else if (kind === 'ground') this.onGround(te);
-      else if (kind === 'wall') this.onWall(te);
+      else if (kind === 'board') this.onBoard(te);
       else this.onContact(hitter!, te);
     }
   }
@@ -869,7 +928,7 @@ export class Match {
     return true;
   }
 
-  /** The ball touches `p` (a receiving player): the point is the hitter's (FIP), and the ball drops off him. */
+  /** The ball touches `p` (a receiving player): the point is the hitter's (ITF), and the ball drops off him. */
   private onBody(p: Player, t: number) {
     const r = this.rally!;
     const q = posAt(r.seg, t);
@@ -884,10 +943,11 @@ export class Match {
     const p = posAt(r.seg, t, this.pv);
     const hitter = r.last!;
     if (r.crossed) {
-      // after bouncing in it goes back over the net to the hitter's side («por 4»): the hitter's point
+      // after bouncing in it spins back over the net to the hitter's side (a drop shot with heavy backspin, a dead net
+      // cord): nobody played it, the hitter's point
       if (r.bounces > 0) {
         this.deadSeg = r.seg;
-        this.endPoint(hitter.team, 'back', null, t);
+        this.endPoint(hitter.team, this.whyUnplayed(hitter), null, t);
       }
       return;
     }
@@ -938,12 +998,18 @@ export class Match {
     if (r.bounces === 0) {
       let good = true;
       let close = false;
+      let out = 0;
       if (r.shots === 1) {
         good = inServiceCourt(p.x, p.z, recvSide, r.serveHalf);
-        const ob = serveOutBy(p.x, p.z, recvSide, r.serveHalf);
-        close = good ? Math.abs(p.z * recvSide - SERVICE) < 0.12 || Math.abs(p.x) < 0.1 : ob < 0.12;
-      } else good = inHalf(p.x, p.z, recvSide);
-      this.events.push({ type: 'bounce', x: p.x, z: p.z, good, first: true, close });
+        out = serveOutBy(p.x, p.z, recvSide, r.serveHalf);
+        close = good ? Math.abs(p.z * recvSide - SERVICE) < 0.12 || Math.abs(p.x) < 0.1 || Math.abs(Math.abs(p.x) - halfW(true)) < 0.12 : out < 0.12;
+      } else {
+        good = inHalf(p.x, p.z, recvSide);
+        out = outBy(p.x, p.z, recvSide);
+        const hw = halfW();
+        close = good ? Math.abs(p.z * recvSide - HL) < 0.12 || Math.abs(Math.abs(p.x) - hw) < 0.12 : out < 0.12;
+      }
+      this.events.push({ type: 'bounce', x: p.x, z: p.z, good, first: true, close, ...(good ? {} : { out }) });
       this.setSeg(r, bounce(r.seg, t));
       if (!good) {
         this.deadSeg = r.seg;
@@ -958,7 +1024,6 @@ export class Match {
         return;
       }
       r.bounces = 1;
-      r.lastWall = null;
       return;
     }
     // second bounce: nobody got to it
@@ -967,62 +1032,24 @@ export class Match {
     this.endPoint(hitter.team, this.whyUnplayed(hitter), null, t);
   }
 
+  /**
+   * The live ball reaches the boards of the stands: on the full (it never bounced in) it is out, the hitter's error (a
+   * serve: a fault); after bouncing in, nobody played it: the hitter's point.
+   */
+  private onBoard(t: number) {
+    const r = this.rally!;
+    const hitter = r.last!;
+    this.deadSeg = boardBounce(r.seg, t, r.board!.axis);
+    r.board = null;
+    if (r.crossed && r.bounces > 0) this.endPoint(hitter.team, this.whyUnplayed(hitter), null, t);
+    else if (r.shots === 1) this.serveFault('serveOut', t);
+    else this.endPoint(this.other(hitter.team), 'out', hitter.id, t);
+  }
+
   /** why a ball in was not returned: a clean winner, one someone went for and did not reach, or one let go */
   private whyUnplayed(hitter: Player): PointReason {
     const recv = this.players.filter((q) => q.team !== hitter.team);
     return recv.some((q) => this.letGo[q.id]) ? 'letGo' : recv.some((q) => this.chased[q.id] || (q.plan && !q.plan.reach)) ? 'miss' : 'winner';
-  }
-
-  /** What the ball meets at a wall hit (glass, mesh, or nothing: over the top). */
-  surfaceOf(s: Seg, hit: WallHit): Surface {
-    const p = posAt(s, hit.t, this.pv2);
-    return hit.axis === 'x' ? sideSurface(Math.abs(p.z), p.y) : backSurface(p.y);
-  }
-
-  private onWall(t: number) {
-    const r = this.rally!;
-    const hit = r.wall!;
-    const hitter = r.last!;
-    const recvSide = -hitter.side as Side;
-    const p = posAt(r.seg, t);
-    const v = velAt(r.seg, t);
-    const surface = this.surfaceOf(r.seg, hit);
-    // the half of the court the wall is in
-    const wz = hit.axis === 'z' ? hit.sign * HL : p.z;
-    const theirs = wz * recvSide > 0;
-    if (surface === 'open') {
-      // over the top: out of the court. After bouncing in, the hitter's («por 3»); before, his fault
-      r.wall = null;
-      r.tGround = Infinity;
-      r.tNet = null;
-      r.netDone = true;
-      this.deadSeg = r.seg;
-      if (r.crossed && r.bounces > 0) this.endPoint(hitter.team, 'exit', null, t);
-      else if (r.shots === 1) this.serveFault('serveOut', t);
-      else this.endPoint(this.other(hitter.team), 'out', hitter.id, t);
-      return;
-    }
-    this.events.push({ type: 'wall', x: p.x, y: p.y, z: p.z, surface, speed: Math.hypot(v.x, v.y, v.z) });
-    if (theirs && r.bounces === 0) {
-      // straight into their wall without bouncing first: the hitter's fault
-      this.setSeg(r, wallBounce(r.seg, hit, surface));
-      this.deadSeg = r.seg;
-      if (r.shots === 1) this.serveFault('serveOut', t);
-      else this.endPoint(this.other(hitter.team), 'wall', hitter.id, t);
-      return;
-    }
-    if (theirs && r.shots === 1 && surface === 'mesh') {
-      // the serve, after bouncing in, into the mesh: a fault
-      this.setSeg(r, wallBounce(r.seg, hit, surface));
-      this.deadSeg = r.seg;
-      this.serveFault('serveFence', t);
-      return;
-    }
-    // off the glass (or the mesh): still live. The plans already counted on it (Match.path follows the walls, and
-    // the mesh is deterministic), so nobody has to read the ball again.
-    this.setSeg(r, wallBounce(r.seg, hit, surface));
-    r.walls++;
-    if (r.bounces > 0) r.lastWall = hit.axis;
   }
 
   /** A serve fault: a second serve after the first, the point after the second. */
@@ -1075,7 +1102,7 @@ export class Match {
     const bp = posAt(r.seg, t);
     if (Math.hypot(bp.x - plan.bx, bp.y - plan.by, bp.z - plan.bz) > 0.3) return;
     if (manual && ctl.swing && !ctl.swing(this, p, plan)) {
-      // no swing: this chance goes by (another may come after the bounce or off the glass)
+      // no swing: this chance goes by (another may come after the bounce)
       this.declined = t;
       return;
     }
@@ -1136,21 +1163,22 @@ export class Match {
     if (spec.kind === 'lob') {
       clear0 *= 1 - dp * 0.3;
       tz += recvSide * dp * 0.6;
-    } else if (!soft && spec.kind !== 'smash' && spec.kind !== 'bandeja' && spec.kind !== 'vibora') clear0 = Math.max(0.03, clear0 * (1 - dp * POWER.clear));
-    const spread = (0.06 + bad * 0.75) * (dp > 0 ? 1 + dp * POWER.spread * pw : 1 + dp * POWER.calm * pw);
-    // por 3 / por 4 (brain.ts, POR): a poor contact loses pace and lands off, deeper or shorter; the spin is the shot's
-    let spinOf: number | null = null;
-    if (spec.special) {
-      pace *= 1 + bad * POR.slow;
-      tz += recvSide * this.rng.gauss() * POR.scatter * (POR.base + bad);
-      spinOf = spec.special === 'por3' ? POR.spin3 : POR.spin4 * (0.6 + 0.4 * q);
-    }
-    const a = this.rng.next() * Math.PI * 2;
-    const rr = spread * Math.sqrt(this.rng.next());
-    tx += Math.cos(a) * rr;
-    tz += Math.sin(a) * rr * 1.1;
-    const u = this.rng.next();
+    } else if (!soft && spec.kind !== 'smash' && spec.kind !== 'serve') clear0 = Math.max(0.03, clear0 * (1 - dp * POWER.clear));
+    // Where it goes (SCATTER): a gaussian around the target, more along the court than across, and the height over the
+    // tape with it: a ball hit higher flies longer, a lower one shorter or into the net (the two go together)
+    const serve = spec.kind === 'serve';
+    const kSc = serve ? SCATTER.serve : soft ? SCATTER.soft : spec.kind === 'lob' ? SCATTER.lob : 1;
+    const sig = (SCATTER.base + bad * SCATTER.k) * kSc * (dp > 0 ? 1 + dp * POWER.spread * pw : 1 + dp * POWER.calm * pw);
+    tx += this.rng.gauss() * sig;
+    tz += recvSide * this.rng.gauss() * sig * SCATTER.deep;
     let clear = clear0;
+    if (!soft && spec.kind !== 'lob') {
+      const dh = this.rng.gauss() * sig * SCATTER.height;
+      clear += dh;
+      // (a serve with kick dips into the box: the height carries it less)
+      tz += recvSide * dh * SCATTER.carry * (serve ? SCATTER.serveCarry * (1 - Math.max(0, spec.spin ?? 0) * 0.6) : 1);
+    }
+    const u = this.rng.next();
     if (soft) {
       // a poor soft shot mostly floats up and carries long (a ball the other side can volley and attack); only a
       // really poor one, or one scooped off the floor, dies in the tape. A poor block of a hard ball sends its pace
@@ -1199,8 +1227,8 @@ export class Match {
       }
     }
     // Off the frame (ShotSpec.shank), by where it was hit (MISHIT): a soft shot dies in the net. A volley or an
-    // overhead at the net goes into the net, pops up as a sitter, or flies off the frame wide over the side; a swing
-    // from the back goes into the net, sails long into the back glass, or off the frame into the side glass.
+    // overhead at the net goes into the net, pops up as a sitter, or flies off the frame wide; a swing from the back
+    // goes into the net, sails long, or off the frame wide.
     const shanked = !!spec.shank && this.rng.chance(spec.shank);
     if (shanked) {
       const v = this.rng.next();
@@ -1217,24 +1245,25 @@ export class Match {
           tz = recvSide * (HL + 0.4 + u * 1.6);
         }
       } else {
-        // off the frame, wide: up and over the side mesh around the net, or into the side glass from the back
-        clear += close ? 3 + u : 0.2 + u * 0.4;
-        tx = (Math.sign(tx - from.x) || 1) * (W / 2 + 0.5 + u);
+        // off the frame, wide: up and out over the sideline
+        clear += close ? 2 + u : 0.2 + u * 0.4;
+        tx = (Math.sign(tx - from.x) || 1) * (halfW() + 0.5 + u);
         tz = recvSide * (close ? 2.5 + u * 2.5 : Math.min(HL - 1, Math.max(3, Math.abs(tz) * 0.7)));
       }
     }
     // a target behind the net-side of the receiver's half still lands on their side
     if (tz * recvSide < 0.25) tz = recvSide * 0.25;
     const d = Math.hypot(tx - from.x, tz - from.z);
-    // (never faster than a top pro's hardest remate)
+    // (never faster than a top pro's hardest serve)
     const minT = Math.max(minFlight(d) * pace, d / LAUNCH.vmax);
     // a clean hard contact carries more topspin
-    const spin = spinOf ?? SPIN[spec.kind] * (SPIN[spec.kind] > 0 ? 0.75 + 0.25 * q : 1);
+    const spin0 = spec.spin ?? SPIN[spec.kind];
+    const spin = spin0 * (spin0 > 0 ? 0.75 + 0.25 * q : 1);
     const shot = shotByClearance(from, tx, tz, clear, minT, spin);
     const s = seg(t, from, shot.v, spin, shot.k, shot.g);
     const isServe = p.lastHit === null && this.rally === null;
     const serveHalf = (-this.serveX(p.team)) as 1 | -1;
-    const r: Rally = this.rally ?? { shots: 0, last: null, bounces: 0, seg: s, tNet: null, netDone: false, tGround: 0, wall: null, crossed: false, walls: 0, tape: false, serveHalf, lastWall: null };
+    const r: Rally = this.rally ?? { shots: 0, last: null, bounces: 0, seg: s, tNet: null, netDone: false, tGround: 0, board: null, crossed: false, tape: false, serveHalf };
     this.declined = -1;
     this.chased.length = 0;
     this.letGo.length = 0;
@@ -1243,9 +1272,7 @@ export class Match {
     r.shots++;
     r.last = p;
     r.bounces = 0;
-    r.walls = 0;
     r.tape = false;
-    r.lastWall = null;
     this.setSeg(r, s);
     // hit from the far side of the net's plane (a ball played back from over the net is not possible here, but a
     // contact right on it is): it has crossed when it starts on the other side
@@ -1273,7 +1300,7 @@ export class Match {
       ...(prevT !== undefined ? { avail: t - prevT } : {}),
       ...(vinV ? { vin: Math.hypot(vinV.x, vinV.z) } : {}),
     };
-    this.events.push({ type: 'hit', pid: p.id, kind: spec.kind, timing: spec.timing, q, x: from.x, y: from.y, z: from.z, speed: sp, shot: r.shots, volley, ...(shanked ? { shank: true } : {}), ...(spec.intent ? { intent: spec.intent } : {}), power, ...(spec.special ? { special: spec.special } : {}), ...why });
+    this.events.push({ type: 'hit', pid: p.id, kind: spec.kind, timing: spec.timing, q, x: from.x, y: from.y, z: from.z, speed: sp, shot: r.shots, volley, ...(shanked ? { shank: true } : {}), ...(spec.intent ? { intent: spec.intent } : {}), power, spin, ...why });
     // where the hitter goes now
     this.afterHit(p, spec);
     // the other side reads the ball
@@ -1281,55 +1308,64 @@ export class Match {
   }
 
   /**
-   * Where the hitter's team goes after his shot (padel habits; the two move as one, both up or both back):
-   *  · the server comes in to the net behind his serve (his partner is there already); the returner stays back;
-   *  · a good globo over a pair at the net, or a chiquita at their feet, is the moment to take the net;
-   *  · up at the net they stay up after a volley or an overhead (a bandeja is played to keep it);
-   *  · a drive from around the service line is an approach; from the back, a drive keeps them back.
-   * The receiving team's depth follows the ball coming at them (cover: a lob over them sends both back).
+   * Where the hitter goes after his shot (tennis habits). Singles: a CPU player decides it with the shot
+   * (Controller.place, brain.ts placeSingles). Otherwise, and in doubles, each one his own depth:
+   *  · the server stays back, or comes in behind his serve (serve and volley: Mover.netRush, more on a first serve and in
+   *    doubles, where the server's partner is at the net already);
+   *  · the returner stays back (now and then a good low return is followed in: chip and charge);
+   *  · up at the net they stay up after a volley or a smash;
+   *  · a firm ball from well inside the baseline (off a short ball) is an approach: in to the net behind it;
+   *  · from the back a drive, a slice, a lob or a drop keeps them back.
+   * Across: singles, the middle of the angles of the reply (cover); doubles, his half (lane). In doubles the partner keeps
+   * his place (one up and one back is the base), and the two switch halves when one has crossed into the other's.
    */
   private afterHit(p: Player, spec: ShotSpec) {
     const r = this.rally!;
-    const mv = this.controllers[p.id].mover;
+    const ctl = this.controllers[p.id];
+    const mv = ctl.mover;
     const rng = this.rng;
     const za = Math.abs(p.z);
-    const atNet = za < AT_NET;
     const k = spec.kind;
-    // the other pair is up at the net (or on its way there)
-    const oppNet = this.team(this.other(p.team)).some((o) => Math.abs(o.z + o.vz * 0.4) < AT_NET + 0.4);
-    // (the server comes in behind his serve nearly always: the 3rd ball is a volley in padel)
-    if (r.shots === 1) p.depth = rng.chance(0.85 + 0.15 * mv.netRush) ? 2 : 1;
-    // the return: back, unless a good low one lets the returner follow it in
-    else if (r.shots === 2 && k !== 'lob') p.depth = spec.q > 0.75 && rng.chance(mv.netRush * 0.3) ? 2 : 0;
-    // a good globo over a pair at the net is how the net is taken; a lob from the net (or a poor one) keeps them where
-    // they are
-    else if (k === 'lob') p.depth = atNet ? 2 : oppNet && spec.q > 0.6 && rng.chance(0.35 + 0.55 * mv.netRush) ? 2 : 0;
-    // a chiquita (or a dejada) from the back: in behind it
-    // (a good one: a poor chiquita is volleyed back at their feet)
-    else if (k === 'dink' || k === 'drop') p.depth = atNet || (spec.q > 0.75 && rng.chance(0.25 + 0.5 * mv.netRush)) ? 2 : 0;
-    // overheads and volleys keep the net (a bandeja from deep is played to get back there)
-    else if (k === 'smash' || k === 'bandeja' || k === 'vibora' || k === 'speedup') p.depth = atNet || za < SERVICE + 0.5 ? 2 : 0;
-    // a strong bajada now and then is an approach; otherwise they stay back
-    else if (k === 'bajada') p.depth = spec.q > 0.8 && rng.chance(0.3 * mv.netRush) ? 2 : 0;
-    else if (atNet) p.depth = 2;
-    // a drive from around the service line is an approach; from the back it keeps them back
-    else p.depth = za < SERVICE + 0.5 && rng.chance(0.3 + 0.6 * mv.netRush) ? 2 : 0;
-    p.homeZ = p.side * DEPTH_Z[p.depth];
-    p.homeX = Math.max(-2.6, Math.min(2.6, spec.tx * 0.3));
-    // the partner moves with the hitter
-    const q = this.mate(p);
-    if (!this.controllers[q.id].steer) q.depth = p.depth;
-    else q.homeZ = q.side * DEPTH_Z[p.depth]; // where the bot's thumbs go
+    const pl = !this.doubles && ctl.place ? ctl.place(this, p, spec) : null;
+    if (pl) p.depth = pl.depth;
+    else if (r.shots === 1) p.depth = rng.chance(mv.netRush * (this.serveNum === 1 ? 0.45 : 0.12) * (this.doubles ? 1.6 : 1)) ? 2 : 0;
+    else if (r.shots === 2) p.depth = k !== 'lob' && spec.q > 0.8 && rng.chance(mv.netRush * (this.doubles ? 0.35 : 0.15)) ? 2 : 0;
+    else if (za < AT_NET) p.depth = 2;
+    else if ((k === 'drive' || k === 'slice') && za < HL - 1.6 && rng.chance(0.25 + 0.6 * mv.netRush)) p.depth = 2;
+    else p.depth = 0;
+    p.homeZ = p.side * this.depthZ(p.depth);
+    p.homeX = pl ? pl.x : this.cover(p).x;
+    if (!this.doubles) return;
     // whoever crossed into the partner's half (a lob, a poach) keeps it: they switch halves
+    const q = this.mate(p);
     if ((p.x - q.x) * p.lane < -0.6) {
       p.lane = -p.lane as 1 | -1;
       q.lane = -q.lane as 1 | -1;
     }
   }
 
-  /** After a hit, the team on the other side works out who takes the ball and where. */
+  /** After a hit, the other side works out who takes the ball and where. */
   private planReceivers() {
-    this.planDoubles();
+    if (this.doubles) this.planDoubles();
+    else this.planSingles();
+  }
+
+  /**
+   * Singles: the one player on the other side plans the coming ball (the human: his suggested spot, planManual, every
+   * step).
+   */
+  private planSingles() {
+    const r = this.rally!;
+    const p = this.team(this.other(r.last!.team))[0];
+    for (const q of this.players) q.plan = null;
+    this.owner = p.id;
+    this.passed = -1;
+    if (this.controllers[p.id].steer) return;
+    const res = this.planContact(p);
+    if (!res) return; // going out: let it go
+    p.plan = res.plan;
+    p.moveFrom = this.t + this.reactOf(p);
+    this.misread(p);
   }
 
   /** CPU players: the real feet spot of a plan whose first read was off, put back at `at` */
@@ -1428,7 +1464,7 @@ export class Match {
    */
   private passOn(p: Player, missed = false) {
     const r = this.rally!;
-    if (this.passed === r.shots) return;
+    if (!this.doubles || this.passed === r.shots) return;
     this.passed = r.shots;
     if (r.shots === 1) return; // the serve is the receiver's alone
     const q = this.mate(p);
@@ -1471,49 +1507,31 @@ export class Match {
   private pathCache: { seg: Seg; legs: Leg[] } | null = null;
 
   /**
-   * The coming path of the ball: the stretches of flight from now, through the floor and the walls, until the second
-   * bounce on the floor since the hit or the ball leaving the court over a wall. A wall on the receiving side before the
-   * first bounce ends it (a fault: nothing to play after it), and so does the mesh after the serve's bounce. The mesh
-   * bounce is deterministic, so this is exactly where the ball will go (the net tape is not foreseen: the rally plans
-   * again when the ball clips it).
+   * The coming path of the ball: the stretches of flight from now, through the bounce, until the second bounce since
+   * the hit (the net tape is not foreseen: the rally plans again when the ball clips it).
    */
   path(): Leg[] {
     const r = this.rally!;
     if (this.pathCache && this.pathCache.seg === r.seg) return this.pathCache.legs;
     const legs: Leg[] = [];
-    const recvSide = -r.last!.side;
     let s = r.seg;
     let floor = r.bounces;
-    let wall: 'x' | 'z' | undefined;
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < 4; i++) {
       const ev = nextEvent(s, s.t0 + 8);
       if (!ev) {
-        legs.push({ s, t0: s.t0, t1: s.t0 + 8, floor, wall });
+        legs.push({ s, t0: s.t0, t1: s.t0 + 8, floor });
         break;
       }
-      legs.push({ s, t0: s.t0, t1: ev.t, floor, wall });
-      wall = undefined;
-      if (ev.kind === 'floor') {
-        floor++;
-        if (floor >= 2) break;
-        s = bounce(s, ev.t);
-        continue;
-      }
-      const surface = this.surfaceOf(s, ev.hit);
-      if (surface === 'open') break;
-      const p = posAt(s, ev.t, this.pv2);
-      const wz = ev.hit.axis === 'z' ? ev.hit.sign * HL : p.z;
-      const theirs = wz * recvSide > 0;
-      if (theirs && floor === 0) break;
-      if (theirs && r.shots === 1 && surface === 'mesh') break;
-      s = wallBounce(s, ev.hit, surface);
-      wall = ev.hit.axis;
+      legs.push({ s, t0: s.t0, t1: ev.t, floor });
+      floor++;
+      if (floor >= 2) break;
+      s = bounce(s, ev.t);
     }
     this.pathCache = { seg: r.seg, legs };
     return legs;
   }
 
-  /** Where the ball of the rally will be at time t (along its path, walls included). */
+  /** Where the ball of the rally will be at time t (along its path, the bounce included). */
   private ballAt(t: number): Vec3 {
     const legs = this.path();
     for (const l of legs) if (t <= l.t1) return posAt(l.s, Math.max(l.t0, t));
@@ -1783,10 +1801,8 @@ export class Match {
         if (p.team === r.last.team) continue;
         if (p.human && r.bounces > 0) continue;
         if (p.plan && Math.abs(p.plan.t - t) < BODY.contact) continue;
-        // (a ball he reached for and missed went past the paddle, not into him; one he lets go by to play it off the
-        // glass he lets past him, the paddle out of its way)
+        // (a ball he reached for and missed went past the racket, not into him)
         if (this.reached[p.id] === r.shots) continue;
-        if (r.bounces > 0 && p.plan?.wall && r.walls === 0) continue;
         if (Math.hypot(q.x - p.x, q.z - p.z) < (q.y < BODY.legs ? BODY.rLegs : BODY.r)) return { t, p };
       }
     }
@@ -1798,8 +1814,8 @@ export class Match {
    * `fromHere`: manual players, from where they stand (a lunge away at most).
    * `suggest`: the spot the game suggests to a manual player (no dice: balls in only).
    * `stretch`: the suggested spot only has to be within a stretch (SUGGEST: the circle for this ball has shown).
-   * The ball can be met before it bounces (a volley; never the return of serve), after the bounce, or after it comes
-   * back off the glass (Match.path), but not right against a wall (WALL_GAP).
+   * The ball can be met before it bounces (a volley; never the return of serve) or after the bounce, anywhere short of
+   * the boards (AREA).
    */
   planContact(p: Player, fromHere = false, suggest = false, stretch = false): { plan: Plan; cost: number } | null {
     const r = this.rally!;
@@ -1811,7 +1827,7 @@ export class Match {
       const pn = posAt(r.seg, r.tNet);
       if (pn.y < netHeight(pn.x) + R) return null;
     }
-    // the first bounce on the floor: is it in? (a ball going straight into the glass or out of the court is not)
+    // the first bounce on the floor: is it in?
     const after = r.bounces >= 1;
     const iFirst = legs.findIndex((l) => l.floor >= 1);
     let firstIn = after;
@@ -1826,7 +1842,7 @@ export class Match {
     const start = fromHere || suggest ? Math.max(this.t + 1 / 240, this.declined + 1 / 60) : this.t + this.reactOf(p);
     // (CPU: nothing before the reaction, except a reflex block of a ball right at the body, BODY.reflex)
     const first = fromHere || suggest ? start : this.t + this.reactOf(p) * BODY.reflexAt;
-    // in: until the second bounce (the end of the path); going out: only before it bounces (or hits the glass)
+    // in: until the second bounce (the end of the path); going out: only before it bounces
     const end = firstIn ? legs[legs.length - 1].t1 : iFirst >= 0 ? legs[iFirst].t0 : legs[0].t1;
     // the suggested spot: what is left of the time a person needs to see the ball and push the stick (SUGGEST)
     const seeLeft = suggest ? Math.max(0, SUGGEST.see - (this.t - (r.last?.lastHit?.t ?? this.t))) : 0;
@@ -1852,17 +1868,8 @@ export class Match {
         rvz = (p.vz / v) * (v - B * tb);
       }
     }
-    // the wall each stretch has come off since the bounce (a ball off the back glass met high is a bajada)
     const ctl = this.controllers[p.id];
-    const wallOf: ('back' | 'side' | undefined)[] = [];
-    let cw: 'x' | 'z' | null = r.bounces >= 1 ? r.lastWall : null;
-    for (let i = 0; i < legs.length; i++) {
-      if (i > 0 && legs[i].floor !== legs[i - 1].floor) cw = null;
-      if (i > 0 && legs[i].wall) cw = legs[i].floor >= 1 ? legs[i].wall! : null;
-      wallOf.push(cw === 'z' ? 'back' : cw === 'x' ? 'side' : undefined);
-    }
-    const top = ctl.reachH ?? 2.9;
-    const bajada = ctl.bajada ?? 0;
+    const top = ctl.reachH ?? 3.0;
     const bk = this.backK(p);
     // (CPU: the ball's coming path, low enough to hit a body, for BODY)
     const path = cpu ? this.lowPath(end) : null;
@@ -1875,23 +1882,17 @@ export class Match {
       if (!bounced && playOut === false && !firstIn) continue;
       posAt(leg.s, t, bp);
       if (bp.z * p.side < 0.35) continue; // still (or again) on the other side of the net
-      // right against the glass there is no room for the swing
-      if (Math.abs(bp.x) > W / 2 - WALL_GAP.side || Math.abs(bp.z) > HL - WALL_GAP.back) continue;
       if (bp.y < 0.14 || bp.y > top) continue;
       const overhead = bp.y > 1.75;
-      const wl = bounced ? wallOf[li] : undefined;
-      // a ball come off the back glass above the head comes from behind: nobody hits that overhead, they wait for it
-      // to come down in front of them (this is what lets a remate «por 4» fly back over the net)
-      if (wl === 'back' && bp.y > OVERHEAD.fromBehind) continue;
-      // (walls met since the hit, for the cost: a ball off the glass is slower and easier to read)
-      const offGlass = li > 0 && legs.slice(1, li + 1).some((l, k) => legs[k].floor === l.floor);
       for (const hand of [1, -1] as const) {
-        // forehand: the ball on the player's right (+x for the near side, −x for the far side)
-        const fx = bp.x - p.side * hand * 0.55;
-        if (Math.abs(fx) > AREA_X) continue;
-        const fz = p.side * Math.min(AREA_Z, bp.z * p.side + (overhead ? 0.35 : 0.2));
-        if (fz * p.side < 0.3) continue;
+        // forehand: the ball on the player's right (+x for the near side, −x for the far side), a racket's length off
+        // the body (REACH)
         const volley = !bounced;
+        const off = overhead ? REACH.over : volley ? REACH.volley : REACH.ground;
+        const fx = bp.x - p.side * hand * off;
+        if (Math.abs(fx) > AREA_X) continue;
+        const fz = p.side * Math.min(AREA_Z, bp.z * p.side + (overhead ? 0.35 : REACH.front));
+        if (fz * p.side < 0.3) continue;
         const dist = Math.hypot(fx - ox, fz - oz);
         // a reflex: before the reaction only a ball right at the body, met from where he stands
         const reflex = t < start;
@@ -1919,32 +1920,29 @@ export class Match {
         // from here: the feet stay where they are (the lunge does the rest)
         const ffx = fromHere ? p.x : reflex ? ox : fx;
         const ffz = fromHere ? p.z : reflex ? oz : fz;
-        const plan: Plan = { t, bx: bp.x, by: bp.y, bz: bp.z, fx: ffx, fz: ffz, volley, overhead, hand, reach: need <= avail, oops: false, stretch: fromHere ? dist / LUNGE : 0, out: volley && !firstIn, ...(wl ? { wall: wl } : {}), ...(cpu ? { spare: avail - need } : {}) };
+        const plan: Plan = { t, bx: bp.x, by: bp.y, bz: bp.z, fx: ffx, fz: ffz, volley, overhead, hand, reach: need <= avail, oops: false, stretch: fromHere ? dist / LUNGE : 0, out: volley && !firstIn, ...(cpu ? { spare: avail - need } : {}) };
         if (need <= avail) {
-          let cost = Math.abs(bp.y - 0.95) * 1.2 + (bp.y < 0.35 ? 1.4 : 0) + (hand === -1 ? 0.18 : 0) + (t - this.t) * 0.25;
+          // a groundstroke at the waist (a little higher on the backhand of a two-hander) is the comfortable one
+          let cost = Math.abs(bp.y - 1.0) * 1.1 + (bp.y < 0.35 ? 1.4 : 0) + (hand === -1 ? 0.15 : 0) + (t - this.t) * 0.25;
           // up at the net, take it out of the air (it robs the other side of time) and as high as it comes
           if (volley && Math.abs(fz) < AT_NET) cost -= 0.4 + Math.max(0, bp.y - 0.95) * 1.2;
-          // at the back, a ball that comes off the glass is the easy one (slower, at a comfortable height)
-          if (offGlass && !volley) cost -= 0.15;
+          // at the back, a ball that has dropped below the knee after its peak is a dig: take it earlier
+          if (!volley && bp.y < 0.5 && Math.abs(fz) > AT_NET) cost += (0.5 - bp.y) * 1.2;
           // CPU: a contact they only just make is a gamble (a stretch, a near miss): a little later, or after the
           // bounce, is the one a player picks when there is one (PLAN_SPARE)
           if (cpu) cost += Math.max(0, PLAN_SPARE.want - (avail - need)) * PLAN_SPARE.cost;
           // from here: prefer the comfortable side of the body and the nearest point
           if (fromHere) cost = Math.abs(bp.y - 0.95) * 0.8 + (bp.y < 0.3 ? 1 : 0) + dist * 0.6 + (hand === -1 ? 0.1 : 0) + (t - this.t) * 0.6;
           if (overhead) cost -= 0.2;
-          // a lob over a pair at the net: met over the head on the way back, up to `keepTo` m from the net (a bandeja, a
-          // víbora), it keeps the net; met further back, turned and on the run, it is a scramble (`deep` per metre): let
-          // past, it sends the pair back to the glass (OVERHEAD)
-          if (overhead && volley && Math.abs(fz) >= AT_NET && Math.abs(fz) < OVERHEAD.keepTo) cost -= OVERHEAD.keep;
+          // a lob over a player at the net: smashed out of the air up to `keepTo` m from the net; further back, turned
+          // and on the run, it is a scramble (`deep` per metre): letting it bounce is the better ball (OVERHEAD)
+          if (overhead && volley && Math.abs(fz) < OVERHEAD.keepTo) cost -= OVERHEAD.keep;
           if (overhead && volley && bk < 1 && Math.abs(fz) > OVERHEAD.keepTo) cost += (Math.abs(fz) - OVERHEAD.keepTo) * OVERHEAD.deep;
           // CPU: standing on a spot the ball crosses first means being hit by it (BODY)
           if (cpu && this.crosses(fx, fz, t, path, ox, oz, start, need)) cost += BODY.plan;
-          // over the head: no higher than OVERHEAD.ideal when the ball allows (a bandeja at 2.3–2.6 m, not at the top
-          // of the jump)
+          // over the head: no higher than OVERHEAD.ideal when the ball allows (a smash with the arm up, not at the top
+          // of a jump)
           if (overhead) cost += Math.max(0, bp.y - OVERHEAD.ideal) * OVERHEAD.k;
-          // a bajada (BAJADA): a ball come back high off the back glass is one to wait for, by the player's par
-          // (as good as a comfortable ball at the waist and a little better: an overhead at the net still comes first)
-          if (bajada > 0 && wl === 'back' && bp.y >= BAJADA.minH && Math.abs(fz) >= BAJADA.minZ) cost -= BAJADA.value * bajada + Math.max(0, Math.min(bp.y, 1.9) - 0.95) * (fromHere ? 0.8 : 1.2);
           cost += tight * SUGGEST.tight;
           if (!best || cost < best.cost) best = { plan, cost };
         } else {
@@ -1960,57 +1958,98 @@ export class Match {
 
   // ------------------------------------------------------------------ movement
   /**
-   * Where a player waits while the partner plays the ball or the other side has it. Side by side, each in their half,
-   * the pair shifted towards where the ball is going. Depth (CPU players): the team moves as one (afterHit); while the
-   * serve is on its way the receiver waits back and his partner around the service line; a ball that is going to bounce
-   * deep behind a pair at the net (a lob over them) sends both back. A CPU partner of the human goes up and back with
-   * him. Manual players only get the lateral spot (the bot's thumbs use it); they choose their depth themselves.
+   * Where a player waits while the other side has the ball (or his partner plays it).
+   *  · Singles: on the middle of the angles of the reply (bisector), from where the opponent will meet the ball; a CPU
+   *    player leans towards the ball's side as his Mover.shade says (guarding the line, leaving the cross-court open).
+   *  · Doubles: side by side or one up and one back, each in his half, the pair shifted towards where the ball goes; a
+   *    lob that will bounce deep behind a player at the net sends him back.
+   * Depth: CPU players, the depth they chose (afterHit); while the serve is on its way the receiver waits back and his
+   * partner around the service line. Manual players only get the spot across (the bot's thumbs use it); they choose
+   * their depth themselves.
    */
   private cover(p: Player): { x: number; z: number } {
     const r = this.rally!;
-    const q = this.mate(p);
     const manual = !!this.controllers[p.id].steer;
+    const coming = !!r.last && r.last.team !== p.team;
+    if (!manual) {
+      if (r.shots === 1 && coming) p.depth = p.id === this.receiverId ? 0 : this.doubles ? 1 : 0;
+      else if (coming && r.bounces === 0 && p.depth === 2 && (r.last!.lastHit?.kind === 'lob' || r.seg.vy > 6)) {
+        // a lob over him: back, unless he (or the partner) takes it over the head in front of the service line
+        const g = this.firstBounce(this.pv2);
+        const own = this.owner >= 0 ? this.players[this.owner].plan : null;
+        if (g.z * p.side > DEPTH_Z[1] && !(own && own.volley && own.overhead)) p.depth = 0;
+      }
+    }
+    const z = manual ? p.homeZ : p.side * this.depthZ(p.depth);
+    if (!this.doubles) {
+      const shade = this.controllers[p.id].mover.shade ?? 0.3;
+      return { x: this.bisector(p, Math.abs(z), manual ? 0 : shade), z };
+    }
+    const q = this.mate(p);
     const nextToHuman = !!this.controllers[q.id].steer;
     const g = this.firstBounce(this.pv2);
-    if (!manual) {
-      const coming = r.last && r.last.team !== p.team;
-      if (r.shots === 1 && coming) p.depth = p.id === this.receiverId ? 0 : 1;
-      else if (coming && r.bounces === 0 && g.z * p.side > DEPTH_Z[1] - 0.3 && (r.last!.lastHit?.kind === 'lob' || r.seg.y > 3)) {
-        // a lob over them: both back, unless the partner takes it over the head in front of the service line (a
-        // bandeja, a víbora): then they hold the net together
-        const own = this.owner >= 0 && this.owner !== p.id ? this.players[this.owner].plan : null;
-        p.depth = own && own.volley && Math.abs(own.fz) < SERVICE ? 2 : 0;
-      } else if (!coming && r.last?.lastHit?.kind === 'lob' && r.bounces === 0 && p.depth === 2 && !nextToHuman) {
-        // their own lob, on its way: they move up behind it only if it gets past the pair at the net; one that will be
-        // met over the head in front (a bandeja, OVERHEAD.keepTo) they wait for at the back
-        const o = this.owner >= 0 ? this.players[this.owner] : null;
-        const op = o ? o.plan ?? this.targets[o.id] ?? null : null;
-        if (op && op.volley && op.overhead && Math.abs(op.fz) < OVERHEAD.keepTo) p.depth = 0;
-      } else if (nextToHuman) p.depth = q.depth;
-    }
-    const c = Math.max(-1.6, Math.min(1.6, g.x * 0.4));
-    const half = [2.2, 2.1, 2.0][p.depth];
+    const c = Math.max(-1.8, Math.min(1.8, g.x * 0.4));
+    const half = [2.75, 2.6, 2.45][p.depth];
     let x = c + p.lane * half;
     // next to the human: keep the gap from where he really is
-    if (nextToHuman && (x - q.x) * p.lane < 2 * half - 0.6) x = q.x + p.lane * (2 * half - 0.6);
-    x = Math.max(-W / 2 + 0.5, Math.min(W / 2 - 0.5, x));
-    const z = manual ? p.homeZ : p.side * DEPTH_Z[p.depth];
+    if (nextToHuman && (x - q.x) * p.lane < 2 * half - 0.8) x = q.x + p.lane * (2 * half - 0.8);
+    x = Math.max(-AREA_X, Math.min(AREA_X, x));
     return { x, z };
   }
 
   /**
+   * Singles: where to wait across the court, `d` m from the net: on the bisector of the angle the opponent can hit into
+   * (from where he will meet the ball now in flight to the two corners of this side's baseline), leaning `shade` of the
+   * way more towards the ball's side.
+   */
+  private bisector(p: Player, d: number, shade: number): number {
+    const r = this.rally;
+    const opp = this.players.find((o) => o.team !== p.team)!;
+    let ox = opp.x;
+    let oz = opp.z;
+    if (r && r.last && r.last.team === p.team) {
+      // our ball is on its way: where he will meet it (his plan, or a little behind where it bounces)
+      const pl = opp.plan ?? this.targets[opp.id] ?? null;
+      if (pl) {
+        ox = pl.bx;
+        oz = pl.bz;
+      } else {
+        const g = this.firstBounce(this.pv2);
+        ox = g.x;
+        oz = g.z - p.side * (Math.abs(g.z) > AT_NET ? 1.2 : 0);
+      }
+    }
+    const hw = halfW();
+    const zb = p.side * HL;
+    const ax = -hw - ox;
+    const bx = hw - ox;
+    const az = zb - oz;
+    const la = Math.hypot(ax, az);
+    const lb = Math.hypot(bx, az);
+    const dx = ax / la + bx / lb;
+    const dz = az / la + az / lb;
+    const zMe = p.side * d;
+    const x = Math.abs(dz) > 1e-6 ? ox + ((zMe - oz) * dx) / dz : 0;
+    const lean = ox * (1 - d / Math.max(d + 0.1, Math.abs(oz) + d)) * shade;
+    return Math.max(-hw + 0.6, Math.min(hw - 0.6, x + lean));
+  }
+
+  /**
    * Manual players who asked for it (Controller.recover): where to jog back to while their side's shot is on its way.
-   * Padel habits: the server comes in to the net; after a volley or an overhead, stay up; after a lob or a chiquita
-   * from the back, in to the net behind it; after a drive from the back, stay back. Across: his half.
+   * Tennis habits: after the serve or a rally ball, back to the baseline; after a volley or a smash, stay up; after an
+   * approach (a firm ball from well inside the baseline), in to the net behind it. Across: the middle of the reply's
+   * angles (singles), his half (doubles).
    */
   recoverSpot(p: Player): { x: number; z: number } {
     const r = this.rally!;
     const za = Math.abs(p.z);
     const kind = r.last?.lastHit?.kind ?? 'serve';
     let z: number;
-    if (kind === 'serve' || kind === 'lob' || kind === 'dink' || kind === 'drop' || za < AT_NET) z = DEPTH_Z[2];
-    else z = za < DEPTH_Z[1] ? DEPTH_Z[1] : DEPTH_Z[0];
-    return { x: Math.max(-3.2, Math.min(3.2, p.homeX)), z: p.side * z };
+    if (za < AT_NET) z = DEPTH_Z[2];
+    else if (kind !== 'serve' && kind !== 'lob' && kind !== 'drop' && za < HL - 1.6) z = DEPTH_Z[2];
+    else z = this.backZ;
+    const x = this.doubles ? p.homeX : this.bisector(p, z, 0);
+    return { x: Math.max(-AREA_X, Math.min(AREA_X, x)), z: p.side * z };
   }
 
   /** Doubles: a player who ends up clearly on the partner's side of the partner takes that half (they switch). */
@@ -2033,7 +2072,7 @@ export class Match {
       let tz = p.homeZ;
       const ctl = this.controllers[p.id];
       if (ctl?.steer && this.phase !== 'over' && !(this.phase === 'serve' && this.server() === p)) {
-        if (this.doubles && this.phase === 'rally') p.homeX = this.cover(p).x;
+        if (this.phase === 'rally') p.homeX = this.cover(p).x;
         const st = ctl.steer(this, p);
         const k = Math.min(1, Math.hypot(st.x, st.z));
         let ux = k > 0.01 ? st.x / Math.hypot(st.x, st.z) : 0;
@@ -2181,11 +2220,9 @@ export class Match {
         // the other side hits: a split step (land balanced, read the ball, then go)
         stop = FEET.brakeMax;
       } else {
-        if (this.doubles) {
-          const c = this.cover(p);
-          tx = c.x;
-          tz = c.z;
-        }
+        const c = this.cover(p);
+        tx = c.x;
+        tz = c.z;
         // back to the spot: briskly over a few metres, a step or two for a small correction, nothing for centimetres
         const d0 = Math.hypot(tx - p.x, tz - p.z);
         if (this.settled[p.id] && d0 < FEET.idle) want = 0;
@@ -2219,7 +2256,7 @@ export class Match {
       p.x += p.vx * h;
       p.z += p.vz * h;
       this.spend(p, Math.hypot(p.vx, p.vz) * h, Math.hypot(p.vx, p.vz));
-      // never past the net, nor through the glass
+      // never past the net, nor into the boards
       if (p.z * p.side < 0.4) {
         p.z = p.side * 0.4;
         p.vz = 0;
@@ -2259,9 +2296,18 @@ export class Match {
   }
 
   /**
-   * The point to `winner`: 15-30-40, the golden point at 40-40 (or advantages), the game and the set. The serve goes
-   * round the four players, one game each; in the tie-break the first serve is the next in turn's, then two serves each
-   * in the same order.
+   * The points a tie-break is played to: 7, or 10 in the deciding set of a best of five (the Grand Slams' rule since
+   * 2022).
+   */
+  tiebreakTo(): number {
+    const n = this.rules.sets ?? 1;
+    return n >= 5 && this.sets[0] === this.sets[1] && this.sets[0] === this.setsToWin() - 1 ? 10 : 7;
+  }
+
+  /**
+   * The point to `winner`: 15-30-40, advantages at deuce (or the deciding point, Rules.golden), the game and the set.
+   * The serve goes round (singles: the two players, a game each; doubles: the four); in the tie-break the first serve
+   * is the next in turn's, then two serves each in the same order.
    */
   private award(winner: 0 | 1) {
     const lose = this.other(winner);
@@ -2269,7 +2315,7 @@ export class Match {
     const a = this.points[winner];
     const b = this.points[lose];
     let won = false;
-    if (this.tiebreak) won = a >= 7 && a - b >= 2;
+    if (this.tiebreak) won = a >= this.tiebreakTo() && a - b >= 2;
     else if (this.rules.golden) won = a >= 4;
     else won = a >= 4 && a - b >= 2;
     if (!won) {
@@ -2304,25 +2350,24 @@ export class Match {
     this.nextServer();
   }
 
-  /** The next server round the four (a new game, or every two points of the tie-break). */
+  /** The next server in turn (a new game, or every two points of the tie-break). */
   private nextServer() {
     this.played++;
-    this.serverId = this.order[this.played % 4];
+    this.serverId = this.order[this.played % this.order.length];
     this.serverTeam = this.players[this.serverId].team;
   }
 
   /**
-   * The dead ball (after the point) off the floor and the walls, every event up to t1. The events are searched from the
-   * start of its own stretch, not from the last step: a stretch that begins mid-step (the point ended at a wall or a
-   * bounce) can meet the floor before the step is over, and the ball must not sink through it or through the glass.
+   * The dead ball (after the point) off the floor and the boards of the stands, every event up to t1. The events are
+   * searched from the start of its own stretch, not from the last step: a stretch that begins mid-step (the point ended
+   * at a bounce) can meet the floor before the step is over, and the ball must not sink through it.
    */
   private deadBounces(t1: number) {
     for (let i = 0; i < 6; i++) {
       const s = this.deadSeg!;
+      const w = boardTime(s, BOARDS.x, BOARDS.z);
       if (s.roll) {
-        // rolling: it stops at the glass (inside the court)
-        const p0 = posAt(s, s.t0, this.pv2);
-        const w = Math.abs(p0.x) > W / 2 || Math.abs(p0.z) > HL ? null : wallTime(s);
+        // rolling: it stops at the boards
         if (w && w.t <= t1) {
           const p = posAt(s, w.t);
           this.deadSeg = { ...seg(w.t, { x: p.x, y: R, z: p.z }, { x: 0, y: 0, z: 0 }), roll: true, k: 1 };
@@ -2330,22 +2375,8 @@ export class Match {
         return;
       }
       const tg = groundTime(s);
-      // (outside the court, over the top of a wall: no more walls, it drops to the ground out there)
-      const p0 = posAt(s, s.t0, this.pv2);
-      const outside = Math.abs(p0.x) > W / 2 || Math.abs(p0.z) > HL;
-      const w = outside ? null : wallTime(s);
       if (w && w.t <= t1 && w.t < tg) {
-        const surface = this.surfaceOf(s, w);
-        if (surface === 'open') {
-          // over the top: on its way out of the court (a stretch that starts just past the wall)
-          const p = posAt(s, w.t);
-          const v = velAt(s, w.t);
-          const dx = w.axis === 'x' ? w.sign * 2 * R : 0;
-          const dz = w.axis === 'z' ? w.sign * 2 * R : 0;
-          this.deadSeg = seg(w.t, { x: p.x + dx, y: p.y, z: p.z + dz }, v, s.spin, s.k, s.g);
-          continue;
-        }
-        this.deadSeg = wallBounce(s, w, surface);
+        this.deadSeg = boardBounce(s, w.t, w.axis);
         continue;
       }
       if (tg > t1) return;
