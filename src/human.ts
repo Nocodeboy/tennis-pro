@@ -1,9 +1,10 @@
 // The human's side: turns the drag into a target and a shot type, and the release time into contact quality.
 
-import { ATTACK, BLOCK, HUMAN_MOVER, Q_AIMED, Q_AUTO, Q_FLOOR_HUMAN, Q_PERFECT, SHANK, attackRisk, attackTarget, autoShot, ballCue, blockShot, difficulty, kindForAim, lobShape, popOf, shankOf } from './sim/brain';
+import { ATTACK, BLOCK, HUMAN_ATTRS, HUMAN_MOVER, Q_AIMED, Q_AUTO, Q_FLOOR_HUMAN, Q_PERFECT, SHANK, attackRisk, attackTarget, attrQ, autoShot, ballCue, blockShot, difficulty, humanSkill, kindForAim, lobShape, popOf, powerShank, shankOf, specialShot } from './sim/brain';
+import type { Attributes } from './sim/attributes';
 import { HL, NET_C, SERVICE, W, inHalf, inServiceCourt } from './sim/court';
 import { IDEAL_RELEASE, Match, PERFECT_WINDOW, SERVE_HEIGHT, type Controller } from './sim/match';
-import type { Plan, Player, ShotKind, ShotSpec, Timing } from './sim/types';
+import type { Plan, Player, ShotKind, ShotSpec, Special, Timing } from './sim/types';
 import type { Input, Release } from './input';
 import type { Vec3 } from './sim/ball';
 
@@ -14,7 +15,15 @@ export interface AimResult {
   clear: number;
   pace?: number;
   ok: boolean;
+  /** a remate going for «por 3» / «por 4» (the gesture asked for it and the ball allows it) */
+  special?: Special;
 }
+
+/**
+ * The serve feels the power of the gesture only within limits: it is an underhand shot (`min` … `max` of the power).
+ * The globo, the chiquita and the dejada feel it gently (POWER.soft in brain.ts): a placed globo or a quicker one.
+ */
+export const SERVE_POWER = { min: 0.35, max: 0.7 };
 
 /** The serve's pulse: the ring is smallest (best contact) once a second. */
 export const SERVE_PERIOD = 1.1;
@@ -75,11 +84,32 @@ export class HumanController implements Controller {
   /** the camera sits behind this side: screen up = towards the far end */
   viewSide: 1 | -1 = 1;
 
+  /**
+   * The player's card (attributes 0 … 99): it acts on this controller (brain.ts, humanSkill): his power ceiling, the
+   * quality of his contacts and of each kind of shot (attrQ), how high he reaches over the head and how readily the
+   * suggested spot waits for a bajada. His top speed is the match's (main.ts sets it from HUMAN_SPEED, i.e. this card).
+   */
+  attrs: Attributes = HUMAN_ATTRS;
+
   /** the human is serving right now (the keyboard aim steps differ) */
   private serving = false;
 
   constructor(private input: Input) {
     input.keyAim = (ix, iy) => this.keyDrag(ix, iy);
+  }
+
+  /** the highest ball he meets over the head (Controller.reachH, from the card's rem) */
+  get reachH(): number {
+    return humanSkill(this.attrs).reachH;
+  }
+  /** how much the suggested spot looks for a bajada (Controller.bajada, from the card's par) */
+  get bajada(): number {
+    return humanSkill(this.attrs).wall;
+  }
+  /** a release's power on this player: the gesture's (0 … 1) up to his card's ceiling (pot) */
+  private powerOf(r: Partial<Release> | null): number {
+    const raw = r?.power ?? 0.5;
+    return Math.max(0, Math.min(1.1, raw <= 0.5 ? raw : 0.5 + (raw - 0.5) * humanSkill(this.attrs).powerCap));
   }
 
   /** Where the stick (or the keys) points, turned into world space. */
@@ -134,7 +164,7 @@ export class HumanController implements Controller {
    * Where a drag of (dx, dy) px sends the ball right now. `attack` (a flick, F, the right button): the attack, at the
    * opponent's body unless the drag was aimed, bent `bend` m across by the stroke (brain.ts, ATTACK).
    */
-  aim(m: Match, p: Player, plan: Plan | null, dx: number, dy: number, attack = false, bend = 0): AimResult {
+  aim(m: Match, p: Player, plan: Plan | null, dx: number, dy: number, attack = false, bend = 0, opts: { power?: number; down?: boolean } = {}): AimResult {
     const gx = 1 / this.pxPerM;
     const gz = 1 / (this.pxPerM * AIM_Z);
     const serving = m.phase === 'serve';
@@ -161,33 +191,46 @@ export class HumanController implements Controller {
       return { x: tx, z: tz, kind: 'serve', clear: 0.5, ok };
     }
     const pl = plan ?? { t: m.t, bx: p.x, by: 0.9, bz: p.z, fx: p.x, fz: p.z, volley: false, overhead: false, hand: 1, reach: true, oops: false };
-    if (attack && m.rally) {
-      const k = kindForAim(m, p, pl, d, false, true, bend);
-      const at = attackTarget(m, p, pl, Math.hypot(dx, dy) > ATTACK.aimed ? { x: tx, z: -p.side * Math.min(d, HL - 0.5) } : null, bend);
-      return { x: at.tx, z: at.tz, kind: k.kind, clear: k.clear, pace: k.pace, ok: inHalf(at.tx, at.tz, -p.side as 1 | -1) };
+    const aimed = Math.hypot(dx, dy) > ATTACK.aimed;
+    if ((attack || opts.down) && m.rally) {
+      const k = kindForAim(m, p, pl, d, false, attack, bend, opts);
+      if (k.special) {
+        // por 3 / por 4: the depth is the shot's own (the steepest the net allows, or the middle for the topspin);
+        // an aimed drag keeps its side
+        const sp = specialShot(m, p, pl, k.special, aimed ? { x: tx } : { x: pl.bx * 0.3 }, opts.power ?? 1);
+        return { x: sp.tx, z: sp.tz, kind: k.kind, clear: k.clear, pace: k.pace, ok: inHalf(sp.tx, sp.tz, -p.side as 1 | -1), special: k.special };
+      }
+      if (attack) {
+        const at = attackTarget(m, p, pl, aimed ? { x: tx, z: -p.side * Math.min(d, HL - 0.5) } : null, bend);
+        return { x: at.tx, z: at.tz, kind: k.kind, clear: k.clear, pace: k.pace, ok: inHalf(at.tx, at.tz, -p.side as 1 | -1) };
+      }
     }
-    const k = kindForAim(m, p, pl, d, lob);
+    const k = kindForAim(m, p, pl, d, lob, false, 0, opts);
     // (a target past the back glass that is no lob, a drive: it would go straight into the glass, a fault)
     return { x: tx, z: tz, kind: k.kind, clear: ls ? ls.clear : k.clear, pace: k.pace, ok: inHalf(tx, tz, -p.side as 1 | -1) };
   }
 
-  /** A release's attack: the aim before the stroke and the bend of its angle (world x, from the hitter's view). */
-  private attackAim(m: Match, p: Player, plan: Plan, r: Release | null): AimResult {
-    const ax = r ? r.ax ?? r.dx : this.input.dx;
-    const ay = r ? r.ay ?? r.dy : this.input.dy;
+  /**
+   * A release's attack (an up-flick) or down-flick: the aim before the stroke and, for the up-flick, the bend of its
+   * angle (world x, from the hitter's view).
+   */
+  private attackAim(m: Match, p: Player, plan: Plan, r: Partial<Release> | null, power: number): AimResult {
+    const ax = r ? r.ax ?? r.dx ?? this.input.dx : this.input.dx;
+    const ay = r ? r.ay ?? r.dy ?? this.input.dy : this.input.dy;
+    const down = r?.gesture === 'down';
     // the stroke's angle off straight up the screen, as the slope across (screen x is world x × side)
     const fx = r?.fx ?? 0;
     const fy = r?.fy ?? -1;
-    const bend = Math.max(-1, Math.min(1, fx / Math.max(0.25, -fy))) * ATTACK.bend * p.side;
-    return this.aim(m, p, plan, ax, ay, true, bend);
+    const bend = down ? 0 : Math.max(-1, Math.min(1, fx / Math.max(0.25, -fy))) * ATTACK.bend * p.side;
+    return this.aim(m, p, plan, ax, ay, !down, bend, { power, down });
   }
 
   /**
    * For the HUD (and the bots): what the coming ball asks of the human's player `p` right now: 'attack' (it sits up:
-   * flick it), 'block' (an attack at him: tap in the golden window) or null. Read from the circle, or from the contact
-   * in reach. See brain.ts, ballCue.
+   * flick it), 'block' (an attack at him: tap in the golden window), 'bajada' (it comes back high off the back glass:
+   * hit it down) or null. Read from the circle, or from the contact in reach. See brain.ts, ballCue.
    */
-  cue(m: Match, p: Player): 'attack' | 'block' | null {
+  cue(m: Match, p: Player): 'attack' | 'block' | 'bajada' | null {
     return ballCue(m, p, m.targetFor(p.id) ?? p.plan);
   }
 
@@ -206,8 +249,9 @@ export class HumanController implements Controller {
     const a = r.gesture === 'attack' ? this.aim(m, p, null, r.ax ?? r.dx, r.ay ?? r.dy) : this.aim(m, p, null, r.dx, r.dy);
     const { q, timing } = serveQuality(r.t);
     this.last = { timing, kind: 'serve' };
+    const power = Math.max(SERVE_POWER.min, Math.min(SERVE_POWER.max, this.powerOf(r)));
     // a perfect serve is also hit flatter: a little faster and sooner on the other side
-    return { kind: 'serve', tx: a.x, tz: a.z, clear: timing === 'perfect' ? 0.38 : a.clear, q, timing };
+    return { kind: 'serve', tx: a.x, tz: a.z, clear: timing === 'perfect' ? 0.38 : a.clear, q: Math.min(1, q + humanSkill(this.attrs).q), timing, power };
   }
 
   hit(m: Match, p: Player, plan: Plan): ShotSpec {
@@ -219,7 +263,10 @@ export class HumanController implements Controller {
     if (holding) this.input.spend();
     const s = plan.stretch ?? 0;
     // reaching for it at the end of a lunge, or a ball rushed at you, costs a bit of control
-    const penalty = s * s * 0.22 + difficulty(m, p, plan) * 0.5;
+    const diff = difficulty(m, p, plan);
+    const penalty = s * s * 0.22 + diff * 0.5;
+    // the card: his control on every contact, and the shot's own attribute (attrQ) once the shot is known
+    const hs = humanSkill(this.attrs);
     let spec: ShotSpec;
     if (!r && !holding && this.mode === 'assist') {
       // No aim: a safe reset of its own (never an attack at the opponent), a plain contact; aiming beats it. Off a hard
@@ -230,9 +277,9 @@ export class HumanController implements Controller {
       const pace = v ? Math.hypot(v.x, v.z) : 0;
       const reflex = Math.max(0, Math.min(1, (pace - AUTO.reflexFrom) / (AUTO.reflexTo - AUTO.reflexFrom))) * AUTO.reflex;
       const seen = Math.max(0, this.autoRun(m, true) - 2);
-      const raw = Q_AUTO - penalty - reflex;
+      const raw = Q_AUTO + hs.q + attrQ(this.attrs, auto.kind, plan) - penalty - reflex;
       const shank = shankOf(m, raw, Q_FLOOR_HUMAN, SHANK.human);
-      spec = { ...auto, q: Math.max(Q_FLOOR_HUMAN, raw), timing: 'auto', late: 0, pop: popOf(m) + seen * AUTO.read, ...(shank > 0 ? { shank } : {}) };
+      spec = { ...auto, q: Math.max(Q_FLOOR_HUMAN, raw), timing: 'auto', late: 0, pop: popOf(m) + seen * AUTO.read, power: 0.5, ...(shank > 0 ? { shank } : {}) };
     } else if (r?.gesture === 'tap' || held?.gesture === 'tap') {
       // A tap: a block, a soft ball low over the net, judged on the golden window (BLOCK); a finger still down at the
       // contact is a late one (a poor block: the window is for the lift, it stays a fair one)
@@ -240,19 +287,25 @@ export class HumanController implements Controller {
       spec = this.block(m, p, plan, r ? plan.t - r.t : -Infinity, penalty);
     } else {
       this.autoRun(m, false);
-      const dx = r ? r.dx : this.input.dx;
-      const dy = r ? r.dy : this.input.dy;
+      const g = r ?? held;
+      // the stroke: a fast one aims where the finger was before it (the stroke is the swing), a slow one where it lifts
+      const dx = r ? r.ax ?? r.dx : this.input.dx;
+      const dy = r ? r.ay ?? r.dy : this.input.dy;
       // a flick (or an attack press, F or the right button, released or held through the contact; or a finger in the
-      // middle of a flick's stroke when the ball arrives): the attack
-      const attack = r ? r.gesture === 'attack' : held?.gesture === 'attack';
+      // middle of a flick's stroke when the ball arrives): the attack. A down-flick (Shift+F): over the head, por 4
+      const attack = g?.gesture === 'attack';
+      const down = g?.gesture === 'down';
+      // how hard (the speed of the stroke, up to the card's ceiling); a finger held through the contact is a plain one
+      const power = this.powerOf(g);
       let tq: { timing: Timing; q: number; late: number };
       if (this.mode === 'assist') {
         const e = r ? plan.t - r.t : null;
         tq = e !== null && Math.abs(e - IDEAL_RELEASE) <= PERFECT_WINDOW ? { timing: 'perfect', q: 1, late: 0 } : { timing: 'good', q: Q_AIMED, late: 0 };
       } else tq = Match.timingOf(r ? plan.t - r.t : null, holding);
-      const a = attack ? this.attackAim(m, p, plan, r ?? (held as Release | null)) : this.aim(m, p, plan, dx, dy);
+      const a = attack || down ? this.attackAim(m, p, plan, g, power) : this.aim(m, p, plan, dx, dy, false, 0, { power });
       const risk = attackRisk(a.kind, plan) * (attack ? ATTACK.lowRisk : 1);
-      const raw = tq.q - penalty - risk - (attack && tq.timing !== 'perfect' ? ATTACK.rough : 0);
+      const card = hs.q + attrQ(this.attrs, a.kind, plan);
+      const raw = tq.q + card - penalty - risk - (attack && tq.timing !== 'perfect' ? ATTACK.rough : 0);
       let q = Math.max(Q_FLOOR_HUMAN, raw);
       let timing = tq.timing;
       if (timing === 'perfect') {
@@ -261,15 +314,15 @@ export class HumanController implements Controller {
         // label never contradicts the result)
         const low = plan.by < NET_C;
         const cap = (a.kind === 'drive' || a.kind === 'speedup') && low ? Q_PERFECT - 0.05 : 1;
-        q = Math.max(0.2, Math.min(cap, Math.max(low ? 0.78 : 0.88, Q_PERFECT - penalty * 0.5)) - risk);
+        q = Math.max(0.2, Math.min(cap, Math.max(low ? 0.78 : 0.88, Q_PERFECT - penalty * 0.5) + card) - risk);
         if (q < Q_AIMED - 0.02) timing = 'good';
       }
       // a long rally weighs on the human too (a perfect swing shrugs off part of it)
       const pop = popOf(m, timing === 'perfect' ? 0.7 : 1);
-      spec = { kind: a.kind, tx: a.x, tz: a.z, clear: a.clear, pace: a.pace, q, timing, late: tq.late, pop, ...(attack ? { intent: 'attack' as const } : {}) };
-      // (a perfect release never shanks)
-      const shank = timing === 'perfect' ? 0 : shankOf(m, raw, Q_FLOOR_HUMAN, SHANK.human);
-      if (shank > 0) spec.shank = shank;
+      spec = { kind: a.kind, tx: a.x, tz: a.z, clear: a.clear, pace: a.pace, q, timing, late: tq.late, pop, power, ...(attack || a.special ? { intent: 'attack' as const } : {}), ...(a.special ? { special: a.special } : {}) };
+      // (a perfect release never shanks) a hard swing at an awkward ball goes off the frame more often (POWER)
+      const shank = timing === 'perfect' ? 0 : shankOf(m, raw, Q_FLOOR_HUMAN, SHANK.human) + powerShank(power, diff);
+      if (shank > 0) spec.shank = Math.min(SHANK.max, shank);
       // a perfect swing hits it a touch harder and flatter (not the soft balls, nor the bandeja: it is control)
       if (timing === 'perfect' && a.kind !== 'dink' && a.kind !== 'drop' && a.kind !== 'lob' && a.kind !== 'bandeja') spec.pace = (spec.pace ?? 1) * 0.9;
     }
@@ -300,8 +353,8 @@ export class HumanController implements Controller {
       raw = Q_AUTO - penalty - BLOCK.miss;
       late = off > 0 ? -0.4 : 0.35;
     }
-    const q = Math.max(Q_FLOOR_HUMAN, Math.min(1, raw));
-    const spec: ShotSpec = { ...base, q, timing, late, pop: popOf(m, timing === 'perfect' ? 0.5 : 1), intent: 'block' };
+    const q = Math.max(Q_FLOOR_HUMAN, Math.min(1, raw + humanSkill(this.attrs).q + attrQ(this.attrs, base.kind, plan)));
+    const spec: ShotSpec = { ...base, q, timing, late, pop: popOf(m, timing === 'perfect' ? 0.5 : 1), intent: 'block', power: 0.3 };
     const shank = timing === 'perfect' ? 0 : shankOf(m, raw, Q_FLOOR_HUMAN, SHANK.human);
     if (shank > 0) spec.shank = shank;
     return spec;

@@ -4,7 +4,9 @@
 // a change in src/render/chars.ts can be compared before/after.
 // Usage: npx tsx tools/poses.ts [seconds per match = 240] [out.json]
 // Env: MODES=cpu,human,doubles (which matches) · DUMP=run:pid:t,… (writes the bone positions at those times) ·
-// CHARS=path/to/chars.ts (another version of the characters, e.g. the one before a change: NODE_PATH=node_modules)
+// CHARS=path/to/chars.ts (another version of the characters, e.g. the one before a change: NODE_PATH=node_modules) ·
+// FORCE=1 (until the simulation plays them: every ball met at the shoulder deep off the back glass is played as a bajada,
+// the remates by turns flat, por 3 and por 4, and each shot gets a power: see forceShots)
 
 import './node-chars';
 import * as THREE from 'three';
@@ -15,6 +17,8 @@ import type { CharAssets, CharacterView as CharView } from '../src/render/chars'
 import { AIController, HUMAN_REACTION, HUMAN_SPEED, PAIRS, PARTNER, RIVALS } from '../src/sim/brain';
 import { Match } from '../src/sim/match';
 import type { Controller } from '../src/sim/match';
+import { velAt } from '../src/sim/ball';
+import type { Plan, Player, ShotSpec } from '../src/sim/types';
 import { HUMANS } from './humans';
 import { ThumbBot } from './thumb';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -107,6 +111,35 @@ function react(m: Match, chars: CharView[], e: { winner: 0 | 1; reason: string; 
       if (end || ((e.reason === 'winner' || e.reason === 'miss' || e.reason === 'letGo') && e.rally >= 3) || (long && rnd() < 0.5)) c.react('cheer', m.t);
     } else if (end || (e.fault === p.id && rnd() < 0.6) || (long && rnd() < 0.7)) c.react('lost', m.t);
   }
+}
+
+/**
+ * FORCE=1: the shots the simulation does not play yet, forced on its controllers (the physics follows the kind): a ball
+ * met at 1.15–1.95 m deeper than 6.3 m from the net and coming back towards it (off the back glass) is a bajada; the
+ * remates go flat, por 3, por 4 by turns; each shot gets a power (0.1 … 1, seeded). Keeps each player's last spec, for
+ * onHit (the hit event may not carry power and special yet).
+ */
+function forceShots(m: Match, specs: (ShotSpec | null)[], seed: number) {
+  let s = seed;
+  const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+  let n = 0;
+  m.controllers.forEach((c) => {
+    const hit = c.hit.bind(c);
+    c.hit = (mm: Match, p: Player, plan: Plan) => {
+      const sp = hit(mm, p, plan);
+      if (process.env.FORCE) {
+        sp.power = 0.1 + 0.9 * rnd();
+        if (sp.kind === 'smash') sp.special = ([undefined, 'por3', 'por4'] as const)[n++ % 3];
+        else if (sp.kind !== 'serve' && sp.kind !== 'return' && plan.by > 1.15 && plan.by < 1.95 && Math.abs(plan.bz) > 6.3) {
+          const legs = mm.path();
+          const l = legs.find((g) => plan.t <= g.t1 + 1e-6) ?? legs[legs.length - 1];
+          if (l && velAt(l.s, plan.t).z * Math.sign(plan.bz) < -0.5) sp.kind = 'bajada';
+        }
+      }
+      specs[p.id] = sp;
+      return sp;
+    };
+  });
 }
 
 function makeRun(a: CharAssets, mode: string, i: number): Run {
@@ -213,6 +246,8 @@ function makeRun(a: CharAssets, mode: string, i: number): Run {
     for (let i = 0; i < runs; i++) {
       const r = makeRun(a, mode, i);
       const tag = `${mode}${i}`;
+      const specs: (ShotSpec | null)[] = [];
+      forceShots(r.m, specs, 77 + i);
       const rnd = (() => {
         let s = 99 + i;
         return () => ((s = (s * 16807) % 2147483647) / 2147483647);
@@ -227,7 +262,8 @@ function makeRun(a: CharAssets, mode: string, i: number): Run {
         const hits: { pid: number; x: number; y: number; z: number; kind: string; vel: number[] | undefined }[] = [];
         for (const e of r.m.events) {
           if (e.type === 'hit') {
-            r.chars[e.pid].onHit(e.x, e.y, e.z, r.m.t, r.m.players[e.pid].lastHit?.hand ?? 1);
+            const sp = specs[e.pid];
+            r.chars[e.pid].onHit(e.x, e.y, e.z, r.m.t, r.m.players[e.pid].lastHit?.hand ?? 1, { kind: e.kind, power: e.power ?? sp?.power, special: e.special ?? sp?.special });
             const bv = r.m.ballVel({ x: 0, y: 0, z: 0 });
             hits.push({ pid: e.pid, x: e.x, y: e.y, z: e.z, kind: e.kind, vel: bv ? [bv.x, bv.y, bv.z] : undefined });
           }
@@ -245,6 +281,9 @@ function makeRun(a: CharAssets, mode: string, i: number): Run {
           const rec = probe.hits[probe.hits.length - 1];
           if (rec && ch.swing) {
             rec.view = ch.swing.kind === 'smash' ? (ch.over ?? 'smash') : ch.swing.kind;
+            // (a bajada the view did not see coming, or one it guessed that was not: told apart in the table)
+            if (h.kind === 'bajada' && !ch.swing.kind.startsWith('bajada')) rec.view = `bajada→${ch.swing.kind}`;
+            else if (h.kind !== 'bajada' && ch.swing.kind.startsWith('bajada')) rec.view = `${ch.swing.kind}(${h.kind})`;
             const hips = ch.root.getObjectByName('Hips');
             if (hips) {
               const fw = new THREE.Vector3(0, 0, 1).applyQuaternion(hips.getWorldQuaternion(new THREE.Quaternion()));

@@ -226,14 +226,19 @@ export class Audio {
    * The padel paddle meeting the ball: a solid «pock» (a pressurised felt ball on a foam-cored, perforated face), lower
    * and rounder than pickleball's hollow plastic click. Its pitch, brightness and weight follow the shot (a chiquita or
    * a dejada is a soft, muffled touch; a drive a full pock; a bandeja a sliced, brushed one; a remate or a víbora a
-   * crack with a thump) and how fast it leaves. `pan`: where on screen (−1 … 1); `far`: 0 … 1 for the far end.
+   * crack with a thump; a bajada the same, off the glass) and how fast it leaves. `pan`: where on screen (−1 … 1);
+   * `far`: 0 … 1 for the far end. `power` (0 … 1, the hit event's: the speed of the gesture, 0.5 a plain release): a
+   * still release is a softer, rounder pock, a fast flick a louder, harder one with a crack on top. `special`: a remate
+   * going for «por 3» or «por 4» has its own crack, a whip and a boom.
    */
-  paddle(kind: string, speed: number, pan = 0, far = 0, perfect = false) {
+  paddle(kind: string, speed: number, pan = 0, far = 0, perfect = false, power = 0.5, special: string | null = null) {
     if (!this.ctx || !this.sfxOn) return;
     const slow = this.replayMode ? 0.78 : 1;
     const n = Math.min(1, Math.max(0, (speed - 5) / 18));
     const o = this.out(pan * 0.6);
-    const dist = 1 - far * 0.35;
+    // (how hard it was meant: 0.82 × a still release … 1.3 × the fastest flick)
+    const pw = Math.min(1, Math.max(0, power));
+    const dist = (1 - far * 0.35) * (0.82 + pw * 0.48);
     const j = 1 + (Math.random() - 0.5) * 0.06;
     // (the body of every contact: a short low thump of the foam core under the face)
     const body = (f: number, v: number, dur = 0.06) => this.tone(f * slow, dur, 'sine', v * dist, 0, f * 0.55 * slow, o);
@@ -243,7 +248,7 @@ export class Audio {
       this.tone(f, 0.05, 'triangle', 0.075 * dist, 0, f * 0.7, o);
       body(230, 0.06, 0.05);
       this.noiseBurst(0.03, 'lowpass', 1500 * slow, 700, 0.05 * dist, 1.2, 0, o);
-    } else if (kind === 'smash' || kind === 'vibora' || kind === 'speedup') {
+    } else if (kind === 'smash' || kind === 'vibora' || kind === 'speedup' || kind === 'bajada') {
       const f = (900 + n * 220) * j * slow;
       this.noiseBurst(0.014, 'highpass', 4200, 2600, 0.13 * dist, 0.7, 0, o);
       this.tone(f, 0.06, 'triangle', (0.15 + n * 0.06) * dist, 0, f * 0.55, o);
@@ -270,10 +275,29 @@ export class Audio {
       this.noiseBurst(0.04, 'bandpass', (1800 + n * 700) * slow, 1000, v * 0.75, 1.8, 0, o);
       body(210 + n * 40, 0.06 + n * 0.05);
     }
+    // a hard flick: a sharper crack of the face on top (more the harder)
+    if (pw > 0.65 && kind !== 'dink' && kind !== 'drop' && kind !== 'auto') this.noiseBurst(0.012, 'highpass', 5600, 3600, 0.1 * ((pw - 0.65) / 0.35) * dist, 0.7, 0, o);
+    if (special === 'por3' || special === 'por4') this.crack(o, 1 - far * 0.35, slow, special === 'por4');
     if (perfect && !this.replayMode) {
       this.tone(1568, 0.09, 'sine', 0.06, 0.02, undefined, o);
       this.tone(2093, 0.14, 'sine', 0.05, 0.07, undefined, o);
     }
+  }
+
+  /**
+   * A remate going for «por 3» (flat, the hardest there is) or «por 4» (with topspin, brushed up): a whip of the face
+   * through the air, a dry crack and a deep boom of the frame, so it sounds like nothing else in the rally.
+   */
+  private crack(o: AudioNode, dist: number, slow: number, topspin: boolean) {
+    // the whip: a fast rising hiss just before the contact
+    this.noiseBurst(0.05, 'bandpass', 1800 * slow, 6200 * slow, 0.05 * dist, 2.5, 0, o);
+    // the crack: a very short, very bright snap
+    this.noiseBurst(0.018, 'highpass', 7200, 4200, 0.24 * dist, 0.6, 0.03, o);
+    this.tone(3300 * slow, 0.05, 'square', 0.025 * dist, 0.03, 2400 * slow, o);
+    // the boom of the frame
+    this.tone(95 * slow, 0.28, 'sine', 0.22 * dist, 0.03, 42 * slow, o);
+    // the topspin of a por 4: the strings brushing up the felt
+    if (topspin) this.noiseBurst(0.12, 'bandpass', 3800 * slow, 6800 * slow, 0.07 * dist, 3, 0.035, o);
   }
 
   /**

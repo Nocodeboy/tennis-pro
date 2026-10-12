@@ -1,7 +1,8 @@
 // Why the point was won or lost, in one short line with a number from the point itself (how far under the tape the
 // ball met the net, how late the player set off and how far the ball was), in padel's terms: the net, out over the
-// walls, straight into their glass, a double fault, «por 3» and «por 4», a winner; and, when the same mistake keeps
-// coming back, a short tip between points (Coach).
+// walls, straight into their glass, a double fault, «por 3» and «por 4» (and a remate going for them that did not
+// make it), a winner; the call for the banner (a winning bajada, víbora or remate: Explainer.callout); and, when the
+// same mistake keeps coming back, a short tip between points (Coach).
 //
 // No DOM: it reads the match's events and, once a frame, the match (where the players are, the suggested circle), so
 // the bots can measure it (tools/review/explain.ts). Nothing here changes the match.
@@ -9,7 +10,7 @@
 import { bounce, groundTime, posAt, type Seg } from './sim/ball';
 import { AT_NET, HL, LINE, NET_C, R, SERVICE, inHalf, inServiceCourt, netHeight } from './sim/court';
 import { CPU_LUNGE, HUMAN_FEET, SUGGEST, footStep, type Feet, type Match } from './sim/match';
-import type { MatchEvent, ServeFault, ShotKind, Timing } from './sim/types';
+import type { MatchEvent, PointReason, ServeFault, ShotKind, Special, Timing } from './sim/types';
 import { lang, t } from './i18n';
 
 type HitEvent = Extract<MatchEvent, { type: 'hit' }>;
@@ -22,6 +23,10 @@ interface HitRec {
   kind: ShotKind;
   /** the human's flick (attack) or tap (block), brain.ts */
   intent: 'attack' | 'block' | null;
+  /** a remate going for «por 3» or «por 4» (ShotSpec.special) */
+  special: Special | null;
+  /** 0 … 1: how hard it was meant (the gesture's speed; 0.5 a plain release) */
+  power: number;
   timing: Timing;
   x: number;
   y: number;
@@ -75,7 +80,11 @@ export interface Why {
 
 const SEE = SUGGEST.see;
 const SOFT = new Set<ShotKind>(['dink', 'drop', 'auto']);
-const ATTACK = new Set<ShotKind>(['speedup', 'smash', 'vibora', 'bandeja']);
+const ATTACK = new Set<ShotKind>(['speedup', 'smash', 'vibora', 'bandeja', 'bajada']);
+/** the point was won by the last shot (not an error) */
+const WON = new Set<PointReason>(['winner', 'miss', 'letGo']);
+/** the deciding shots the banner calls by name when they win the point */
+const SHOUT = new Set<ShotKind>(['bajada', 'vibora', 'smash']);
 
 const dec = (v: number, n = 1) => {
   const s = v.toFixed(n);
@@ -220,6 +229,25 @@ export class Explainer {
     return null;
   }
 
+  /**
+   * The point's call for the banner and the stands, from the shot that decided it: a winning bajada, víbora or remate
+   * (`shout`, an i18n key; «por 3» and «por 4» have their own reasons), a remate going for por 3 / por 4 that ended
+   * in an error (`failed`), and the special the last shot was going for. Read after the point event (the rally's shots
+   * are kept until the next serve is set up).
+   */
+  callout(e: PointEvent): { shout: string | null; failed: Special | null; special: Special | null; kind: ShotKind; pid: number } | null {
+    const L = this.hits[this.hits.length - 1];
+    if (!L) return null;
+    const out = { shout: null as string | null, failed: null as Special | null, special: L.special, kind: L.kind, pid: L.pid };
+    if (WON.has(e.reason) && L.team === e.winner && SHOUT.has(L.kind)) out.shout = 'shout.' + L.kind;
+    else if (e.reason === 'net' || e.reason === 'out' || e.reason === 'wall') {
+      const pid = e.fault ?? L.pid;
+      const h = [...this.hits].reverse().find((x) => x.pid === pid);
+      if (h?.special) out.failed = h.special;
+    }
+    return out;
+  }
+
   private onHit(m: Match, e: HitEvent) {
     // (a new rally with no serve set up before it, a training machine's ball: start over)
     if (this.hits.length && this.rallyNo !== m.stats.rallies) this.reset();
@@ -233,6 +261,8 @@ export class Explainer {
       team: p.team,
       kind: e.kind,
       intent: e.intent ?? null,
+      special: e.special ?? null,
+      power: e.power ?? 0.5,
       timing: e.timing,
       x: e.x,
       y: e.y,
@@ -350,6 +380,8 @@ export class Explainer {
       outcome = { key: w?.surface === 'mesh' ? 'mesh' : 'glass', vars: {}, data: { surface: w?.surface ?? 'glass' }, tag: 'long' };
     } else outcome = { key: 'out', vars: {}, data: {}, tag: 'long' };
     const mine = this.isMe(m, pid);
+    // a remate going for «por 3» or «por 4» that did not make it: that is the story
+    if (h.special) return this.line('x.special', { S: this.shot(m, h), n: h.special === 'por3' ? '3' : '4', O: t('xo.' + outcome.key, outcome.vars) }, null, { ...outcome.data, special: h.special, power: h.power });
     // an error by the other side: did our shot before it force it?
     if (h.team !== my) {
       const prev = [...this.hits].reverse().find((x) => x.team === my && x.t < h.t);

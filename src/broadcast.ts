@@ -12,7 +12,7 @@ import type { Input } from './input';
 import type { ReplayRun } from './render/replay';
 import type { View } from './render/view';
 import type { Match } from './sim/match';
-import type { MatchEvent, PointReason } from './sim/types';
+import type { MatchEvent, PointReason, ShotKind, Special } from './sim/types';
 
 export interface TeamInfo {
   /** the players' names in the score bug (upper case, the surnames: «VIDAL»), in player order */
@@ -106,6 +106,10 @@ export class Broadcast {
   private sting: HTMLElement;
   private skipHint: HTMLElement;
   private skipLayer: HTMLElement;
+  /** the rally's last shot (who, what, going for «por 3» / «por 4»), for the stands and the replay's label */
+  private lastHit: { pid: number; team: 0 | 1; kind: ShotKind; special: Special | null } | null = null;
+  /** the shot named on the replay's bug («POR 3», «BAJADA»…), or nothing */
+  private replayShot = '';
   private callTimer = 0;
   private strapTimer = 0;
   private strapShown = -1;
@@ -199,6 +203,8 @@ export class Broadcast {
     if (this.cine?.kind === 'replay') this.view.stopReplay();
     this.cine = null;
     this.after = null;
+    this.lastHit = null;
+    this.replayShot = '';
     this.frozen = false;
     this.match = null;
     this.bugKey = '';
@@ -319,6 +325,7 @@ export class Broadcast {
     switch (e.type) {
       case 'serveSetup': {
         this.after = this.after?.over ? this.after : null;
+        this.lastHit = null;
         this.rallyStart = m.t;
         this.matchPoint = !!extra.matchPoint;
         this.renderBug(m);
@@ -341,6 +348,13 @@ export class Broadcast {
       case 'hit': {
         const d = this.view.director;
         if (d.kind !== 'play' && d.kind !== 'replay') d.play(0.35);
+        // a remate going for «por 3» / «por 4» that the other side gets back: «¡uy!» from the stands
+        const team = m.players[e.pid]?.team ?? 0;
+        if (this.lastHit?.special && this.lastHit.team !== team) {
+          audio.ooh(0.9);
+          this.view.crowd.react('ooh', 0.9);
+        }
+        this.lastHit = { pid: e.pid, team, kind: e.kind, special: e.special ?? null };
         const shots = m.rally?.shots ?? 0;
         const k = Math.min(1, Math.max(0, (shots - 5) / 12));
         audio.tension = k;
@@ -405,9 +419,20 @@ export class Broadcast {
     // how good was it (and how the replay would go)
     const plan = rec ? this.planReplay(m, e) : null;
     const great = plan ? plan.score : 0;
-    // the stands: a roar for a great point or a long rally, applause for a winner, polite claps otherwise
+    // the stands: a roar for a great point or a long rally (and always for «por 3» / «por 4»), «¡uy!» for a remate
+    // going for them that ended in an error, applause for a winner, polite claps otherwise
     const big = Math.min(1, great / 5 + (e.rally >= 12 ? 0.3 : 0));
-    if (great >= 2.5 || e.rally >= 16) {
+    const lh = this.lastHit;
+    const failed = !!lh?.special && (e.reason === 'net' || e.reason === 'out' || e.reason === 'wall') && (e.fault === null || e.fault === lh.pid);
+    this.replayShot = e.reason === 'exit' ? t('kind.por3') : e.reason === 'back' ? t('kind.por4') : won && lh && lh.team === e.winner && (lh.kind === 'bajada' || lh.kind === 'vibora' || lh.kind === 'smash') ? t('kind.' + lh.kind) : '';
+    if (e.reason === 'exit' || e.reason === 'back') {
+      audio.roar(1);
+      this.view.crowd.react('cheer', 1);
+    } else if (failed) {
+      audio.ooh(1);
+      this.view.crowd.react('ooh', 1);
+      audio.applause(0.2);
+    } else if (great >= 2.5 || e.rally >= 16) {
       audio.roar(0.5 + big * 0.5);
       this.view.crowd.react('cheer', 0.5 + big * 0.5);
     } else if (won && e.rally >= 3) {
@@ -455,11 +480,11 @@ export class Broadcast {
 
   /**
    * How great the point was, and the replay. Only a point won by a shot is great (a winner, more so a smash out of the
-   * court («por 3», «por 4»), a víbora or a volley, a perfect swing, a net cord, the end of a long rally, a ball played
-   * off the glass); a long rally that ends in an error only when it is
-   * epic. The replay runs from just before the shot that set it up (the last few shots of a long rally) to a moment
-   * after the decisive ball landed in, slowing down for the decisive hit and a net cord, and it is cut before the
-   * dead ball rolls away (no slow motion on an empty corner).
+   * court («por 3», «por 4»), a víbora, a bajada or a volley, a perfect swing, a net cord, the end of a long rally, a
+   * ball played off the glass); a long rally that ends in an error only when it is epic. The replay runs from just
+   * before the shot that set it up (the last few shots of a long rally) to a moment after the decisive ball landed in,
+   * slowing down for the decisive hit and a net cord, and it is cut before the dead ball rolls away (no slow motion on
+   * an empty corner).
    */
   private planReplay(m: Match, e: PointEvent): { score: number; won: boolean; run: ReplayRun } | null {
     const rec = this.view.recorder!;
@@ -483,7 +508,7 @@ export class Broadcast {
         // «por 3», «por 4»: the shot of the match, from the end
         score += 3;
         angle = 'end';
-      } else if (last.kind === 'smash' || last.kind === 'vibora') {
+      } else if (last.kind === 'smash' || last.kind === 'vibora' || last.kind === 'bajada') {
         score += 2.5;
         angle = 'end';
       } else if (last.kind === 'speedup' || last.kind === 'bandeja' || last.speed >= 15) score += 1.5;
@@ -710,7 +735,8 @@ export class Broadcast {
         }
         audio.replayMode = true;
         v.boardFooter = t('tv.replay');
-        this.rbug.innerHTML = `<b>${ICON.replay}</b><span>${esc(t('tv.replay'))}</span>`;
+        // (the shot that won it, when it has a name: «REPETICIÓN · POR 3»)
+        this.rbug.innerHTML = `<b>${ICON.replay}</b><span>${esc(t('tv.replay'))}</span>${this.replayShot ? `<span class="sh">${esc(this.replayShot)}</span>` : ''}`;
         this.rbug.classList.add('on');
         this.layer.classList.add('replay');
         this.skipHint.textContent = t('tv.skip');

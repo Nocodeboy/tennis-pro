@@ -630,7 +630,7 @@ const FREE: Record<string, FreeKey[]> = {
  * The paddle's face at the contact of each swing (s into the clip, rad tipped up from facing straight ahead): the
  * clips met the ball with the face 68° off where the ball goes (80° in the drive: nearly edge-on). Around the contact
  * the paddle is turned about itself (the forearm and the wrist) to face forward: open for a dink, a little for drives
- * and volleys, closed for a smash. (Not the lunges: at full stretch the paddle in line with the arm reaches furthest,
+ * and volleys, closed for a smash and more for a bajada. (Not the lunges: at full stretch the paddle in line with the arm reaches furthest,
  * and turned it missed the ball by 10–30 cm. Nor the serve: its paddle points ahead at the contact, the head under
  * the wrist as the rules want, and no turn about itself brings its face round.)
  */
@@ -640,6 +640,9 @@ const FACE: Record<string, { k: number; tilt: number }> = {
   backhand: { k: 0.95, tilt: 0.12 },
   dink: { k: 1.58, tilt: 0.55 },
   smash: { k: 0.9, tilt: -0.2 },
+  // (the bajadas: the face closed over a ball hit down)
+  bajada: { k: 0.9, tilt: -0.3 },
+  bajada_l: { k: 0.95, tilt: -0.25 },
 };
 /** how much of the turn, and over how long round the contact it comes in (s: all of it within `near`) */
 const FACE_K = 0.9;
@@ -819,7 +822,9 @@ export function refineClips(template: THREE.Object3D, clips: Record<string, THRE
   lap('run');
   // the free arm through each swing (see FREE)
   // (not the swings from motion capture: their free arm is a real player's, see `mocap`)
-  for (const [n, keys] of Object.entries(FREE)) {
+  // (the bajadas on the overhead's and the backhand's clips: their free arm)
+  const free: Record<string, FreeKey[]> = { ...FREE, bajada: FREE.smash, bajada_l: FREE.backhand };
+  for (const [n, keys] of Object.entries(free)) {
     const c = clips[n];
     if (!c || n in mocap) continue;
     const times = timesOf(c.duration, 20);

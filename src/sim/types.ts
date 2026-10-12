@@ -41,6 +41,11 @@ export interface ShotSpec {
    */
   shank?: number;
   /**
+   * The paddle never meets the ball (a hard ball at the body with no time, ShotSpec of the CPU only, brain.ts WHIFF):
+   * it goes past, still live (the partner may get it; a second bounce is a winner, «miss»).
+   */
+  whiff?: boolean;
+  /**
    * The human's gesture (docs/notas-08-ataque.md): 'attack' a flick (or F, the right button): a speed-up or a smash;
    * 'block' a tap: a soft block or reset into the kitchen. None: an aimed shot, the automatic one or the CPU's.
    */
@@ -75,6 +80,11 @@ export interface Plan {
   stretch?: number;
   /** a volley of a ball that would land out (better let it go) */
   out?: boolean;
+  /**
+   * the wall the ball last came off since it bounced ('back': the back glass, 'side': a side wall); absent: it has not
+   * met one. A ball off the back glass met high at the back is a bajada (brain.ts, isBajada).
+   */
+  wall?: 'back' | 'side';
 }
 
 export interface Player {

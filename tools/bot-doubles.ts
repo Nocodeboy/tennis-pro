@@ -34,11 +34,19 @@ if (process.env.POACH) Object.assign(POACH, JSON.parse(process.env.POACH));
 if (process.env.TUNE)
   for (const [i, s] of Object.entries(JSON.parse(process.env.TUNE))) Object.assign(i === 'marta' ? PARTNER.skill : DOUBLES_SKILLS[RIVALS[Number(i)].id], s);
 
-// SHOTS=1: what was played (share of each kind of shot, both teams) and how each point ended, over the whole run
+// SHOTS=1: what was played (share of each kind of shot, both teams) and how each point ended, over the whole run; and
+// per kind of shot (a remate por 3 is «smash·por3»): how often it ends the point as a winner, as an error, or forces
+// the error of the next shot, its median contact height and its mean power
 const shotMix: Record<string, number> = {};
 const ends: Record<string, number> = {};
 let mixN = 0;
 let endN = 0;
+const perKind: Record<string, { n: number; win: number; err: number; forced: number; ys: number[]; pw: number }> = {};
+const kindOf = (e: { kind: string; special?: string; volley: boolean }) => `${e.kind}${e.special ? '·' + e.special : ''}`;
+const pk = (k: string) => (perKind[k] ??= { n: 0, win: 0, err: 0, forced: 0, ys: [], pw: 0 });
+/** how points end, grouped: winners (nobody got it, por 3, por 4), errors (net, wall, out), double faults */
+const endGroups: Record<string, number> = {};
+const WINNING = new Set(['winner', 'miss', 'letGo', 'exit', 'back']);
 const pc = (a: number, b: number) => `${b ? ((a / b) * 100).toFixed(0) : '–'}%`;
 const rows: string[][] = [['humano', 'pareja', 'gana', 'puntos', 'golpes/punto', 'min', 'tuyas', 'perfectos', 'nadie', 'a la vez', 'pasa', 'pierde por', 'gana por']];
 let stuck = 0;
@@ -86,6 +94,9 @@ for (const [hn, h] of Object.entries(HUMANS)) {
       let reachable = true;
       let owner = -1;
       let lastKind = '';
+      // the last two shots of the point (kind label, team) for the per-kind outcome table
+      let h1: { k: string; team: number } | null = null;
+      let h2: { k: string; team: number } | null = null;
       while (m.phase !== 'over' && guard++ < 60 * 60 * 60) {
         bot.tick(m);
         m.update(1 / 60);
@@ -122,6 +133,25 @@ for (const [hn, h] of Object.entries(HUMANS)) {
             const k = `${e.kind}${e.volley ? ' (volea)' : ''}`;
             shotMix[k] = (shotMix[k] ?? 0) + 1;
             mixN++;
+            const kk = kindOf(e);
+            const o = pk(kk);
+            o.n++;
+            o.ys.push(e.y);
+            o.pw += e.power ?? 0.5;
+            h2 = h1;
+            h1 = { k: kk, team: e.pid < 2 ? 0 : 1 };
+          }
+          if (e.type === 'point') {
+            const g = WINNING.has(e.reason) ? `ganador (${e.reason})` : e.reason === 'doubleFault' ? 'doble falta' : `error (${e.reason})`;
+            endGroups[g] = (endGroups[g] ?? 0) + 1;
+            if (h1) {
+              if (e.fault !== null && h1.team === (e.fault < 2 ? 0 : 1)) {
+                pk(h1.k).err++;
+                // the shot before it forced it (the other side's)
+                if (h2 && h2.team !== h1.team) pk(h2.k).forced++;
+              } else if (e.fault === null && e.winner === h1.team) pk(h1.k).win++;
+            }
+            h1 = h2 = null;
           }
           if (e.type === 'point') {
             // the last shot and why it ended: «remate exit», «volea (speedup) winner», «drive net»…
@@ -179,5 +209,14 @@ if (process.env.SHOTS) {
       .join(' · ');
   console.log(`\ngolpes: ${list(shotMix, mixN)}`);
   console.log(`\nfinal del punto (motivo · último golpe): ${list(ends, endN, 22)}`);
+  const eg = Object.entries(endGroups).sort((a, b) => b[1] - a[1]);
+  const tot = eg.reduce((a, [, v]) => a + v, 0);
+  const wins = eg.filter(([k]) => k.startsWith('ganador')).reduce((a, [, v]) => a + v, 0);
+  console.log(`\ncómo acaban los puntos: ganadores ${pc(wins, tot)} · ${eg.map(([k, v]) => `${k} ${((v / tot) * 100).toFixed(1)}%`).join(' · ')}`);
+  console.log('\npor golpe (n, % de golpes; gana el punto, error, fuerza el error; altura mediana; potencia media):');
+  const med = (a: number[]) => [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)] ?? 0;
+  for (const [k, o] of Object.entries(perKind).sort((a, b) => b[1].n - a[1].n))
+    console.log(`  ${k.padEnd(14)} ${String(o.n).padStart(6)} ${pc(o.n, mixN).padStart(4)}  gana ${pc(o.win, o.n).padStart(4)}  error ${pc(o.err, o.n).padStart(4)}  fuerza ${pc(o.forced, o.n).padStart(4)}  y ${med(o.ys).toFixed(2)}  pot ${(o.pw / o.n).toFixed(2)}`);
+  console.log(`  (puntos: ${tot}; por 3 ${pc(perKind['smash·por3']?.win ?? 0, tot)} de los puntos, por 4 ${pc(perKind['smash·por4']?.win ?? 0, tot)})`);
 }
 console.log(`\npádel · ${rules.games} juegos${rules.golden ? ', punto de oro' : ', ventajas'} · asistencia ${assist} · ${N} partidos por pareja · peloteo más largo ${longest} · ${stuck ? `${stuck} partidos atascados` : 'ningún partido atascado'}`);

@@ -11,6 +11,11 @@
 //    reset, and so is any ball that comes too fast to aim. The three gestures (docs/notas-08-ataque.md): on a ball the
 //    game marks as attackable (the orange ring) it flicks, more or less often by level, and now and then it flicks one
 //    that is not (impatience); an attack coming at him it blocks with a tap, if it reacts in time.
+//  · The power of the gesture (0.3, docs/notas-03-simulacion.md): an aimed release is still (a placed ball) or, now and
+//    then (`moving`), on the move (a plain one); a flick's stroke has its speed (the harder, the faster). Over the
+//    head, on a ball that allows it, he goes for the remate por 3 (a straight flick at full speed, `por3`) or por 4 (a
+//    down-flick, `por4`); a ball come back high off the back glass (the cue «bajada») he hits down with a flick
+//    (`bajada`) or places to a corner.
 //  · A phone in between: what the thumbs react to is on screen a little late and the lift reaches the game a little
 //    after it happens (DEVICE_LAG); the game dates releases back by its own estimate of that (Input LAG).
 
@@ -20,7 +25,7 @@ g.window ??= { addEventListener() {} };
 import { Input } from '../src/input';
 import { AIM_D0, AIM_LOB, AIM_Z, HumanController, SERVE_PERIOD } from '../src/human';
 import { AT_NET, DEPTH_Z, HL, NET_C, SERVICE, W } from '../src/sim/court';
-import { ballCue } from '../src/sim/brain';
+import { ballCue, specialOk } from '../src/sim/brain';
 import { IDEAL_RELEASE, type Match } from '../src/sim/match';
 import { Rng } from '../src/sim/rng';
 
@@ -71,6 +76,15 @@ export interface Thumbs {
   blockReact: number;
   blockSigma: number;
   blockBias: number;
+  /** an aimed release on the move (a plain power) rather than with the finger still (placed) */
+  moving: number;
+  /** over the head, on a ball that allows it: chance of going for por 3 (a full flick) and por 4 (a down-flick) */
+  por3: number;
+  por4: number;
+  /** px/s: his fullest flick (the por 3, a hard bajada) */
+  fullV: number;
+  /** a bajada (the cue): chance of hitting it down with a flick rather than placing it */
+  bajada: number;
 }
 
 /** px/s: how fast a finger drags the aim (a placing drag, well under a flick) */
@@ -96,6 +110,10 @@ export class ThumbBot {
   private released = false;
   /** this ball: what the right thumb does (aim and drag, a flick, a tap to block, nothing) and where the drag goes */
   private act: 'aim' | 'flick' | 'tap' | 'none' | null = null;
+  /** the flick's stroke goes down the screen (a down-flick: por 4) */
+  private down = false;
+  /** the aimed release is on the move (a plain power) */
+  private moveRel = false;
   private goal = { dx: 0, dy: 0 };
   private cur = { dx: 0, dy: 0 };
   private strokeV = 0;
@@ -110,7 +128,7 @@ export class ThumbBot {
   private serveAt = -1;
   private serveRel = -1;
   /** counts for the report: balls aimed, left to the automatic shot, flicked (attacks), tapped (blocks) */
-  readonly stats = { aimed: 0, auto: 0, flicks: 0, taps: 0 };
+  readonly stats = { aimed: 0, auto: 0, flicks: 0, taps: 0, por3: 0, por4: 0, bajadas: 0 };
 
   constructor(
     readonly level: Thumbs,
@@ -190,8 +208,25 @@ export class ThumbBot {
         this.tapE = IDEAL_RELEASE + this.gauss() * L.blockSigma - L.blockBias;
       } else if (el >= this.pressAt && tg.t - m.t > 0.08) {
         const atNet = Math.abs(tg.fz) < (L.rashNear ?? AT_NET) && m.rally!.shots >= 2;
-        const rash = cue !== 'attack' && atNet && tg.by > NET_C + (L.rashFloor ?? -0.2) && this.rng.chance(L.rash);
-        if ((cue === 'attack' && this.rng.chance(L.flick)) || rash) {
+        const rash = cue !== 'attack' && cue !== 'bajada' && atNet && tg.by > NET_C + (L.rashFloor ?? -0.2) && this.rng.chance(L.rash);
+        this.down = false;
+        // over the head, a ball that allows it: the remate por 3 (a straight flick at full speed) or por 4 (down)
+        const por3 = cue === 'attack' && specialOk('por3', tg) && this.rng.chance(L.por3);
+        const por4 = !por3 && tg.overhead && specialOk('por4', tg) && m.rally!.shots >= 2 && this.rng.chance(L.por4);
+        if (por3 || por4) {
+          this.act = 'flick';
+          this.down = por4;
+          this.goal = { dx: this.gauss() * 3, dy: this.gauss() * 3 };
+          this.strokeV = Math.max(650, L.fullV + this.gauss() * L.flickVar * 0.6);
+          if (por3) this.stats.por3++;
+          else this.stats.por4++;
+        } else if (cue === 'bajada' && this.rng.chance(L.bajada)) {
+          // the bajada hit down: a flick at the body (or the middle)
+          this.act = 'flick';
+          this.goal = { dx: this.gauss() * 3, dy: this.gauss() * 3 };
+          this.strokeV = Math.max(650, (L.flickV + L.fullV) / 2 + this.gauss() * L.flickVar);
+          this.stats.bajadas++;
+        } else if ((cue === 'attack' && this.rng.chance(L.flick)) || rash) {
           this.act = 'flick';
           // aimed now and then (the open side), otherwise the thumb stays put (at the body)
           this.goal = this.rng.chance(L.risk * 0.5) ? this.choose(m, p, tg) : { dx: this.gauss() * 3, dy: this.gauss() * 3 };
@@ -227,7 +262,10 @@ export class ThumbBot {
       // the drag goes where it is going at a finger's pace; the flick's stroke starts a stroke's length before the lift
       const due = inReach && T !== null && T - m.t <= this.relE - DEVICE_LAG;
       if (this.act === 'flick' && T !== null && !this.stroking && T - m.t <= this.relE - DEVICE_LAG + 0.075) this.stroking = true;
-      if (this.stroking) this.cur.dy -= this.strokeV / 60;
+      // an aimed release on the move: the finger drifts on (deeper) over the last moments (a plain power)
+      const drift = this.act === 'aim' && this.moveRel && T !== null && T - m.t <= this.relE - DEVICE_LAG + 0.1;
+      if (this.stroking) this.cur.dy += (this.down ? 1 : -1) * (this.strokeV / 60);
+      else if (drift) this.cur.dy -= 260 / 60;
       else {
         const ex = this.goal.dx - this.cur.dx;
         const ey = this.goal.dy - this.cur.dy;
@@ -278,6 +316,8 @@ export class ThumbBot {
     this.released = false;
     this.act = null;
     this.stroking = false;
+    this.down = false;
+    this.moveRel = this.rng.chance(L.moving);
     this.wantBlock = this.rng.chance(L.block);
     this.lift();
   }
@@ -343,6 +383,10 @@ export class ThumbBot {
         x = (rng.next() - 0.5) * 3;
         d = rng.chance(L.touch * 0.5) ? 3.4 + rng.next() * 0.6 : SERVICE - 1 + rng.next() * 1.4;
       }
+    } else if (ballCue(m, p, tg) === 'bajada') {
+      // a bajada placed: firm to a corner, short of their glass (or at the feet of a net player)
+      x = rng.chance(0.5) ? open() : feet();
+      d = oppBack ? 6 + rng.next() * 1.5 : Math.max(3, Math.abs(opp.z) + 0.5 + rng.next());
     } else if (tg.overhead) {
       // over the head: a bandeja deep to a corner or the middle (the flick is the remate, see tick)
       x = rng.chance(0.5) ? open() : (rng.next() - 0.5) * 2;

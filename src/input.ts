@@ -1,16 +1,24 @@
 // Two thumbs, like a console pad:
 //   left  · a floating stick where the thumb lands moves the player
 //   right · press, drag to aim, release to swing
-// The right thumb has three gestures (docs/notas-08-ataque.md):
-//   · a slow drag places the ball (chiquita, drive, lob by where it points; a ball over the head: a bandeja);
+// The right thumb has four gestures (docs/notas-08-ataque.md, docs/notas-03-simulacion.md):
+//   · a slow drag places the ball (chiquita, drive, lob by where it points; a ball over the head: a bandeja; a ball
+//     come back high off the back glass: a bajada);
 //   · a flick, the finger lifting while it still moves fast towards the far end, is an attack (a volley, or a smash
-//     or a víbora over the head): at the opponent's body by default, or where the drag pointed before the stroke,
-//     bent by the stroke's angle;
-//   · a tap, a short press with hardly any drag, is a block or reset: a soft ball at their feet.
-// Mouse: drag anywhere to aim and swing (a flick of the mouse attacks too; the right button is an attack press); WASD
-// or the arrows move. Keyboard aim: hold Space, tap the arrows to move the target a zone at a time (↓ a chiquita just
-// over the net, ↑ deep, ↑↑ a lob, ← → across), let go of Space to swing (a quick tap of Space alone is a block); hold F
-// instead of Space for an attack (← → move it across). While Space or F is held the arrows aim and only WASD moves.
+//     or a víbora over the head, a hard bajada): at the opponent's body by default, or where the drag pointed before
+//     the stroke, bent by the stroke's angle (straight up at full power over a high ball near the net: por 3);
+//   · a tap, a short press with hardly any drag, is a block or reset: a soft ball at their feet;
+//   · a down-flick, the same but towards the player (down the screen): over the head, the remate «por 4»; on any other
+//     ball, a hard shot where the drag pointed before the stroke.
+// The power (0.3), docs/notas-03-simulacion.md: how fast the finger moves when it lifts. Still (it waited for the
+// ring): a placed ball (power ≈ 0.3, soft and safe); lifting on the move: a plain one (0.5); a flick: from 0.6 at the
+// flick's threshold to 1 at FLICK.full (harder, faster and riskier). STROKE has the curve.
+// Mouse: drag anywhere to aim and swing (a flick of the mouse attacks too, at the mouse's speed; the right button is an
+// attack press, Shift + right button a down-flick); WASD or the arrows move. Keyboard aim: hold Space, tap the arrows
+// to move the target a zone at a time (↓ a chiquita just over the net, ↑ deep, ↑↑ a lob, ← → across), let go of Space
+// to swing (a plain shot, power 0.5; a quick tap of Space alone is a block); hold F instead of Space for an attack (← →
+// move it across): the longer F is held the harder (KEY_POWER: 0.7 at once, 1 after 0.6 s); Shift+F is the down-flick
+// (over the head, por 4). While Space or F is held the arrows aim and only WASD moves.
 //
 // Release times are judged as the player saw them: the finger lifts on what the screen showed a few frames ago, and
 // the event arrives a little after the lift, so each release is dated back by the input and display latency (LAG).
@@ -50,7 +58,22 @@ export const LAG = { touch: 0.04, other: 0.025 };
  * covers 40–120 px in 60–120 ms (500–1,500 px/s). Gesture libraries call a swipe from about 300 px/s (Hammer.js: 0.3
  * px/ms over 10 px), too low here: a quick aim across the screen reaches that.
  */
-export const FLICK = { speed: 650, window: 0.08, travel: 24, cone: 55 };
+export const FLICK = { speed: 650, window: 0.08, travel: 24, cone: 55, downCone: 45, full: 1500 };
+/**
+ * The power of a release from the speed of the finger as it lifts (px/s on a 390 px phone, over FLICK.window): up to
+ * `still` it is a placed ball (`placed`), up to `plain` it rises to 0.5 (a plain release, the finger still moving),
+ * up to FLICK.speed to `flick0`, and a flick goes from there to 1 at FLICK.full. A stroke faster than `aim` aims where
+ * the finger was before the stroke (the stroke is the swing, not the aim).
+ */
+export const STROKE = { still: 60, plain: 300, placed: 0.3, flick0: 0.6, aim: 380 };
+export function strokePower(v: number): number {
+  const f = (a: number, b: number, ya: number, yb: number) => ya + ((Math.min(Math.max(v, a), b) - a) / (b - a)) * (yb - ya);
+  if (v <= STROKE.plain) return f(STROKE.still, STROKE.plain, STROKE.placed, 0.5);
+  if (v <= FLICK.speed) return f(STROKE.plain, FLICK.speed, 0.5, STROKE.flick0);
+  return f(FLICK.speed, FLICK.full, STROKE.flick0, 1);
+}
+/** Keys and the right mouse button: an attack press's power grows with how long it is held, `min` … 1 over `full` s. */
+export const KEY_POWER = { min: 0.7, full: 0.6 };
 /** The tap (a block or reset): a press of at most `time` s that never strays more than `px` px from where it landed. */
 export const TAP = { time: 0.3, px: 14 };
 
@@ -79,6 +102,8 @@ export class Input {
   private touchPress = true;
   /** the current press is an attack press (F, the right mouse button): its release is an attack */
   private attackPress = false;
+  /** the attack press is a down-flick (Shift+F, Shift + the right button): over the head, por 4 */
+  private downPress = false;
   /** the current press is a key's (Space, F): no flick (the arrows jump the aim), only the tap */
   private viaKey = false;
   /** the current press: when it landed (s, the events' clock) and the drag since then (for the flick and the tap) */
@@ -119,7 +144,7 @@ export class Input {
         this.aimId = e.pointerId;
         this.sx = e.clientX;
         this.sy = e.clientY;
-        this.aimDown(e.timeStamp / 1000, touch, !touch && e.button === 2);
+        this.aimDown(e.timeStamp / 1000, touch, !touch && e.button === 2, !touch && e.button === 2 && e.shiftKey);
       }
       try {
         el.setPointerCapture(e.pointerId);
@@ -177,7 +202,7 @@ export class Input {
         if (!e.repeat && !this.pressing) {
           this.keyHold = k;
           this.kx = this.ky = 0;
-          this.aimDown(e.timeStamp / 1000, false, k === 'KeyF');
+          this.aimDown(e.timeStamp / 1000, false, k === 'KeyF', k === 'KeyF' && e.shiftKey);
           this.viaKey = true;
           this.onPress?.('aim');
         }
@@ -214,12 +239,13 @@ export class Input {
    * the clock of the moves that follow (the events' clock, or the sim's for a virtual thumb). `attack`: an attack
    * press (F, the right button), whose release is an attack whatever the drag.
    */
-  aimDown(ts: number, touch = true, attack = false) {
+  aimDown(ts: number, touch = true, attack = false, down = false) {
     this.dx = this.dy = 0;
     this.pressing = true;
     this.spent = false;
     this.touchPress = touch;
     this.attackPress = attack;
+    this.downPress = attack && down;
     this.viaKey = false;
     this.downAt = ts;
     this.trail.length = 0;
@@ -242,7 +268,32 @@ export class Input {
 
   /** An attack press is held (F, the right button): the aim preview shows the attack. */
   get attackHeld(): boolean {
-    return this.pressing && this.attackPress && !this.spent;
+    return this.pressing && this.attackPress && !this.downPress && !this.spent;
+  }
+  /** A down-flick press is held (Shift+F, Shift + the right button): over the head, the preview shows the por 4. */
+  get downHeld(): boolean {
+    return this.pressing && this.downPress && !this.spent;
+  }
+  /**
+   * For the HUD (power feedback): the power the press would have if it lifted now (0 … 1; 0.5 with no press). A key or
+   * the right button: by how long it has been held; a finger: by how fast it moves now.
+   */
+  powerNow(): number {
+    if (!this.active) return 0.5;
+    if (this.attackPress) return this.keyPower(this.trail[this.trail.length - 1]?.t ?? this.downAt);
+    if (this.viaKey) return 0.5;
+    const g = this.gestureAt(NaN);
+    return g.power ?? 0.5;
+  }
+  /** an attack press's power by how long it has been held at `end` (KEY_POWER) */
+  private keyPower(end: number): number {
+    const held = Number.isFinite(end - this.downAt) ? Math.max(0, end - this.downAt) : 0;
+    return KEY_POWER.min + (1 - KEY_POWER.min) * Math.min(1, held / KEY_POWER.full);
+  }
+  /** an attack press, read as a gesture at `end` (an up-flick, or a down-flick with Shift) */
+  private keyGesture(end: number): Partial<Release> {
+    const down = this.downPress;
+    return { gesture: down ? 'down' : 'attack', ax: this.dx, ay: this.dy, fx: 0, fy: down ? 1 : -1, power: this.keyPower(end) };
   }
   /**
    * The press still held at a contact, read as the gesture it is becoming (the ball came before the lift): an attack
@@ -251,17 +302,18 @@ export class Input {
    */
   gestureNow(fresh = 0.05): Partial<Release> | null {
     if (!this.active) return null;
-    if (this.attackPress) return { gesture: 'attack', ax: this.dx, ay: this.dy, fx: 0, fy: -1 };
     const tr = this.trail;
+    // (a key press: held so far, on the events' clock of its last sample; the bots' virtual keys use the sim's)
+    if (this.attackPress) return this.keyGesture(Number.isFinite(this.downAt) && tr.length ? tr[tr.length - 1].t + (this.now() - tr[tr.length - 1].st) : NaN);
     if (!Number.isFinite(this.downAt) || !tr.length) return null;
     const k = Math.max(0.5, this.scale);
     let far = 0;
     for (const s of tr) far = Math.max(far, Math.hypot(s.x, s.y));
-    if (this.now() - tr[0].st <= TAP.time && far <= TAP.px * k) return { gesture: 'tap' };
+    if (this.now() - tr[0].st <= TAP.time && far <= TAP.px * k) return { gesture: 'tap', power: 0.3 };
     const last = tr[tr.length - 1];
     if (this.viaKey || this.now() - last.st > fresh) return null;
     const g = this.gestureAt(NaN);
-    return g.gesture === 'attack' ? g : null;
+    return g.gesture === 'attack' || g.gesture === 'down' ? g : null;
   }
 
   private end(cancel: boolean, ts = NaN) {
@@ -273,6 +325,7 @@ export class Input {
     }
     this.spent = false;
     this.attackPress = false;
+    this.downPress = false;
     this.downAt = NaN;
     this.trail.length = 0;
   }
@@ -282,15 +335,15 @@ export class Input {
    * release. A press the gesture was not followed for (a tool that sets `pressing` by hand) is a plain release.
    */
   private gestureAt(ts: number): Partial<Release> {
-    if (this.attackPress) return { gesture: 'attack', ax: this.dx, ay: this.dy, fx: 0, fy: -1 };
     const tr = this.trail;
+    if (this.attackPress) return this.keyGesture(Number.isFinite(ts) ? ts : tr.length ? tr[tr.length - 1].t : NaN);
     if (!Number.isFinite(this.downAt) || !tr.length) return {};
     const end = Number.isFinite(ts) ? ts : tr[tr.length - 1].t;
     const k = Math.max(0.5, this.scale);
     let far = 0;
     for (const s of tr) far = Math.max(far, Math.hypot(s.x, s.y));
-    if (end - this.downAt <= TAP.time && far <= TAP.px * k) return { gesture: 'tap' };
-    if (this.viaKey) return {};
+    if (end - this.downAt <= TAP.time && far <= TAP.px * k) return { gesture: 'tap', power: 0.3 };
+    if (this.viaKey) return { power: 0.5 };
     // the motion over the last moments before the lift (or since the press, if it was quicker than that)
     const span = Math.max(1 / 240, Math.min(FLICK.window, end - this.downAt));
     const from = this.at(end - span);
@@ -299,17 +352,35 @@ export class Input {
     const my = last.y - from.y;
     const travel = Math.hypot(mx, my);
     const speed = travel / span;
-    if (speed < FLICK.speed * k || travel < FLICK.travel * k || -my / Math.max(1e-6, travel) < Math.cos((FLICK.cone * Math.PI) / 180)) return {};
+    const power = strokePower(speed / k);
     // the stroke began where the finger was last slow: what is before it is the aim
-    let i = tr.length - 1;
-    while (i > 0) {
-      const a = tr[i - 1];
-      const b = tr[i];
-      const v = Math.hypot(b.x - a.x, b.y - a.y) / Math.max(1e-3, b.t - a.t);
-      if (v < FLICK.speed * k * 0.4) break;
-      i--;
+    const strokeStart = () => {
+      let i = tr.length - 1;
+      while (i > 0) {
+        const a = tr[i - 1];
+        const b = tr[i];
+        const v = Math.hypot(b.x - a.x, b.y - a.y) / Math.max(1e-3, b.t - a.t);
+        if (v < FLICK.speed * k * 0.4) break;
+        i--;
+      }
+      return tr[i];
+    };
+    const flick = speed >= FLICK.speed * k && travel >= FLICK.travel * k;
+    const up = -my / Math.max(1e-6, travel);
+    if (flick && up >= Math.cos((FLICK.cone * Math.PI) / 180)) {
+      const s0 = strokeStart();
+      return { gesture: 'attack', ax: s0.x, ay: s0.y, fx: mx / travel, fy: my / travel, power };
     }
-    return { gesture: 'attack', ax: tr[i].x, ay: tr[i].y, fx: mx / travel, fy: my / travel };
+    if (flick && -up >= Math.cos((FLICK.downCone * Math.PI) / 180)) {
+      const s0 = strokeStart();
+      return { gesture: 'down', ax: s0.x, ay: s0.y, fx: mx / travel, fy: my / travel, power };
+    }
+    // a fast stroke any other way: a hard shot, aimed where the finger was before the stroke
+    if (speed >= STROKE.aim * k) {
+      const s0 = strokeStart();
+      return { ax: s0.x, ay: s0.y, power };
+    }
+    return { power };
   }
 
   /** Where the aiming thumb was at time `t` (the trail, interpolated). */
@@ -369,6 +440,7 @@ export class Input {
     this.aimId = -1;
     this.keyHold = null;
     this.attackPress = false;
+    this.downPress = false;
     this.downAt = NaN;
     this.trail.length = 0;
   }

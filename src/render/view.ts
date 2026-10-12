@@ -11,7 +11,7 @@ import { installLook, vignette } from './look';
 import { minFlight, posAt, seg, shotByClearance, type Vec3 } from '../sim/ball';
 import { HL, R, SERVICE, W, backSurface, sideSurface } from '../sim/court';
 import { LUNGE, SPIN, type Match } from '../sim/match';
-import type { Player, PointReason, ShotKind } from '../sim/types';
+import type { MatchEvent, Player, PointReason, ShotKind } from '../sim/types';
 import { BALL_DROP, CLIP_NAMES, CharacterView, PADDLE_POSE, loadCharAssets, type CharAssets, type Kit } from './chars';
 import { CrowdAnim } from './crowd';
 import { Director, type CamPose, type DirCtx } from './director';
@@ -57,11 +57,12 @@ interface Aim {
 
 /**
  * The indicators' colours, one meaning each (the HUD uses the same): lime = you / in reach, gold = perfect (only the
- * timing), red = a fault (the return of serve volleyed), grey = out. The aim by the kind of shot: soft (chiquita,
- * dejada) cyan, the drives and the volleys yellow, the lob violet, the overheads (remate, bandeja, víbora) orange; an
- * aim that lands out is grey.
+ * timing), red = a fault (the return of serve volleyed), grey = out, orange = a ball to attack, pink = a bajada (a ball
+ * back off the back glass to hit down). The aim by the kind of shot: soft (chiquita, dejada) cyan, the drives and the
+ * volleys yellow, the lob violet, the overheads (remate, bandeja, víbora) orange, the bajada pink; an aim that lands
+ * out is grey.
  */
-export const HUE = { lime: 0xdcff3c, gold: 0xffd23a, red: 0xff4a3a, out: 0x9aa3ad, white: 0xffffff, attack: 0xff9a3c } as const;
+export const HUE = { lime: 0xdcff3c, gold: 0xffd23a, red: 0xff4a3a, out: 0x9aa3ad, white: 0xffffff, attack: 0xff9a3c, bajada: 0xff5cc8 } as const;
 const KIND_HUE: Partial<Record<ShotKind, number>> = {
   dink: 0x5af0e8,
   drop: 0x5af0e8,
@@ -73,6 +74,7 @@ const KIND_HUE: Partial<Record<ShotKind, number>> = {
   smash: 0xff9a3c,
   bandeja: 0xff9a3c,
   vibora: 0xff9a3c,
+  bajada: HUE.bajada,
 };
 export function aimHue(kind: ShotKind, ok: boolean): number {
   return ok ? KIND_HUE[kind] ?? HUE.white : HUE.out;
@@ -93,6 +95,13 @@ installLook();
 const G = 9.81;
 /** a broadcast camera's shutter: a fast ball draws a streak this long in time */
 const SHUTTER = 1 / 40;
+/**
+ * How hard a shot was meant (the hit's power, 0…1; 0.5 a plain one) shows from the contact on (it is only known at the
+ * release): the paddle's flash (`size` m across, `alpha`, `life` s, from a placed shot to the hardest), and until the
+ * next hit the ball's streak `smear` × (power − 0.5) longer and brighter, its trail from `from` × (power − 0.5) m/s
+ * less, `trail` × (power − 0.5) brighter and lingering `linger` × (power − 0.5) longer.
+ */
+const POWER_FX = { size: [0.14, 0.5], alpha: [0.3, 0.85], life: [0.07, 0.16], smear: 0.7, from: 4, trail: 0.9, linger: 0.6 };
 /** the ball is never drawn smaller than this (CSS px across) */
 const BALL_MIN_PX = 6.5;
 const UP = new THREE.Vector3(0, 1, 0);
@@ -187,8 +196,19 @@ export class View {
   showTarget = true;
   /** Settings → indicators: only what is needed to play (no bounce mark; the serve box only while aiming) */
   minimal = false;
-  /** the coming ball is one to attack: the circle and the ring at the feet go orange (main.ts; brain.ts, ballCue) */
-  attackCue = false;
+  /**
+   * What the coming ball asks for (main.ts; brain.ts, ballCue): 'attack' turns the circle and the ring at the feet
+   * orange, 'bajada' (a ball back off the back glass to hit down) pink; 'block' leaves them (the timing ring says it).
+   */
+  cue: 'attack' | 'block' | 'bajada' | null = null;
+  /** the old switch for the attack cue (cue = 'attack' or nothing) */
+  get attackCue(): boolean {
+    return this.cue === 'attack';
+  }
+  set attackCue(v: boolean) {
+    if (v) this.cue = 'attack';
+    else if (this.cue === 'attack') this.cue = null;
+  }
   private boardKey = '';
   /** TV direction: the shots the camera takes in the dead time */
   readonly director = new Director();
@@ -487,13 +507,19 @@ export class View {
 
   // ------------------------------------------------------------------ effects from match events
   hitFx(x: number, y: number, z: number, perfect: boolean, power: number, replay = false) {
-    const n = perfect ? 18 : 6;
+    // (how hard the player meant it, from the hit event: see onHit; 0.5 a plain shot or one not known)
+    const sh = this.shotFx;
+    const hard = sh && Math.abs(sh.x - x) + Math.abs(sh.y - y) + Math.abs(sh.z - z) < 1e-3 ? sh.power : 0.5;
+    const n = Math.round((perfect ? 18 : 6) * (0.7 + 0.6 * hard));
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
-      const s = (1.2 + Math.random() * 2.5) * (0.6 + power);
+      const s = (1.2 + Math.random() * 2.5) * (0.6 + power) * (0.75 + 0.5 * hard);
       this.fx.add({ x, y, z, vx: Math.cos(a) * s, vy: Math.random() * 2.5, vz: Math.sin(a) * s, life: 0.2 + Math.random() * 0.2, s0: 0.08, s1: 0.01, r: 1, g: perfect ? 0.88 : 1, b: perfect ? 0.45 : 1, a: 0.9, grav: 4, drag: 4 });
     }
-    if (power > 0.8 && !REDUCED && !replay) this.shake = Math.max(this.shake, 0.18 * power);
+    // the paddle's flash: big and bright for a hard shot, a soft glow for a placed one (POWER_FX)
+    const F = POWER_FX;
+    this.fx.add({ x, y, z, vx: 0, vy: 0, vz: 0, life: F.life[0] + (F.life[1] - F.life[0]) * hard, s0: F.size[0] + (F.size[1] - F.size[0]) * hard, s1: 0.04, r: 1, g: 0.97, b: perfect ? 0.6 : 0.85, a: F.alpha[0] + (F.alpha[1] - F.alpha[0]) * hard, grav: 0, drag: 0 });
+    if (power > 0.8 && !REDUCED && !replay) this.shake = Math.max(this.shake, 0.18 * power * (0.8 + 0.4 * hard));
   }
   bounceFx(x: number, z: number, good: boolean) {
     for (let i = 0; i < 6; i++) {
@@ -547,10 +573,30 @@ export class View {
     w.z = b.z;
     w.ok = true;
   }
-  /** the ball left a paddle: the character keeps the contact point for the follow-through */
-  onHit(pid: number, x: number, y: number, z: number, t: number, hand: 1 | -1) {
-    this.chars[pid]?.onHit(x, y, z, t, hand);
+  /**
+   * The ball left a paddle: the character keeps the contact point for the follow-through, and what the shot was (its
+   * kind, power and special) from the hit event (`e`, or else the match's own latest hit of that player: main.ts calls
+   * this while it goes through the match's events). How hard it was shows in the paddle's flash (hitFx) and the
+   * ball's trail until the next hit (POWER_FX).
+   */
+  onHit(pid: number, x: number, y: number, z: number, t: number, hand: 1 | -1, e?: Extract<MatchEvent, { type: 'hit' }>) {
+    if (!e && this.match) {
+      const ev = this.match.events;
+      for (let i = ev.length - 1; i >= 0; i--) {
+        const h = ev[i];
+        if (h.type === 'hit' && h.pid === pid && Math.abs(h.x - x) + Math.abs(h.y - y) + Math.abs(h.z - z) < 1e-6) {
+          e = h;
+          break;
+        }
+      }
+    }
+    // (a remate looking for the walls is hit hard, whatever the gesture said)
+    const power = Math.max(e?.power ?? 0.5, e?.special === 'por3' ? 0.9 : e?.special === 'por4' ? 0.75 : 0);
+    this.chars[pid]?.onHit(x, y, z, t, hand, e ? { kind: e.kind, power: e.power, special: e.special } : undefined);
+    this.shotFx = { x, y, z, power };
   }
+  /** the last hit and how hard it was (0…1), for the flash and the trail */
+  private shotFx: { x: number; y: number; z: number; power: number } | null = null;
   cheer(pid: number) {
     if (this.match) this.chars[pid]?.react('cheer', this.match.t);
   }
@@ -884,24 +930,29 @@ export class View {
     this.ballShadow.scale.setScalar(1 + h * 0.5);
     (this.ballShadow.material as THREE.MeshBasicMaterial).opacity = Math.max(0.12, 0.75 - h * 0.18);
     const fast = v ? Math.hypot(v.x, v.y, v.z) : 0;
-    if (v && (m.phase === 'rally' || m.phase === 'dead')) this.placeSmear(v.x, v.y, v.z, grow);
-    for (const t of this.trail) t.a -= dt * 3.5;
+    // (the last hit's power: a hard shot leaves a longer, brighter streak and trail from a lower speed, a placed one a
+    // fainter one; see POWER_FX)
+    const hard = m.phase === 'rally' && this.shotFx ? this.shotFx.power : 0.5;
+    const F = POWER_FX;
+    if (v && (m.phase === 'rally' || m.phase === 'dead')) this.placeSmear(v.x, v.y, v.z, grow, 1 + F.smear * (hard - 0.5));
+    for (const t of this.trail) t.a -= dt * 3.5 * (1 - F.linger * (hard - 0.5));
     while (this.trail.length && this.trail[0].a <= 0) this.trail.shift();
-    if (m.phase === 'rally' && fast > 11) this.trail.push({ x: b.x, y: b.y, z: b.z, a: Math.min(1, (fast - 11) / 8) });
+    const from = 11 - F.from * (hard - 0.5);
+    if (m.phase === 'rally' && fast > from) this.trail.push({ x: b.x, y: b.y, z: b.z, a: Math.min(1, ((fast - from) / 8) * (1 + F.trail * (hard - 0.5))) });
   }
 
-  /** the streak behind a fast ball: from where it was a shutter's time ago to where it is */
-  private placeSmear(vx: number, vy: number, vz: number, grow: number) {
+  /** the streak behind a fast ball: from where it was a shutter's time ago to where it is (`k` longer and brighter) */
+  private placeSmear(vx: number, vy: number, vz: number, grow: number, k = 1) {
     const sp = Math.hypot(vx, vy, vz);
     if (sp < 6.5) return;
-    const len = sp * SHUTTER;
+    const len = sp * SHUTTER * k;
     const s = this.smear;
     s.visible = true;
     this.smearDir.set(vx / sp, vy / sp, vz / sp);
     s.quaternion.setFromUnitVectors(UP, this.smearDir);
     s.scale.set(grow, len, grow);
     s.position.copy(this.ball.position).addScaledVector(this.smearDir, -len / 2);
-    (s.material as THREE.MeshBasicMaterial).opacity = Math.min(1, (sp - 6.5) / 6);
+    (s.material as THREE.MeshBasicMaterial).opacity = Math.min(1, ((sp - 6.5) / 6) * k);
   }
 
   private updateMarkers(m: Match, time: number) {
@@ -913,6 +964,8 @@ export class View {
     for (const o of [this.landRing, this.footRing, this.targetRing, this.targetDot]) o.visible = false;
     const incoming = !!me && !!r && m.phase === 'rally' && !!r.last && r.last.team !== me.team;
     const plan = incoming ? me!.plan : null;
+    // (what the coming ball asks for, in its colour: an attack orange, a bajada pink)
+    const cueHue = this.cue === 'attack' ? HUE.attack : this.cue === 'bajada' ? HUE.bajada : null;
     // where the coming ball will bounce on the human's side (a small mark; the full indicators only)
     if (incoming && !this.minimal && r!.bounces === 0) {
       const g = posAt(r!.seg, r!.tGround);
@@ -930,21 +983,21 @@ export class View {
         this.targetRing.visible = this.targetDot.visible = true;
         this.targetRing.position.set(tg.fx, 0.017, tg.fz);
         this.targetDot.position.set(tg.fx, 0.017, tg.fz);
-        const col = this.attackCue ? HUE.attack : near ? HUE.lime : HUE.white;
+        const col = cueHue ?? (near ? HUE.lime : HUE.white);
         mat(this.targetRing).color.setHex(col);
         mat(this.targetDot).color.setHex(col);
-        this.targetRing.scale.setScalar(near && !this.attackCue ? 1 : breathe(7, 0.1));
+        this.targetRing.scale.setScalar(near && !cueHue ? 1 : breathe(7, 0.1));
       }
     }
     // the reach state, at the feet: lime in reach, red a fault (the return of serve taken out of the air), grey a ball
-    // going out that the assisted swing leaves alone, orange a ball to attack (nothing while the ball is out of reach:
-    // the spot shows where to go)
+    // going out that the assisted swing leaves alone, orange a ball to attack, pink a bajada (nothing while the ball is
+    // out of reach: the spot shows where to go)
     if (incoming && plan) {
       this.footRing.visible = true;
       this.footRing.position.set(me!.x, 0.016, me!.z);
       const leave = !!plan.out && this.leavesOut;
-      mat(this.footRing).color.setHex(plan.oops ? HUE.red : leave ? HUE.out : this.attackCue ? HUE.attack : HUE.lime);
-      this.footRing.scale.setScalar(this.attackCue && !plan.oops && !leave ? breathe(9, 0.06) : 1);
+      mat(this.footRing).color.setHex(plan.oops ? HUE.red : leave ? HUE.out : cueHue ?? HUE.lime);
+      this.footRing.scale.setScalar(cueHue && !plan.oops && !leave ? breathe(9, 0.06) : 1);
       mat(this.footRing).opacity = leave ? 0.6 : 0.85;
     }
     // the box to serve to (minimal: while aiming the serve)

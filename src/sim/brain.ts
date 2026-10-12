@@ -11,9 +11,12 @@
 //    gives it back) and, when the ball comes short, an approach and in to the net; a lob over the head now and then;
 //  · the return of serve: low at the feet of the server coming in, or a lob over the net player.
 
+import { HUMAN_ATTRS, type Attributes } from './attributes';
 import { AT_NET, DEPTH_Z, HL, NET_C, SERVICE, W } from './court';
 import type { Controller, Match, Mover } from './match';
-import type { Plan, Player, ShotKind, ShotSpec, Timing } from './types';
+import type { Plan, Player, ShotKind, ShotSpec, Special, Timing } from './types';
+
+export { HUMAN_ATTRS };
 
 export interface Skill {
   /** m/s */
@@ -41,6 +44,127 @@ export interface Skill {
    * they see where it really goes). 0 = reads everything perfectly.
    */
   read?: number;
+  /** the card (attributes 0 … 99) the rest came from (skillFrom): per-shot quality (attrQ) */
+  attrs?: Attributes;
+  /** 0 … 1: how hard they hit their firm shots (ShotSpec.power; 0.5 neutral). Attacks go a notch harder */
+  power?: number;
+  /** 0 … 1: their appetite and gift for the remate «por 3» / «por 4» (0: never) */
+  por?: number;
+  /** 0 … 1: how readily they play a bajada off the back glass (and look for one when planning the contact) */
+  wall?: number;
+  /** 0 … 1: of the attacking overheads that are not remates, the share of víboras (the rest: bandejas) */
+  vibora?: number;
+  /** m: the highest ball they can meet over the head (the jump) */
+  reachH?: number;
+}
+
+/**
+ * A rival's style: what they like to play, independent of how well (the card). skillFrom scales each tendency by the
+ * attribute behind it, so two players with the same style but different cards still play differently.
+ */
+export interface Style {
+  touch: number;
+  attack: number;
+  lob: number;
+  risk: number;
+  netRush: number;
+  serveDelay: number;
+  /** víboras rather than bandejas when they attack over the head (default 0.55) */
+  vibora?: number;
+  /** appetite for the remate por 3 / por 4 on top of the card (default 1) */
+  por?: number;
+}
+
+const lin = (v: number, a: number, b: number, ya: number, yb: number) => ya + ((v - a) / (b - a)) * (yb - ya);
+/** a tendency scaled by the attribute behind it: 1 at 81, 0.86 at 56, 1.07 at 93 */
+const tend = (v: number) => 0.55 + v / 180;
+
+/**
+ * THE mapping from a card (attributes 0 … 99) and a style to a CPU player's game. Every number of the card moves
+ * something; the anchors are the 0.1 rivals (Paquito ≈ 55, Arturo ≈ 90), so the ladder kept its shape:
+ *  · vel → speed (4.0 m/s at 55, 5.0 at 85, +0.033 a point) and, with ref, the lunge (0.4 … 0.75 m);
+ *  · ref → reaction (0.34 s at 56, −4.4 ms a point), the first read of a fast ball (read: 0.30 → 0.08 m), how often
+ *    they volley a ball going out (misjudge), and with con the poise (how much an awkward ball gets to them);
+ *  · con → contact quality q (0.70 at 55, +0.0055 a point) and its spread qVar (0.15 → 0.08);
+ *  · pot → power of the firm shots (0.5 at 75, ±0.006 a point) and, with rem, the remate por 3 / por 4 (por);
+ *  · rem → the overheads' quality (attrQ), the attack tendency (with pot) and the reach over the head (2.75 … 2.95 m);
+ *  · par → bajadas (wall: how readily) and the quality of every ball played off the glass (attrQ);
+ *  · tq → the soft game: the touch and lob tendencies and the quality of chiquitas, dejadas and globos (attrQ).
+ */
+export function skillFrom(a: Attributes, st: Style): Skill {
+  const c = (v: number, lo = 0, hi = 1) => clamp(v, lo, hi);
+  const reflex = (a.con + a.ref) / 2;
+  return {
+    speed: lin(a.vel, 55, 85, 4.0, 5.0),
+    reaction: c(lin(a.ref, 56, 90, 0.34, 0.19), 0.15, 0.4),
+    q: c(lin(a.con, 55, 88, 0.7, 0.8815), 0.6, 0.92),
+    qVar: c(lin(a.con, 55, 90, 0.15, 0.08), 0.06, 0.18),
+    touch: c(st.touch * tend(a.tq)),
+    attack: c(st.attack * tend((a.pot + a.rem) / 2)),
+    lob: c(st.lob * tend(a.tq)),
+    risk: c(st.risk * tend(a.pot)),
+    mover: { netRush: st.netRush, misjudge: c(lin(a.ref, 56, 90, 0.25, 0.03), 0.02, 0.3), lunge: c(lin((a.vel + a.ref) / 2, 55.5, 89, 0.4, 0.75), 0.3, 0.85) },
+    serveDelay: st.serveDelay,
+    poise: c(lin(reflex, 56, 89, 1, 0.5), 0.45, 1),
+    read: c(lin(a.ref, 56, 90, 0.3, 0.08), 0.04, 0.35),
+    attrs: a,
+    power: c(0.5 + (a.pot - 75) * 0.006, 0.25, 0.75),
+    por: c(((a.pot + a.rem) / 2 - 72) / 22) * (st.por ?? 1),
+    wall: c((a.par - 45) / 45),
+    vibora: st.vibora ?? 0.55,
+    reachH: 2.75 + a.rem * 0.002,
+  };
+}
+
+/**
+ * The human's card on his controller (HumanController): `speed` (m/s: 5.0 at vel 76, ±0.02 a point), `powerCap`
+ * (how hard his hardest flick is: × 1 at pot 74), `q` (added to his contact qualities: ±0.002 a point of con off 72),
+ * `reachH` (m, the highest overhead: 2.9 at rem 74) and, through attrQ, his overheads (rem), bajadas and balls off the
+ * glass (par), soft game (tq) and volleys (ref). His reaction is his own thumb.
+ */
+export function humanSkill(a: Attributes = HUMAN_ATTRS): { speed: number; powerCap: number; q: number; reachH: number; wall: number } {
+  return {
+    speed: 5.0 + (a.vel - 76) * 0.02,
+    powerCap: clamp(0.75 + a.pot * 0.0034, 0.85, 1.1),
+    q: (a.con - 72) * 0.002,
+    reachH: 2.75 + a.rem * 0.002,
+    wall: clamp((a.par - 45) / 45, 0, 1),
+  };
+}
+
+/**
+ * How a shot's own attribute moves its contact quality, against the player's control (con): `k` per point. Overheads
+ * ride on rem, a bajada and any ball played off the glass on par, the soft game on tq, volleys at the net on ref (with
+ * con). Paquito's walls (par 72) are better than his control (56); Alejandro's remates (92) better than his (82).
+ */
+export const ATTR_Q = { k: 0.0025 };
+export function attrQ(a: Attributes | undefined, kind: ShotKind, plan: Plan | null): number {
+  if (!a) return 0;
+  let v = a.con;
+  if (kind === 'smash' || kind === 'bandeja' || kind === 'vibora') v = a.rem;
+  else if (kind === 'bajada') v = a.par;
+  else if (kind === 'dink' || kind === 'drop' || kind === 'lob') v = plan?.volley && Math.abs(plan.fz) < AT_NET ? (a.tq + a.ref) / 2 : a.tq;
+  else if (plan?.wall) v = a.par;
+  else if (plan?.volley && Math.abs(plan.fz) < AT_NET) v = (a.con + a.ref) / 2;
+  return (v - a.con) * ATTR_Q.k;
+}
+
+/**
+ * The power model (Match.launch): ShotSpec.power 0 … 1, 0.5 neutral. Harder is faster and flatter, and wilder:
+ *  · pace × (1 − (power − 0.5) × `pace`): power 1 flies 18 % sooner, a placed ball (0.3) 7 % later;
+ *  · a firm shot's height over the tape × (1 − (power − 0.5) × `clear`): flatter when hit harder (more net), higher
+ *    and safer when placed;
+ *  · the scatter of the target × (1 + (power − 0.5) × `spread`) above 0.5, × (1 − (0.5 − power) × `calm`) below;
+ *  · soft shots (chiquita, dejada, globo) feel it `soft` as much (a placed globo against a quicker, flatter one).
+ * The shanks of hard swings at awkward balls are the controllers' (powerShank).
+ */
+export const POWER = { pace: 0.36, clear: 0.5, spread: 0.9, calm: 0.6, soft: 0.4, shank: 0.3 };
+/**
+ * Extra chance of a shank from swinging hard at an awkward ball: power over 0.6 × how awkward it was (`hard`, the
+ * difficulty), × POWER.shank. A clean ball hit hard is fine; a ball dug out of the corner hit hard is not.
+ */
+export function powerShank(power: number, hard: number): number {
+  return Math.max(0, power - 0.6) * clamp(hard / 0.4, 0, 1.5) * POWER.shank;
 }
 
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
@@ -74,6 +198,14 @@ export class AIController implements Controller {
   constructor(readonly skill: Skill) {
     this.mover = skill.mover;
   }
+  /** the highest ball they meet over the head (the card's rem) */
+  get reachH(): number {
+    return this.skill.reachH ?? 2.9;
+  }
+  /** how much they wait for a bajada off the back glass (the card's par) */
+  get bajada(): number {
+    return this.skill.wall ?? 0;
+  }
 
   private waitUntil = -1;
   /** the opponent's last balls at this player (zoneOf keys): a repeated one is read earlier and played calmer */
@@ -103,7 +235,7 @@ export class AIController implements Controller {
     const u = rng.next();
     const wide = second ? 0.1 : 0.15 + s.risk * 0.35;
     const x = u < 0.45 ? 0.35 + rng.next() * 0.6 : u < 1 - wide ? 1.6 + rng.next() * 1.4 : 3.3 + rng.next() * 0.9 * (0.5 + s.risk);
-    return this.roll(m, { kind: 'serve', ...target(p.side, half * x, depth), clear: (second ? 0.55 : 0.4) + rng.next() * 0.3 }, second ? 0 : 0.05);
+    return this.roll(m, { kind: 'serve', ...target(p.side, half * x, depth), clear: (second ? 0.55 : 0.4) + rng.next() * 0.3, power: second ? 0.4 : clamp(s.power ?? 0.5, 0.4, 0.6) }, second ? 0 : 0.05);
   }
 
   /**
@@ -145,8 +277,9 @@ export class AIController implements Controller {
     if (c) hard += c.off * clamp((0.45 - c.lead) / 0.3, 0, 1) * 0.5;
     // passed: a ball that went by and had to be chased back towards their own glass (a lob, a volley through them) is
     // played turning, on the run (RUN_BACK)
-    if (c) hard += clamp((Math.abs(plan.fz) - c.z0 - RUN_BACK.from) * RUN_BACK.per, 0, RUN_BACK.max) * (0.6 + 0.4 * poise);
-    let shot = chooseShot(m, p, plan, s);
+    // (a ball come back off the back glass gave them the time it took there: half of it)
+    if (c) hard += clamp((Math.abs(plan.fz) - c.z0 - RUN_BACK.from) * RUN_BACK.per, 0, RUN_BACK.max) * (0.6 + 0.4 * poise) * (plan.wall === 'back' ? 0.5 : 1);
+    let shot = chooseShot(m, p, plan, s, hard);
     let risk = attackRisk(shot.kind, plan) * poise;
     // A fast ball at the body or the feet, below the tape and with no time: the safe answer is a soft block (it takes
     // the pace off), not a full swing. Players with touch see it more often, and more so on a pattern.
@@ -172,24 +305,62 @@ export class AIController implements Controller {
       shot = punish(m, p, plan, s);
       risk = attackRisk(shot.kind, plan) * poise;
     }
-    const spec = this.roll(m, shot, hard + risk);
+    // how hard: their usual power on the firm shots (the card's pot), a notch more on an attack, placed on the soft ones
+    if (shot.power === undefined) shot = { ...shot, power: cpuPower(s, shot.kind, plan) };
+    const spec = this.roll(m, shot, hard + risk, plan);
     // the rally weighs on them (less on the calm ones, and less against a pattern they have already read)
     spec.pop = popOf(m, poise * (1 - 0.5 * fam));
+    // beaten: a hard ball at them with no time (a remate, a volley at the body) now and then is not even touched
+    if (m.rng.chance(whiffOf(rush, s))) spec.whiff = true;
+    // a hard swing at an awkward ball goes off the frame more often (POWER)
+    const ps = powerShank(spec.power ?? 0.5, hard);
+    if (ps > 0) spec.shank = Math.min(SHANK.max, (spec.shank ?? 0) + ps);
     return spec;
   }
   /** the other side's automatic shots in a row at this player, in this rally */
   private autoSeen = { rally: -1, n: 0 };
 
-  /** contact quality: the skill, a bit of luck and how awkward the ball was; a poor contact is also early or late */
-  protected roll(m: Match, base: Omit<ShotSpec, 'q' | 'timing'>, hard: number): ShotSpec {
+  /**
+   * contact quality: the skill (and the card's attribute for this shot, attrQ), a bit of luck and how awkward the ball
+   * was; a poor contact is also early or late
+   */
+  protected roll(m: Match, base: Omit<ShotSpec, 'q' | 'timing'>, hard: number, plan: Plan | null = null): ShotSpec {
     const s = this.skill;
-    const raw = s.q + m.rng.gauss() * s.qVar - hard;
+    const raw = s.q + attrQ(s.attrs, base.kind, plan) + m.rng.gauss() * s.qVar - hard;
     const q = clamp(raw, Q_FLOOR, 1);
     const timing: Timing = q > 0.93 ? 'perfect' : q > 0.7 ? 'good' : 'early';
     const late = clamp(m.rng.gauss() * (1 - q) * 1.1, -1, 1);
     const shank = shankOf(m, raw, Q_FLOOR);
-    return { ...base, q, timing, late, ...(shank > 0 ? { shank } : {}) };
+    return { ...base, q, timing, late, power: base.power ?? s.power ?? 0.5, ...(shank > 0 ? { shank } : {}) };
   }
+}
+
+/**
+ * CPU players beaten by the pace: of the lack of time on a ball (rushed: a hard ball, a volley at the body, a remate)
+ * above `from`, `k` per unit is the chance the paddle never meets it (ShotSpec.whiff: it goes past, a winner unless the
+ * partner saves it), at most `max`; quicker reactions (the card's ref) are beaten less (`react` × reaction / 0.25).
+ * Without it every hard ball came back or went into the net: too few winners (19 % of the points, real padel 30–40 %).
+ */
+export const WHIFF = { from: 0.18, k: 0.8, max: 0.35, react: 1 };
+function whiffOf(rush: number, s: Skill): number {
+  return clamp((rush - WHIFF.from) * WHIFF.k * (1 - WHIFF.react + (WHIFF.react * s.reaction) / 0.25), 0, WHIFF.max);
+}
+
+/**
+ * A CPU shot's power (ShotSpec.power) when the choice did not set one: placed on the soft game, their usual power
+ * (Skill.power, from pot) on the firm shots, a notch more (`attack`) on a put-away: a remate, a víbora, a volley or a
+ * drive from above the tape, a bajada.
+ */
+export const CPU_POWER = { soft: 0.35, lob: 0.45, attack: 0.18, bandeja: -0.1 };
+function cpuPower(s: Skill, kind: ShotKind, plan: Plan): number {
+  const base = s.power ?? 0.5;
+  if (kind === 'dink' || kind === 'drop') return CPU_POWER.soft;
+  if (kind === 'lob') return CPU_POWER.lob;
+  if (kind === 'serve' || kind === 'return') return base;
+  if (kind === 'bandeja') return clamp(base + CPU_POWER.bandeja, 0, 1);
+  const high = plan.by > NET_C + 0.15;
+  if (kind === 'smash' || kind === 'vibora' || kind === 'bajada' || ((kind === 'speedup' || kind === 'drive') && high)) return clamp(base + CPU_POWER.attack, 0, 1);
+  return base;
 }
 
 /**
@@ -267,7 +438,8 @@ function rushed(m: Match, plan: Plan): number {
     if (avail < 0.45) d += (0.45 - avail) * 1.6;
   }
   // chased back by a lob: played on the run, the ball over the shoulder (an overhead from deep is no put-away)
-  if (last?.kind === 'lob') d += plan.overhead ? clamp((Math.abs(plan.fz) - 5.5) * 0.15, 0, 0.4) : clamp((Math.abs(plan.fz) - 6) * 0.08, 0, 0.3);
+  // (a lob come back off the back glass gave them the time it took there: half of it)
+  if (last?.kind === 'lob') d += (plan.overhead ? clamp((Math.abs(plan.fz) - 5.5) * 0.15, 0, 0.4) : clamp((Math.abs(plan.fz) - 6) * 0.08, 0, 0.3)) * (plan.wall === 'back' ? 0.5 : 1);
   return d;
 }
 
@@ -352,7 +524,13 @@ export const PADEL = {
   overNear: 4.5,
   remate: 0.45,
   vibora: 0.55,
-  por3: 0.9,
+  /** of the remates of a player with por 1 (Skill.por) that can go for it (specialOk), the share hit por 3 / por 4;
+   *  and the share of the plain remates angled «a la reja» (× 0.5 + risk) */
+  por3: 0.35,
+  por4: 0.2,
+  remateReja: 0.3,
+  /** a ball off the back glass met high at the back (isBajada): the chance of a bajada, × (0.6 + 0.4 × Skill.wall) */
+  bajada: 0.95,
   /** from the back against a pair at the net: the globo (lob × globo), the chiquita (touch × chiquita), the passing
    *  drive (attack × pass), the hard drive at the feet (the rest) */
   globo: 1.1,
@@ -366,7 +544,7 @@ export const PADEL = {
 };
 
 /** The shot a sensible CPU player picks here (padel doubles, see the head of this file and PADEL). */
-export function chooseShot(m: Match, p: Player, plan: Plan, s: Skill): Omit<ShotSpec, 'q' | 'timing'> {
+export function chooseShot(m: Match, p: Player, plan: Plan, s: Skill, hard = 0): Omit<ShotSpec, 'q' | 'timing'> {
   const r = m.rally!;
   const rng = m.rng;
   const opps = m.players.filter((o) => o.team !== p.team);
@@ -410,17 +588,33 @@ export function chooseShot(m: Match, p: Player, plan: Plan, s: Skill): Omit<Shot
     return out('return', rng.chance(0.75) ? toServer : open(), SERVICE - 1.6 + rng.next() * 1.6 + s.risk * 0.4, 0.3 + (1 - s.risk) * 0.2 + rng.next() * 0.2);
   }
 
+  // ---- the bajada: a ball come back high off the back glass, hit down from the back (the par of the card)
+  // (only with the time to set it up: an awkward one, after running back, is defended with a lob)
+  if (isBajada(plan) && r.shots > 2 && rng.chance(PADEL.bajada * (0.6 + 0.4 * (s.wall ?? 0.5)) * clamp((BAJADA.hard - hard) / 0.2, 0, 1))) {
+    // at a pair at the net: hard at the feet of one, or through the middle; at a pair back: firm to a corner, short of
+    // the glass (hit down from shoulder height it carries)
+    if (!oppBack) {
+      if (rng.chance(0.55)) return out('bajada', feet(), clamp(oz(opp) + 0.2 + rng.next() * 0.8, 2.6, 6), 0.12 + (1 - s.risk) * 0.08, 0.85);
+      return out('bajada', (rng.next() - 0.5) * 1.2, 5.5 + rng.next() * 1.6, 0.14 + (1 - s.risk) * 0.08, 0.85);
+    }
+    return out('bajada', corner(rng.chance(0.5) ? 1 : -1), 6.2 + rng.next() * 1.4 + s.risk * 0.4, 0.3 + rng.next() * 0.15, 0.95);
+  }
+
   // ---- overheads
   if (plan.overhead && !lobbed && me < PADEL.overNear + 2.5) {
     const deepOver = me > PADEL.overNear;
     // from the back of the service box or further, only the bandeja (a remate from there comes back off the glass)
     const remate = !deepOver && rng.chance(s.attack * PADEL.remate * (0.6 + up * 0.6) * clamp((PADEL.overNear + 0.5 - me) / 2, 0.3, 1));
     if (remate) {
-      // por 3: hard and steep into the middle of their half, it kicks off the floor and over the back wall
-      if (me < 3.8 && plan.by > 2.2 && rng.chance(s.attack * s.risk * PADEL.por3)) return out('smash', (rng.next() - 0.5) * 1.6, 2.1 + rng.next() * 0.8, 0.05, 0.5);
+      // por 3 / por 4, rarely, by the card (Skill.por: pot and rem): the remate that looks for the point off the walls
+      const por = s.por ?? 0;
+      if (por > 0 && specialOk('por3', plan) && rng.chance(por * PADEL.por3)) return specialShot(m, p, plan, 'por3', null, cpuSpecialPower(s));
+      if (por > 0 && specialOk('por4', plan) && rng.chance(por * PADEL.por4)) return specialShot(m, p, plan, 'por4', null, cpuSpecialPower(s));
+      // the remate: a la reja (angled short into the side mesh, it dies there), at the feet, or to the open side
+      if (rng.chance(PADEL.remateReja * (0.5 + s.risk))) return out('smash', reja(), 3.0 + rng.next() * 1.4, 0.08, 0.75);
       return out('smash', rng.chance(0.5) ? open() : feet(), oppNet ? 3.5 + rng.next() * 2 : 4.5 + rng.next() * 2.5, 0.08, 0.75);
     }
-    if (!deepOver && rng.chance(s.attack * PADEL.vibora)) {
+    if (!deepOver && rng.chance(s.attack * PADEL.vibora * ((s.vibora ?? 0.55) / 0.55))) {
       // the víbora: sliced, angled into the side glass (it skids low off it)
       const sg = Math.sign(plan.bx) || (rng.chance(0.5) ? 1 : -1);
       return out('vibora', sg * (W / 2 - 0.6 - rng.next() * 0.6), 6.0 + rng.next() * 2.2, 0.25, 0.9);
@@ -494,6 +688,57 @@ export function chooseShot(m: Match, p: Player, plan: Plan, s: Skill): Omit<Shot
   return out('drive', rng.chance(0.5) ? (rng.next() - 0.5) * 2 : corner(rng.chance(0.5) ? 1 : -1), deep(), 0.35 + rng.next() * 0.3, 1.15);
 }
 
+/**
+ * The remate that looks for the point off the walls (ShotSpec.special), for the CPU and the human alike:
+ *  · «por 3»: flat (no spin), as hard as it goes and as steep as the net lets it (aimed just over the tape, the closer
+ *    to the net the steeper), so it kicks up off the floor and over the walls. It needs a high ball close to the net
+ *    (`minH3`, `near3`); hit from lower or further it bounces up into the back mesh or glass and comes back a sitter;
+ *  · «por 4»: heavy topspin (`spin4`), `extra4` m deeper than the por 3 from the same contact: it bounces up into the top
+ *    of the back glass (2.6–3 m), climbs off it over the defenders' reach and flies back over the net. Lower on the
+ *    glass they play it (a sitter, high); into the mesh above it, it dies at the back.
+ * The physics decides (Match.launch adds the scatter of a hard contact, `scatter` × (`base` + 1 − q) m deeper or
+ * shorter, and loses `slow` of the pace per unit of a poor contact). The pace is the base × the power model (POWER),
+ * never faster than LAUNCH.vmax on average.
+ */
+export const POR = { minH3: 2.25, near3: 4.2, pace3: 0.56, clear3: 0.04, spin3: 0.04, minH4: 2.1, near4: 4.8, extra4: 1.1, pace4: 0.6, clear4: 0.06, spin4: 1, scatter: 1.0, base: 0.6, slow: 0.5, tape: 0.97 };
+/** a ball over the head that can be hit for por 3 / por 4 at all (the CPU only tries those) */
+export function specialOk(sp: Special, plan: Plan): boolean {
+  if (!plan.overhead) return false;
+  const fz = Math.abs(plan.fz);
+  return sp === 'por3' ? plan.by >= POR.minH3 && fz <= POR.near3 : plan.by >= POR.minH4 && fz <= POR.near4;
+}
+/** the CPU's power on a remate por 3 / por 4: full for the best (Skill.por) */
+function cpuSpecialPower(s: Skill): number {
+  return clamp(0.8 + (s.por ?? 0) * 0.2, 0, 1);
+}
+/**
+ * The shot of a por 3 / por 4 attempt from this contact (`aim`: the human's aimed spot, its x is kept). por 3: the depth
+ * that clears the tape on the straightest line from the contact (the steepest the net allows), plus a hair.
+ */
+export function specialShot(m: Match, p: Player, plan: Plan, sp: Special, aim: { x: number } | null, power: number): Omit<ShotSpec, 'q' | 'timing'> {
+  const rng = m.rng;
+  const h = Math.max(1.3, plan.by);
+  // the depth that clears the tape on the straightest line (the steepest bounce the net allows)
+  const d = clamp((POR.tape * Math.abs(plan.bz)) / (h - POR.tape) + 0.25, 1.0, 4.5);
+  if (sp === 'por3') {
+    const x = aim ? aim.x : plan.bx * 0.4 + (rng.next() - 0.5) * 2.4;
+    return { kind: 'smash', ...target(p.side, x, d), clear: POR.clear3, pace: POR.pace3, power, special: 'por3', intent: 'attack' };
+  }
+  const x = aim ? aim.x : plan.bx * 0.3 + (rng.next() - 0.5) * 2;
+  return { kind: 'smash', ...target(p.side, x, d + POR.extra4), clear: POR.clear4, pace: POR.pace4, power, special: 'por4', intent: 'attack' };
+}
+
+/**
+ * The bajada (bajada de pared): a ball that has bounced and come back off the back glass, met above `minH` m by a
+ * player at the back (`minZ` m or more from the net): hit down and hard instead of waiting for it to drop. The planner
+ * values such a contact (`value` × how readily the player plays one: the card's par) so the players wait for it. The
+ * CPU plays it only with the time to set it up (the ball's difficulty under `hard`, fully under hard − 0.2).
+ */
+export const BAJADA = { minH: 1.35, minZ: SERVICE - 0.3, value: 0.3, hard: 0.45 };
+export function isBajada(plan: Plan | null): boolean {
+  return !!plan && !plan.volley && plan.wall === 'back' && plan.by >= BAJADA.minH && Math.abs(plan.fz) >= BAJADA.minZ;
+}
+
 /** The rivals of the ladder, from the park regular to the tour's No. 1. */
 export interface Rival {
   id: string;
@@ -501,41 +746,55 @@ export interface Rival {
   /** i18n key of the one-line description */
   tag: string;
   look: number;
+  /** the card: attributes 0 … 99 (attributes.ts, overall()), shown on the player card; the skill comes from it */
+  attrs: Attributes;
   skill: Skill;
 }
 
-const mv = (netRush: number, misjudge: number, lunge = 0): Mover => ({ netRush, misjudge, lunge });
-
 /**
- * The pairs' players. Feet for a 20 × 10 m court: the human runs at HUMAN_SPEED and reaches 1 m (LUNGE); the first
- * pair is clearly slower and reaches less, the champions about the same as the human. Read: the spread of their first
- * read of a fast ball. Styles (the tags in i18n): Paquito defends from the back glass, Fede gets everything back,
- * Alejandro hits (remates, por 3), Agustín is touch (chiquitas, víboras), Arturo does it all.
+ * The pairs' players: their cards and styles (skillFrom turns them into the game). Feet for a 20 × 10 m court: the
+ * human runs at HUMAN_SPEED and reaches 1 m (LUNGE); the first pair is clearly slower and reaches less, the champions
+ * about the same as the human. Styles (the tags in i18n): Paquito defends from the back glass and lobs, Fede is touch
+ * and gets everything back, Alejandro hits (remates, por 3 / por 4), Agustín is touch (chiquitas, víboras), Arturo
+ * does it all.
  */
-export const DOUBLES_SKILLS: Record<string, Skill> = {
-  paco: { speed: 4.0, reaction: 0.34, q: 0.7, qVar: 0.15, touch: 0.25, attack: 0.2, lob: 0.7, risk: 0.1, mover: mv(0.3, 0.25, 0.4), serveDelay: 1.3, poise: 1, read: 0.3 },
-  lola: { speed: 4.5, reaction: 0.27, q: 0.79, qVar: 0.12, touch: 0.5, attack: 0.3, lob: 0.75, risk: 0.2, mover: mv(0.55, 0.15, 0.55), serveDelay: 1.1, poise: 0.75, read: 0.2 },
-  bruno: { speed: 4.9, reaction: 0.24, q: 0.85, qVar: 0.12, touch: 0.3, attack: 0.75, lob: 0.45, risk: 0.45, mover: mv(0.75, 0.1, 0.6), serveDelay: 0.9, poise: 0.65, read: 0.17 },
-  nuria: { speed: 5.0, reaction: 0.21, q: 0.85, qVar: 0.1, touch: 0.85, attack: 0.55, lob: 0.65, risk: 0.3, mover: mv(0.85, 0.06, 0.7), serveDelay: 1.0, poise: 0.5, read: 0.12 },
-  reina: { speed: 5.1, reaction: 0.19, q: 0.88, qVar: 0.08, touch: 0.75, attack: 0.75, lob: 0.65, risk: 0.45, mover: mv(0.95, 0.03, 0.75), serveDelay: 0.9, poise: 0.5, read: 0.08 },
+export const RIVAL_ATTRS: Record<string, Attributes> = {
+  paco: { pot: 52, con: 56, vel: 55, ref: 56, rem: 50, par: 72, tq: 66 },
+  lola: { pot: 58, con: 72, vel: 72, ref: 72, rem: 60, par: 82, tq: 84 },
+  bruno: { pot: 93, con: 82, vel: 82, ref: 76, rem: 92, par: 70, tq: 62 },
+  nuria: { pot: 80, con: 82, vel: 86, ref: 86, rem: 86, par: 78, tq: 93 },
+  reina: { pot: 90, con: 88, vel: 88, ref: 90, rem: 92, par: 88, tq: 84 },
 };
+export const RIVAL_STYLES: Record<string, Style> = {
+  paco: { touch: 0.27, attack: 0.24, lob: 0.76, risk: 0.11, netRush: 0.3, serveDelay: 1.3, vibora: 0.3, por: 0 },
+  lola: { touch: 0.55, attack: 0.33, lob: 0.74, risk: 0.22, netRush: 0.55, serveDelay: 1.1, vibora: 0.45 },
+  bruno: { touch: 0.32, attack: 0.72, lob: 0.45, risk: 0.43, netRush: 0.75, serveDelay: 0.9, vibora: 0.4, por: 1.3 },
+  nuria: { touch: 0.82, attack: 0.55, lob: 0.62, risk: 0.3, netRush: 0.85, serveDelay: 1.0, vibora: 0.8, por: 0.7 },
+  reina: { touch: 0.74, attack: 0.72, lob: 0.62, risk: 0.43, netRush: 0.95, serveDelay: 0.9, vibora: 0.55 },
+};
+export const DOUBLES_SKILLS: Record<string, Skill> = Object.fromEntries(Object.keys(RIVAL_ATTRS).map((id) => [id, skillFrom(RIVAL_ATTRS[id], RIVAL_STYLES[id])]));
 
 /** The rivals (first names in the manner of the PES; the surnames are in tour.ts). */
 export const RIVALS: Rival[] = [
-  { id: 'paco', name: 'Paquito', tag: 'rival.paco', look: 1, skill: DOUBLES_SKILLS.paco },
-  { id: 'lola', name: 'Fede', tag: 'rival.lola', look: 2, skill: DOUBLES_SKILLS.lola },
-  { id: 'bruno', name: 'Alejandro', tag: 'rival.bruno', look: 3, skill: DOUBLES_SKILLS.bruno },
-  { id: 'nuria', name: 'Agustín', tag: 'rival.nuria', look: 4, skill: DOUBLES_SKILLS.nuria },
-  { id: 'reina', name: 'Arturo', tag: 'rival.reina', look: 5, skill: DOUBLES_SKILLS.reina },
+  { id: 'paco', name: 'Paquito', tag: 'rival.paco', look: 1, attrs: RIVAL_ATTRS.paco, skill: DOUBLES_SKILLS.paco },
+  { id: 'lola', name: 'Fede', tag: 'rival.lola', look: 2, attrs: RIVAL_ATTRS.lola, skill: DOUBLES_SKILLS.lola },
+  { id: 'bruno', name: 'Alejandro', tag: 'rival.bruno', look: 3, attrs: RIVAL_ATTRS.bruno, skill: DOUBLES_SKILLS.bruno },
+  { id: 'nuria', name: 'Agustín', tag: 'rival.nuria', look: 4, attrs: RIVAL_ATTRS.nuria, skill: DOUBLES_SKILLS.nuria },
+  { id: 'reina', name: 'Arturo', tag: 'rival.reina', look: 5, attrs: RIVAL_ATTRS.reina, skill: DOUBLES_SKILLS.reina },
 ];
 
-/** The human's partner: a steady club player on the left («revés»), who moves up and back with him. */
+/**
+ * The human's partner: a steady player on the left («revés»), quick and safe off the glass, little power, who moves
+ * up and back with him (overall 75, about the human's 73).
+ */
+export const PARTNER_ATTRS: Attributes = { pot: 60, con: 82, vel: 85, ref: 84, rem: 64, par: 82, tq: 70 };
 export const PARTNER: Rival = {
   id: 'marta',
   name: 'Martín',
   tag: 'partner.marta',
   look: 6,
-  skill: { speed: 5.0, reaction: 0.22, q: 0.85, qVar: 0.09, touch: 0.6, attack: 0.5, lob: 0.6, risk: 0.25, mover: mv(0.85, 0.06, 0.65), serveDelay: 1.0, poise: 0.5, read: 0.14 },
+  attrs: PARTNER_ATTRS,
+  skill: skillFrom(PARTNER_ATTRS, { touch: 0.62, attack: 0.55, lob: 0.62, risk: 0.25, netRush: 0.85, serveDelay: 1.0, vibora: 0.5, por: 0 }),
 };
 
 /** The club's pairs, two rivals of the ladder each, from the Sunday pair to the champions. */
@@ -555,9 +814,9 @@ export const PAIRS: Pair[] = [
 ];
 
 /** The human's movement (Mover): he picks his own depth; netRush is what the partner reads. */
-export const HUMAN_MOVER: Mover = mv(0.9, 0, 0);
-/** the human's top speed (m/s): a 20 m court asks for a little more than pickleball's 4.6 */
-export const HUMAN_SPEED = 5.0;
+export const HUMAN_MOVER: Mover = { netRush: 0.9, misjudge: 0, lunge: 0 };
+/** the human's top speed (m/s) from his card (humanSkill: 5.0 at vel 76; a 20 m court asks for more than pickleball's 4.6) */
+export const HUMAN_SPEED = humanSkill(HUMAN_ATTRS).speed;
 export const HUMAN_REACTION = 0.1;
 
 /**
@@ -590,12 +849,20 @@ export function autoShot(m: Match, p: Player, plan: Plan): Omit<ShotSpec, 'q' | 
  * `attack` (a flick, F, the right button): a hard volley, or over the head a remate, or a víbora when the stroke bends
  * towards a side wall (`bend`, ATTACK.viboraBend).
  */
-export function kindForAim(m: Match, p: Player, plan: Plan, d: number, lob: boolean, attack = false, bend = 0): { kind: ShotKind; clear: number; pace?: number } {
+export function kindForAim(m: Match, p: Player, plan: Plan, d: number, lob: boolean, attack = false, bend = 0, opts: { power?: number; down?: boolean } = {}): { kind: ShotKind; clear: number; pace?: number; special?: Special } {
   const r = m.rally;
   if (!r) return { kind: 'serve', clear: 0.5 };
+  const power = opts.power ?? 0.5;
+  // a ball come back high off the back glass: the bajada (a flick or a hard stroke: hit down hard; placed: firm to the
+  // corners)
+  if (isBajada(plan) && r.shots > 1 && !lob) return attack || opts.down || power >= ATTACK.hardBajada ? { kind: 'bajada', clear: ATTACK.bajadaClear, pace: ATTACK.bajadaPace } : { kind: 'bajada', clear: 0.3, pace: 0.95 };
+  // over the head, a down-flick (towards the player): the remate por 4
+  if (opts.down && plan.overhead && r.shots > 1) return { kind: 'smash', clear: POR.clear4, pace: POR.pace4, special: 'por4' };
   if (attack) {
     if (!plan.overhead) return { kind: 'speedup', clear: ATTACK.clear, pace: ATTACK.pace };
     if (Math.abs(bend) >= ATTACK.viboraBend) return { kind: 'vibora', clear: ATTACK.viboraClear, pace: ATTACK.viboraPace };
+    // straight up at full power at a high ball close to the net: the remate por 3
+    if (power >= ATTACK.por3Power && specialOk('por3', plan)) return { kind: 'smash', clear: POR.clear3, pace: POR.pace3, special: 'por3' };
     return { kind: 'smash', clear: ATTACK.smashClear, pace: ATTACK.smashPace };
   }
   if (r.shots === 1) return lob ? { kind: 'lob', clear: 2.8 } : { kind: 'return', clear: d < AIM_SOFT ? 0.2 : 0.35 };
@@ -617,7 +884,7 @@ export const AIM_SOFT = 4.2;
  *  · the stroke's angle bends it across: `bend` m for a stroke 45° off straight up (world x, from the hitter's view).
  * A low ball is a gamble (attackRisk × `lowRisk`); an attack let go outside the golden window is `rough` rougher.
  */
-export const ATTACK = { aimed: 20, side: 0, behind: 0.6, minDepth: DEPTH_Z[2] + 1.2, bend: 1.6, clear: 0.12, pace: 0.85, smashClear: 0.08, smashPace: 0.72, viboraBend: 0.7, viboraClear: 0.25, viboraPace: 0.9, lowRisk: 3, rough: 0.04 };
+export const ATTACK = { aimed: 20, side: 0, behind: 0.6, minDepth: DEPTH_Z[2] + 1.2, bend: 1.6, clear: 0.12, pace: 0.85, smashClear: 0.08, smashPace: 0.72, viboraBend: 0.7, viboraClear: 0.25, viboraPace: 0.9, lowRisk: 3, rough: 0.04, por3Power: 0.9, hardBajada: 0.7, bajadaClear: 0.13, bajadaPace: 0.85 };
 export function attackTarget(m: Match, p: Player, plan: Plan, aimed: { x: number; z: number } | null, bend: number): { tx: number; tz: number } {
   const opps = m.players.filter((o) => o.team !== p.team);
   const want = (aimed ? aimed.x : plan.bx) + bend;
@@ -684,18 +951,20 @@ export function underAttack(m: Match, p: Player): boolean {
   // (a remate that has come off the glass is no attack any more: it is a ball to play)
   if ((r?.walls ?? 0) > 0) return false;
   if (lh.kind === 'smash' || lh.kind === 'vibora') return true;
-  return (lh.kind === 'speedup' || lh.kind === 'drive') && Math.abs(p.z) < UNDER_ATTACK.near && ballSpeed(m) > UNDER_ATTACK.pace;
+  return (lh.kind === 'speedup' || lh.kind === 'drive' || lh.kind === 'bajada') && Math.abs(p.z) < UNDER_ATTACK.near && ballSpeed(m) > UNDER_ATTACK.pace;
 }
 
 /**
  * For the HUD, the training and the bots: what the coming ball asks of `p` at the contact `plan` (the circle, or the
- * contact in reach): 'attack' (attackable), 'block' (an attack coming at him) or null.
+ * contact in reach): 'block' (an attack coming at him), 'bajada' (it comes back high off the back glass: hit it down,
+ * isBajada), 'attack' (attackable) or null.
  */
-export function ballCue(m: Match, p: Player, plan: Plan | null): 'attack' | 'block' | null {
+export function ballCue(m: Match, p: Player, plan: Plan | null): 'attack' | 'block' | 'bajada' | null {
   if (m.phase !== 'rally' || !plan || plan.oops || plan.out) return null;
   const r = m.rally;
   if (!r?.last || r.last.team === p.team) return null;
   if (underAttack(m, p)) return 'block';
+  if (isBajada(plan) && r.shots > 1) return 'bajada';
   return attackable(m, p, plan) ? 'attack' : null;
 }
 

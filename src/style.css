@@ -723,13 +723,296 @@ button:focus-visible {
   bottom: 0;
 }
 
-/* ---------- the match card (before a match) ---------- */
-.vs-card {
-  width: min(420px, 100%);
+/* ---------- player cards (attributes 0–99): the overall big, the seven bars, the kit's colour along the top ---------- */
+/* a rating's band: its number and bar (85+ lime, 75+ green, 65+ gold, under that orange) */
+.t1 {
+  --tier: var(--accent);
+}
+.t2 {
+  --tier: #8fdc6a;
+}
+.t3 {
+  --tier: var(--gold);
+}
+.t4 {
+  --tier: #f08c4a;
+}
+.pcard {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  width: 100%;
+  min-width: 0;
+  padding: 10px 10px 11px;
+  border-radius: var(--r);
+  text-align: left;
+  color: var(--fg);
+  background: linear-gradient(180deg, #1d2531, #121821 70%);
+  box-shadow: inset 0 3px 0 var(--tc, var(--fg-3)), inset 0 0 0 1px var(--line-2), 0 10px 24px rgba(0, 0, 0, 0.32);
+  transition: transform 0.12s var(--ease), filter 0.15s;
+}
+button.pcard:active {
+  transform: scale(0.98);
+  filter: brightness(1.1);
+}
+.pc-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.pc-ovr {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 18px;
+  flex: none;
+  min-width: 34px;
+  line-height: 1;
+}
+.pc-ovr b {
+  font-family: var(--display);
+  font-weight: 800;
+  font-size: 31px;
+  letter-spacing: -0.01em;
+  color: var(--tier);
+}
+.pc-ovr small {
+  margin-top: 1px;
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  color: var(--fg-3);
+}
+.pc-id {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.pc-id small,
+.pc-id b,
+.pc-st {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pc-id small {
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--fg-2);
+}
+.pc-id b {
+  font-family: var(--display);
+  font-weight: 800;
+  font-size: 19px;
+  line-height: 1.02;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.pc-st {
+  margin-top: 2px;
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+.pc-attrs {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+/* one attribute: its name, the bar, the number */
+.pa {
+  display: grid;
+  grid-template-columns: 27px 1fr 19px;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 12px;
+  line-height: 1.1;
+}
+.pa span {
+  letter-spacing: 0.06em;
+  color: var(--fg-2);
+}
+.pa i {
+  position: relative;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+.pa i::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: calc(var(--v) * 100%);
+  border-radius: 2px;
+  background: var(--tier);
+}
+.pa b {
+  text-align: right;
+  font-weight: 800;
+  font-size: 13px;
+  color: var(--tier);
+}
+/* the whole card (your pair, a card opened from the match card) */
+.pcard.full {
+  gap: 12px;
+  padding: 16px 16px 18px;
+}
+.pcard.full .pc-top {
+  gap: 12px;
+}
+.pcard.full .pc-ovr {
+  min-width: 56px;
+}
+.pcard.full .pc-ovr b {
+  font-size: 52px;
+}
+.pcard.full .pc-ovr small {
+  font-size: 12px;
+}
+.pcard.full .pc-id small {
+  font-size: 14px;
+}
+.pcard.full .pc-id b {
+  font-size: 30px;
+}
+.pcard.full .pc-st {
+  font-size: 12.5px;
+  color: var(--fg-2);
+}
+.pcard.full .av {
+  flex: none;
+  width: 52px;
+  height: 52px;
+  font-size: 20px;
+}
+.pcard .pc-tag {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.42;
+  color: var(--fg-2);
+}
+.pc-info {
+  display: block;
+  margin-bottom: 3px;
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+.pcard.full .pc-attrs {
+  gap: 8px;
+}
+.pcard.full .pa {
+  grid-template-columns: 104px 1fr 28px;
+  gap: 10px;
+  font-size: 15px;
+}
+.pcard.full .pa span {
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.pcard.full .pa i {
+  height: 7px;
+  border-radius: 3px;
+}
+.pcard.full .pa b {
+  font-size: 18px;
+}
+/* a card opened over the match card: a tap anywhere closes it */
+.pc-modal {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  padding: calc(16px + var(--safe-t)) 16px calc(16px + var(--safe-b));
+  background: rgba(6, 8, 12, 0.8);
+  animation: fadein 0.15s ease-out;
+}
+.pc-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(380px, 100%);
+  animation: risein 0.25s var(--ease);
+}
+/* your pair (from the menu): the pair's overall, then the two whole cards */
+.panel.team .team-o {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 2px 14px;
+}
+.team-o > span:last-child {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.team-o b {
+  font-family: var(--display);
+  font-weight: 800;
+  font-size: 22px;
+  letter-spacing: 0.02em;
+}
+.team-o small {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-3);
+}
+.pc-two {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+/* a pair's overall in the draw */
+.ovr-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  font-family: var(--display);
+  line-height: 1;
+}
+.ovr-chip b {
+  font-weight: 800;
+  font-size: 22px;
+  color: var(--tier);
+}
+.ovr-chip small {
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--fg-3);
+}
+.rival.locked .ovr-chip b {
+  color: var(--fg-2);
+}
+
+/* ---------- the match card (before a match): both pairs, their overall and their players' cards ---------- */
+.screen.vs-screen {
+  justify-content: flex-start;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+}
+.vs-card {
+  flex: none;
+  width: min(440px, 100%);
+  margin: auto 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
   text-align: center;
 }
 .vs-head .eyebrow {
@@ -744,93 +1027,83 @@ button:focus-visible {
   line-height: 1;
   text-transform: uppercase;
 }
-.vs {
+.vs-teams {
+  position: relative;
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  align-items: start;
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  column-gap: 26px;
   width: 100%;
 }
-.vs .side {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-.vs .av {
-  width: 84px;
-  height: 84px;
-  font-size: 32px;
-  box-shadow: inset 0 -4px 0 var(--tc, var(--fg-3)), inset 0 0 0 1px var(--line);
-}
-.vs .duo {
-  display: flex;
-  gap: 6px;
-}
-.vs .duo .av {
-  width: 58px;
-  height: 58px;
-  font-size: 22px;
-}
-.vs .nm {
-  font-family: var(--display);
-  font-weight: 800;
-  font-size: 28px;
-  line-height: 1;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  overflow-wrap: anywhere;
-}
-.vs .duo + .nm {
-  font-size: 21px;
-}
-.vs .nm small {
-  display: block;
-  margin-bottom: 4px;
-  font-weight: 600;
-  font-size: 14px;
-  letter-spacing: 0.06em;
-  color: var(--fg-2);
-}
-.vs .sd {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--fg-3);
-}
-.vs .x {
-  align-self: center;
-  margin-top: -36px;
+.vs-teams .x {
+  position: absolute;
+  left: 50%;
+  top: 9px;
+  transform: translateX(-50%);
   font-family: var(--display);
   font-weight: 800;
   font-style: italic;
-  font-size: 22px;
+  font-size: 19px;
   color: var(--fg-3);
 }
-.vs-tag {
-  max-width: 330px;
-  font-size: 15px;
-  line-height: 1.4;
-  color: var(--fg-2);
+.vt {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
 }
-.vs-lvl {
+.vt-h {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-top: -6px;
+  gap: 7px;
+  min-height: 40px;
+  text-align: left;
+}
+.vt.them .vt-h {
+  flex-direction: row-reverse;
+  text-align: right;
+}
+.vt-n {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.vt-n b {
   font-family: var(--display);
-  font-weight: 600;
-  font-size: 12px;
-  letter-spacing: 0.2em;
+  font-weight: 800;
+  font-size: 16px;
+  line-height: 1.05;
+  letter-spacing: 0.02em;
   text-transform: uppercase;
+}
+.vt-n b .seed {
+  margin-right: 4px;
+  min-width: 16px;
+  height: 15px;
+  font-size: 11.5px;
+  vertical-align: 1px;
+}
+.vt-n small {
+  margin-top: 1px;
+  font-size: 11px;
+  font-weight: 600;
   color: var(--fg-3);
+}
+.vt-c {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.vs-tag {
+  max-width: 340px;
+  font-size: 14.5px;
+  line-height: 1.4;
+  color: var(--fg-2);
 }
 .vs-go {
   display: flex;
   flex-direction: column;
   gap: 10px;
   width: min(320px, 100%);
-  margin-top: 4px;
 }
 
 /* ---------- pause ---------- */
@@ -1499,6 +1772,12 @@ button:focus-visible {
   height: 15px;
   stroke-width: 2.6;
 }
+.tv-replay .sh {
+  padding-left: 10px;
+  margin-left: 2px;
+  border-left: 1px solid rgba(255, 255, 255, 0.35);
+  color: var(--gold);
+}
 .tv-replay span {
   display: flex;
   align-items: center;
@@ -1863,6 +2142,17 @@ button:focus-visible {
   border-radius: 50%;
   background: currentColor;
 }
+/* the power of an attack key held (F, the right button): a bar along the bottom that fills as it is held */
+.chip.pw::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  bottom: 2px;
+  height: 2px;
+  border-radius: 1px;
+  background: linear-gradient(90deg, currentColor calc(var(--pw, 0.5) * 100%), rgba(255, 255, 255, 0.15) 0);
+}
 
 /* tutorial hint: one short line at the bottom, under the court and between the thumbs */
 #hint {
@@ -2074,17 +2364,24 @@ button:focus-visible {
     min-height: 60px;
   }
   .vs-card {
-    gap: 14px;
+    gap: 12px;
   }
-  .vs .av {
-    width: 70px;
-    height: 70px;
-    font-size: 27px;
+  .vs-round {
+    font-size: 30px;
   }
-  .vs .duo .av {
-    width: 50px;
-    height: 50px;
-    font-size: 19px;
+  .pc-attrs {
+    gap: 2px;
+  }
+  .pcard {
+    gap: 5px;
+    padding: 8px 9px 9px;
+  }
+  .pcard.full {
+    gap: 9px;
+    padding: 12px 14px 14px;
+  }
+  .pcard.full .pc-attrs {
+    gap: 5px;
   }
   .result {
     font-size: 48px;
@@ -2136,31 +2433,102 @@ button:focus-visible {
   .menu-list button {
     height: 40px;
   }
+  .screen.vs-screen {
+    padding-top: calc(10px + var(--safe-t));
+    padding-bottom: calc(10px + var(--safe-b));
+  }
   .vs-card {
-    width: min(640px, 100%);
-    gap: 10px;
+    width: min(860px, 100%);
+    gap: 9px;
+  }
+  .vs-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+    gap: 14px;
   }
   .vs-round {
-    font-size: 30px;
+    margin-top: 0;
+    font-size: 28px;
   }
-  .vs .av {
-    width: 56px;
-    height: 56px;
-    font-size: 22px;
+  .vs-teams {
+    column-gap: 40px;
   }
-  .vs .duo .av {
+  .vs-teams .x {
+    top: 7px;
+  }
+  .vt {
+    gap: 6px;
+  }
+  .vt-h {
+    min-height: 34px;
+  }
+  .vt-c {
+    flex-direction: row;
+  }
+  .pcard {
+    gap: 5px;
+    padding: 8px 9px 9px;
+  }
+  .pc-attrs {
+    gap: 2px;
+  }
+  .vs-tag {
+    font-size: 13.5px;
+  }
+  .panel.team {
+    width: min(820px, 100%);
+  }
+  .pc-two {
+    flex-direction: row;
+  }
+  .panel.team .team-o {
+    padding: 6px 2px 8px;
+  }
+  .pc-two .pcard.full {
+    flex: 1;
+    gap: 7px;
+    padding: 10px 14px 12px;
+  }
+  .pc-two .pcard.full .pc-attrs {
+    gap: 3px;
+  }
+  .pc-two .pcard.full .pa {
+    font-size: 13px;
+  }
+  .pc-two .pcard.full .pa b {
+    font-size: 15px;
+  }
+  .pc-two .pcard.full .pc-ovr b {
+    font-size: 40px;
+  }
+  .pc-two .pcard.full .pc-id b {
+    font-size: 24px;
+  }
+  .pc-two .pcard.full .av {
     width: 44px;
     height: 44px;
     font-size: 17px;
   }
-  .vs .side {
-    gap: 6px;
+  /* (the style line under the name says it in short: the long line would push the bars off the screen) */
+  .pc-two .pc-tag {
+    font-size: 0;
   }
-  .vs .nm {
-    font-size: 24px;
+  .pc-two .pc-tag .pc-info {
+    margin: 0;
   }
-  .vs-tag {
-    font-size: 14px;
+  .pc-modal .pc-sheet {
+    width: min(620px, 100%);
+    flex-direction: row;
+    align-items: flex-end;
+  }
+  .pc-modal .pcard.full {
+    flex: 1;
+    gap: 8px;
+    padding: 12px 14px 14px;
+  }
+  .pc-modal .pcard.full .pc-attrs {
+    gap: 4px;
   }
   .vs-go {
     flex-direction: row-reverse;
@@ -2189,11 +2557,20 @@ button:focus-visible {
     font-size: 54px;
   }
   .sr {
-    padding: 4px 0;
+    padding: 3px 0;
   }
   .end .btn {
     min-height: 42px;
     font-size: 17px;
+  }
+  /* (the rematch and the menu side by side, under the next round: the column fits the screen) */
+  .end-b .btn-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .end-b .btn-col .btn:first-child:nth-last-child(3) {
+    grid-column: 1 / -1;
   }
   .panel {
     width: min(560px, 100%);

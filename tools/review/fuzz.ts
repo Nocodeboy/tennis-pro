@@ -18,6 +18,7 @@ let stuck = 0;
 let bad = 0;
 let points = 0;
 const intents = { attack: 0, block: 0 };
+const specials = { por3: 0, por4: 0, bajada: 0 };
 for (let i = 0; i < N; i++) {
   const rng = new Rng(500 + i * 13);
   const el = { addEventListener() {}, clientWidth: 390, setPointerCapture() {} } as unknown as HTMLElement;
@@ -39,7 +40,7 @@ for (let i = 0; i < N; i++) {
   m.start();
   const end = () => (input as unknown as { end(c: boolean): void }).end(false);
   // a gesture under way: a tap (down, a few frames, up) or a flick (down, a stroke up, up)
-  let gest: { kind: 'tap' | 'flick'; n: number; y: number } | null = null;
+  let gest: { kind: 'tap' | 'flick' | 'down' | 'side'; n: number; y: number } | null = null;
   let wasOut = false;
   let guard = 0;
   try {
@@ -54,12 +55,16 @@ for (let i = 0; i < N; i++) {
       // the right thumb's gestures, frame by frame
       if (gest) {
         if (gest.kind === 'flick') input.aimMove((rng.next() - 0.5) * 20, (gest.y -= 8 + rng.next() * 20), m.t);
+        // (0.3: the down-flick, por 4 over the head, and a fast stroke across: a hard shot)
+        else if (gest.kind === 'down') input.aimMove((rng.next() - 0.5) * 20, (gest.y += 8 + rng.next() * 30), m.t);
+        else if (gest.kind === 'side') input.aimMove((gest.y += 10 + rng.next() * 25), (rng.next() - 0.5) * 20, m.t);
         if (--gest.n <= 0) {
           input.aimUp(m.t);
           gest = null;
         }
       } else if (!input.pressing && rng.chance(0.015)) {
-        gest = rng.chance(0.5) ? { kind: 'tap', n: 1 + Math.floor(rng.next() * 12), y: 0 } : { kind: 'flick', n: 2 + Math.floor(rng.next() * 6), y: 0 };
+        const u = rng.next();
+        gest = u < 0.35 ? { kind: 'tap', n: 1 + Math.floor(rng.next() * 12), y: 0 } : { kind: u < 0.7 ? 'flick' : u < 0.85 ? 'down' : 'side', n: 2 + Math.floor(rng.next() * 6), y: 0 };
         input.aimDown(m.t);
       }
       // the right thumb: press, drag, release
@@ -81,6 +86,9 @@ for (let i = 0; i < N; i++) {
       for (const e of m.events) {
         if (e.type === 'point') points++;
         if (e.type === 'hit' && e.intent) intents[e.intent]++;
+        if (e.type === 'hit' && e.special) specials[e.special]++;
+        if (e.type === 'hit' && e.kind === 'bajada') specials.bajada++;
+        if (e.type === 'hit' && (e.power === undefined || !Number.isFinite(e.power))) throw new Error(`hit without power ${e.kind}`);
       }
       m.events.length = 0;
       for (const p of m.players) {
@@ -104,4 +112,4 @@ for (let i = 0; i < N; i++) {
     console.log(`partido ${i} (ayuda ${ctl.assist}, ${ctl.mode}): ${(err as Error).message}`);
   }
 }
-console.log(`${N} partidos, ${points} puntos con pulgares al azar (${intents.attack} ataques y ${intents.block} bloqueos): ${bad} con fallos, ${stuck} atascados`);
+console.log(`${N} partidos, ${points} puntos con pulgares al azar (${intents.attack} ataques y ${intents.block} bloqueos; ${specials.por3} por 3, ${specials.por4} por 4, ${specials.bajada} bajadas): ${bad} con fallos, ${stuck} atascados`);
