@@ -195,9 +195,12 @@ Germán: «Es importante que hagamos lo de los vídeos». Detalle en `notas-golp
 - **Fuente:** clips de pádel del canal KNSU de YouTube (CC BY): un jugador, de lado, un golpe por clip. Se bajan en el portátil con `Vídeos\padel-clips\descargar_clips_padel.bat` (yt-dlp y Deno oficiales; sin Node).
 - **En el juego:**
   - el saque y el revés pasan a ser de una persona real (antes, Meshy);
-  - la bajada toma el cuerpo de una bajada real.
+  - el remate también (antes, el de un tenista de Rokoko), y con él la bandeja, la víbora y los remates por 3 y por 4, que se construyen sobre su clip;
+  - la bajada es una bajada real, cuerpo y recorrido de la pala;
   - `?video=off` vuelve a los de antes.
-- **El remate de vídeo está preparado pero sin usar:** la bandeja y la víbora se construyen sobre el clip del remate y con él salían peor. Falta ajustarlas.
+- **Medido:**
+  - los remates golpean más delante (el remate, 27 cm delante de la cadera, antes 11) y con la cara de la pala más de frente (35°, antes 73°);
+  - la cara de la pala en la bajada queda peor (75°, antes 54°).
 - **Sonido:** los clips de KNSU están mudos; de estos vídeos no salen golpes reales. Lo que queda es grabarlos con el móvil en pista.
 - **Créditos:** citar a KNSU (CC BY) al publicar.
 

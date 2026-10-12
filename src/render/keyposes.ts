@@ -642,6 +642,9 @@ const FACE: Record<string, { k: number; tilt: number }> = {
   smash: { k: 0.9, tilt: -0.2 },
   // (the bajadas: the face closed over a ball hit down)
   bajada: { k: 0.9, tilt: -0.3 },
+  // (the serve from video only: its hand left the face edge-on to the ball, 82° off where it goes; low to high over
+  // the net)
+  serve: { k: 0.87, tilt: 0.15 },
   bajada_l: { k: 0.95, tilt: -0.25 },
 };
 /** how much of the turn, and over how long round the contact it comes in (s: all of it within `near`) */
@@ -948,7 +951,8 @@ export function refineClips(template: THREE.Object3D, clips: Record<string, THRE
   }
   lap('serve');
   // last, the paddle's face at each swing's contact (see FACE)
-  for (const n of Object.keys(FACE)) if (clips[n]) clips[n] = faceForward(r, kin, clips[n], n, mocap[n]);
+  // (the serve only from video: ?video=off plays the Meshy one as before)
+  for (const n of Object.keys(FACE)) if (clips[n] && (n !== 'serve' || n in mocap)) clips[n] = faceForward(r, kin, clips[n], n, mocap[n]);
   lap('face');
 }
 

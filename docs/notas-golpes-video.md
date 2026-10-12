@@ -11,7 +11,7 @@ Germán: «Es importante que hagamos lo de los vídeos». Los clips de pádel de
 - luego, cada vídeo con su audio aparte en `.m4a`;
 - deja un registro en `descarga.log`.
 
-Se bajaron 10 de 11. La víbora se cortó a mitad con un 403 de YouTube; al volver a lanzar el `.bat`, retoma lo que falta.
+Se bajaron 10 de 11 a la primera. La víbora daba un 403 de YouTube al reanudarla; `reintentar_vibora.bat` la baja desde cero y por trozos de 10 MB, y así llegó. Pero **no sirve**: es un reportaje del World Padel Tour (Sebastián Nerone hablando a cámara, una presentadora y planos lejanos de partidos), sin ningún golpe de cuerpo entero con la cámara quieta, y con su marca y sus patrocinadores. Se descarta.
 
 | Archivo | Título en YouTube | Qué es de verdad | Contacto (vídeo) |
 |---|---|---|---|
@@ -52,10 +52,18 @@ npx tsx tools/swing-path.ts <golpe>
 |---|---|---|---|
 | Saque | Meshy, generado con IA | `serve_video` | 0,83 m de alto, 35 cm a la derecha y 16 cm delante, a 5,3 m/s (antes 0,68 m y 8,1 m/s) |
 | Revés | Meshy, generado con IA | `backhand_video`: a una mano, el hombro derecho hacia la red | 1,29 m de alto, 43 cm a la izquierda y 23 cm delante; 7,3 m/s, lo más rápido del golpe |
-| Bajada | el cuerpo del remate de tenis de Rokoko | `bajada_video` (solo el cuerpo) | sin cambio: el recorrido de la pala sigue siendo el de `BAJADA` |
+| Bajada | el cuerpo del remate de tenis de Rokoko y el recorrido de `BAJADA` | `bajada_video`, con su propio recorrido (`own`) | 1,41 m de alto, 61 cm a la derecha y 18 cm delante, a 7 m/s |
+| Remate, bandeja, víbora, por 3 y por 4 | el remate de tenis de Rokoko | `smash_video`: trofeo de perfil y abierto, sin salto (el salto lo pone el juego) | contacto a 1,47 s, la pala a 2,09 m, casi encima de la cabeza |
 
 - **Saque:** `keyposes.ts` sigue poniendo encima la mano libre, que suelta la bola, y la postura de espera del principio.
-- **Bajada:** el cuerpo de una bajada de verdad: de perfil, los brazos abiertos y un paso hacia la bola. La mitad de las piernas es del clip (`legs` 0,5).
+- **Saque:** la cara de la pala se gira hacia la red en el contacto (`FACE.serve` en `keyposes.ts`, solo con el saque de vídeo). La mano del clip la dejaba casi de canto: 82° de la dirección de la bola, frente a 63° con el de Meshy. Ahora, 65°.
+- **Bajada:**
+  - es el cuerpo de una bajada de verdad: de perfil, los brazos abiertos y un paso hacia la bola; la mitad de las piernas es del clip (`legs` 0,5);
+  - la pala sigue su propio recorrido, movido para que pase por la bola (`SwingDef.own`), en vez del de `BAJADA`;
+  - con el cuerpo nuevo y el recorrido viejo, la pala se quedaba a 9 cm de la bola.
+- **Remates:** la posición del jugador respecto a la bola se fija a mano (`SwingDef.reach`: 0,30 m).
+  - El remate de vídeo golpea casi encima de la cabeza. Con su propio alcance, el jugador se ponía justo debajo de la bola, arqueado y con la cabeza bajo la pala; la bandeja era donde peor se veía.
+  - El contacto se tomó un fotograma más tarde del medido (1,47 s), con la pala ya algo por delante: en el vídeo, la bola está en la pala entre esos dos fotogramas.
 
 ### Comprobado en la página (`tools/closeups.py`, semilla 7, dobles contra la pareja 3)
 
@@ -68,16 +76,38 @@ Comparado con `?video=off`:
 - **Revés:** (ver abajo, «Revés en la página»).
 - `tsc` y `node build.mjs` limpios.
 
-### El remate de vídeo, preparado pero sin usar
+### Medido (`FORCE=1 npx tsx tools/poses.ts 90`: 8 partidos de 90 s, mismas semillas)
 
-`assets/anims/smash_video.json` está listo:
-- contacto a 1,43 s, con la pala a 2,12 m justo encima de la cabeza;
-- final hacia la cadera izquierda;
-- sin salto.
+Antes es `?video=off`.
 
-En la página el remate quedaba mejor que el de tenis. Pero la bandeja, la víbora y los remates por 3 y por 4 se construyen sobre el clip del remate (`OVER` y `SPECIAL`, ajustados al de tenis), y con este la bandeja salía peor: el jugador se ponía justo debajo de la bola, arqueado hacia atrás y con la pala sobre la cabeza.
+| Medida | Antes | Ahora |
+|---|---|---|
+| **Remate:** pala a la bola, mediana / p90 / máx. | 0 / 0 / 0 cm | 2,0 / 4,6 / 5,2 cm |
+| **Remate:** golpe delante de la cadera | 11 cm | **27 cm** |
+| **Bandeja:** pala a la bola | 0 / 15,3 / 21,0 cm | 2,1 / 11,2 / 22,8 cm |
+| **Bandeja:** golpe delante | 15 cm | **23 cm** |
+| **Víbora:** pala a la bola | 13,5 / 20,6 cm | 11,1 / 17,8 cm |
+| **Víbora:** golpe delante | 10 cm | 17 cm |
+| **Remates:** cara de la pala contra la dirección de la bola | 73° | **35°** |
+| **Bajada:** pala a la bola | 0 / 0,5 cm | 1,6 / 2,1 cm |
+| **Bajada:** cara de la pala | 54° | 75° (peor) |
+| **Bajada:** golpe delante | 56 cm | 44 cm |
+| **Saque:** pala a la bola | 0 cm | 0,4 / 6,8 cm |
+| **Saque:** cara de la pala | 63° | 65° |
+| **Revés:** pala a la bola | 0,1 / 6,0 cm | 0,2 / 9,9 cm |
+| **Revés:** golpe delante | 61 cm | 40 cm |
 
-En el pádel hay más bandejas que remates, así que hace falta ajustar `OVER` antes de usarlo: dónde se pone el jugador respecto a la bola y lo que se queda del clip en la bandeja.
+- **Bajada:** la cara de la pala no mejoró con ninguna inclinación de `FACE.bajada` (−0,65, −0,3 y 0,05 dan 75°). Es lo único que quedó peor que antes. En las capturas no se nota: la pala está en la bola, de frente.
+- **El resto** (cuello, tronco, deslizamiento de los pies y cambios de golpe) queda casi igual. Las excepciones:
+  - la cabeza en el contacto va 3° más girada respecto a la bola (mediana de 37° a 40°);
+  - en el revés, el pie apoyado resbala algo más (p90 de 0,6 a 0,9 m/s).
+
+### Comprobado en la página (semilla 5, dobles contra la pareja 3; remates, bandejas y víboras)
+
+Comparado con `?video=off`:
+- **Remate:** en vez del trofeo recogido del tenista, el abierto de un jugador de pádel: la pala atrás y arriba y la mano libre apuntando a la bola. Golpea arriba y termina cruzando hacia la cadera.
+- **Bandeja:** ya no se queda debajo de la bola. La pala arriba a la derecha, la bola en la pala, el cuerpo más erguido y el final cruzado.
+- **Víbora:** igual de bien. Al final, la cabeza se inclina algo hacia el hombro: es el tronco de la captura.
 
 ## Sonido
 
@@ -89,16 +119,15 @@ La vía que queda para tener golpes, cristal, malla y bote reales de pádel es *
 
 ## Licencias y créditos
 
-- **KNSU (YouTube):** CC BY. Al publicar hay que citarlos en los créditos: el nombre del canal y el enlace a cada vídeo usado, que son `hw3AeXSWblI` (saque), `ct4qEtYR4uk` (revés) y `0B17bkGJ0B8` (bajada), más `pTGTSzR8K30` si se usa el remate.
+- **KNSU (YouTube):** CC BY. Al publicar hay que citarlos en los créditos: el nombre del canal y el enlace a cada vídeo usado, que son `hw3AeXSWblI` (saque), `ct4qEtYR4uk` (revés), `0B17bkGJ0B8` (bajada) y `pTGTSzR8K30` (remate).
 - El juego aún no tiene página de créditos; ya estaba pendiente por el pack de Rokoko (`concepto.md`, 0.2).
 
 ## Pendiente
 
-- **El remate de vídeo:** ajustar la bandeja y la víbora sobre él (ver arriba).
+- **Bajada:** la cara de la pala (75°, antes 54°).
 - **Otros clips convertidos y sin poner:**
   - globo, para la derecha de abajo arriba;
   - cortado, que podría ser la derecha del jugador de fondo;
   - remate liftado, para el por 4;
   - la «bandeja», una derecha alta, para la volea alta de derecha.
-- **La víbora:** volver a lanzar el `.bat`.
-- **Probar en el móvil:** tres clips más (unos 150 KB en total).
+- **Probar en el móvil:** cuatro clips más (unos 210 KB en total).

@@ -165,6 +165,17 @@ interface SwingDef {
   /** padel: the most a bandeja or a víbora jumps (m; default OVER.skip) */
   skip?: number;
   /**
+   * how far from the body the paddle meets the ball (m across the floor, a 1.7 m player; default: the paddle's tip at
+   * the clip's contact): where the body is put under or beside the ball (the remate from video meets it right over
+   * the head: on its own reach the player stood under the ball)
+   */
+  reach?: number;
+  /**
+   * the bajadas: the paddle follows the clip's own path (moved so it goes through the ball, as the other swings do)
+   * instead of BAJADA's, and the body stands off the ball by the clip's reach; for a clip of a real bajada
+   */
+  own?: boolean;
+  /**
    * how much of the legs the clip has when it takes them (default 1; the rest is the ready stance): the drive's clip
    * squats wide (feet 0.8 m apart, hips at 0.73 m at the contact), a goalkeeper's crouch for every forehand
    */
@@ -267,23 +278,25 @@ const MOCAP: Partial<Record<SwingKind, { file: string; def: SwingDef }>> = {
 /**
  * The padel swings from video: a real padel player, one stroke a clip, filmed side on in a sports hall (KNSU's clips
  * on YouTube, CC BY; tools/video_pose.py and `padel_clip.py video`, docs/notas-golpes-video.md). They take the place of
- * the Meshy serve and backhand and of the overhead's body in the bajada (?video=off plays those). Contacts measured on
- * the videos, frame by frame (the ball leaving the paddle):
+ * the Meshy serve and backhand and of the tennis overhead (the remate and all built on it, and the bajada's body)
+ * (?video=off plays those). Contacts measured on the videos, frame by frame (the ball leaving the paddle):
  *  · serve: from the ball let go to the follow-through over the left shoulder; the contact 0.88 s in, below the waist
  *    (the wind-up the simulation waits for is 0.87 s: SERVE_WINDUP);
  *  · backhand: one-handed, the right shoulder to the net, the paddle back by the left shoulder, the contact in front
  *    at chest height, finished with both arms flung wide;
- *  · bajada: the body of a real bajada (side on, the paddle up behind the head, a step into the ball); the paddle's
- *    path is still BAJADA's (the IK holds the arm through the stroke).
- * The remate from video (assets/anims/smash_video.json: the trophy pose side on from 0.9 s, the contact at full
- * stretch 1.43 s in, the paddle 2.12 m up, right over the head; down across to the left hip; no jump) is not used yet:
- * the bandeja, the víbora and the por 3 / por 4 are built on the smash's clip (OVER, SPECIAL, tuned on the tennis one)
- * and on it the bandeja stood right under the ball, arched back, the paddle over the head. It wants that tuning first.
+ *  · smash: the ready stance, the trophy pose side on and open (the paddle up behind, the free hand at the ball) from
+ *    0.9 s, met at full stretch nearly over the head (1.47 s, a frame after the one measured: the paddle a touch in
+ *    front), down across to the left hip; no jump in it (SMASH_JUMP adds it). The bandeja, the víbora and the por 3 /
+ *    por 4 are built on it (OVER, SPECIAL). On its own reach (the paddle over the head) the body stood right under the
+ *    ball, arched back: `reach` puts it 0.3 m off it, as the tennis one did;
+ *  · bajada: a real bajada (side on, the paddle up behind the head, a step into the ball), played on its own path
+ *    (`own`: on BAJADA's the paddle stopped 9 cm short of the ball).
  */
 const VIDEO: Partial<Record<SwingKind, { file: string; def: SwingDef }>> = {
   serve: { file: 'serve_video', def: { find: 0.88, out: 1.5, fade: 0.12, ik: 0.15 } },
   backhand: { file: 'backhand_video', def: { find: 0.78, out: 1.2, fade: 0.1, ik: 0.17, lead: 0.5, drop: 0.12 } },
-  bajada: { file: 'bajada_video', def: { find: 1.25, out: 1.75, fade: 0.12, ik: 0.46, lead: 0.9, home: 1.5, drop: 0.06, legs: 0.5 } },
+  smash: { file: 'smash_video', def: { find: 1.47, out: 1.9, fade: 0.12, ik: 0.15, lead: 0.9, jumpFrom: 2.0, jumpMax: 0.72, skip: 0.58, reach: 0.3 } },
+  bajada: { file: 'bajada_video', def: { find: 1.25, out: 1.75, fade: 0.12, ik: 0.2, lead: 0.9, home: 1.5, drop: 0.06, legs: 0.5, own: true } },
 };
 /** the swings played from motion capture and their contact (s into the clip), for keyposes.ts */
 export const MOCAP_CONTACT: Record<string, number> = {};
@@ -1668,6 +1681,8 @@ export class CharacterView {
   /** How far out from the feet a swing clip meets the ball (m, horizontal). */
   private reachOf(k: Swing): number {
     if (k === 'proc') return 0.25;
+    const fixed = SWINGS[k as SwingKind]?.reach;
+    if (fixed !== undefined) return fixed * (this.height / 1.7);
     const r = this.a.reach[k];
     return r ? Math.hypot(r.x, r.z) * (this.height / 1.7) : 0.6;
   }
@@ -1727,7 +1742,7 @@ export class CharacterView {
       const env = 1 - smooth(0.04, 0.32, Math.abs(tc));
       // (a ball over the head, out of reach standing: the body goes under it, so the arm reaches up for it)
       // (a bajada: the ball out in front and to the side, BAJADA.reach)
-      const reach = kind === 'smash' && c.y > (SWINGS.smash.jumpFrom ?? SMASH_JUMP.from) ? Math.min(this.reachOf(kind), OVER.under) : kind === 'bajada' || kind === 'bajada_l' ? BAJADA.reach * (this.height / 1.78) : this.reachOf(kind);
+      const reach = kind === 'smash' && c.y > (SWINGS.smash.jumpFrom ?? SMASH_JUMP.from) ? Math.min(this.reachOf(kind), OVER.under) : (kind === 'bajada' || kind === 'bajada_l') && !SWINGS[kind].own ? BAJADA.reach * (this.height / 1.78) : this.reachOf(kind);
       // (and a ball jammed into the body: a step back out of its way, so the arm has room for the paddle)
       const away = kind === 'smash' || kind === 'serve' || kind === 'proc' ? 0 : Math.min(0.3, Math.max(0, 0.6 * reach - dh));
       const k = ((Math.min(0.75, Math.max(0, dh - reach)) - away) * env) / Math.max(dh, 0.05);
@@ -1802,7 +1817,8 @@ export class CharacterView {
     // for a drive, out to the side for a lunge): the arm then only finishes the job
     // (a bajada: BAJADA's own, the ball out in front to the paddle's side, `aim` rad off the chest, less as he squares
     // up through the finish)
-    const baj = kind === 'bajada' || kind === 'bajada_l';
+    // (one played on its clip's own path, SwingDef.own: like any other swing, turned so the clip meets the ball)
+    const baj = (kind === 'bajada' || kind === 'bajada_l') && !SWINGS[kind].own;
     if (c && kind && kind !== 'proc' && kind !== 'smash' && kind !== 'serve') {
       const r = this.a.reach[kind];
       const dx = c.x - p.x;
@@ -2184,7 +2200,7 @@ export class CharacterView {
       sBall.set(c.x, c.y, c.z);
       if (tc < 0) target.copy(back).lerp(sBall, smooth(B0, 0, tc));
       else target.copy(sBall).lerp(follow, smooth(0, B1, tc));
-    } else if (kind === 'bajada' || kind === 'bajada_l') {
+    } else if ((kind === 'bajada' || kind === 'bajada_l') && !SWINGS[kind].own) {
       this.bajadaTarget(c, kind, tc, target);
     } else if (sw && sw.layer && sw.kind === kind && Math.abs(sw.key - c.t) < 0.1) {
       // the swing's own path, moved so it goes through the ball at the contact (the paddle keeps its speed through it)
