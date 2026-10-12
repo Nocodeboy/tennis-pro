@@ -1085,10 +1085,11 @@ export class View {
     // (while the match is presented the video board shows who plays whom)
     const intro = this.director.kind === 'intro';
     const pts: [string, string] = [m.pointText(0), m.pointText(1)];
-    const key = `${m.games[0]}-${m.games[1]}-${pts.join()}-${m.serverTeam}-${this.boardNames.join()}-${this.boardFooter}-${intro}`;
+    const sets = (m.rules.sets ?? 1) > 1 ? m.sets : null;
+    const key = `${sets ? sets.join('-') : ''}-${m.games[0]}-${m.games[1]}-${pts.join()}-${m.serverTeam}-${this.boardNames.join()}-${this.boardFooter}-${intro}`;
     if (key === this.boardKey) return;
     this.boardKey = key;
-    drawBoard(this.venue.board, this.boardNames[0], this.boardNames[1], m.games, pts, m.serverTeam, this.boardFooter, intro);
+    drawBoard(this.venue.board, this.boardNames[0], this.boardNames[1], m.games, pts, m.serverTeam, this.boardFooter, intro, sets);
   }
 
   /** debug captures: a fixed camera (position and the point it looks at) */

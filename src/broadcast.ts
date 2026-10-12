@@ -38,6 +38,7 @@ export interface BroadcastSetup {
 
 type PointEvent = Extract<MatchEvent, { type: 'point' }>;
 type GameEvent = Extract<MatchEvent, { type: 'game' }>;
+type SetEvent = Extract<MatchEvent, { type: 'set' }>;
 type Cine =
   | { kind: 'intro'; t: number }
   | { kind: 'replay'; t: number; stage: 'in' | 'play' | 'out'; run: ReplayRun }
@@ -91,6 +92,10 @@ export class Broadcast {
   private pointNo = 0;
   /** the rally being played is a match point (the umpire said so) */
   private matchPoint = false;
+  /** the point about to be played wins a set, not yet the match (the best of three) */
+  private setPoint = false;
+  /** the sets the bug last showed (a set just won flips its column) */
+  private bugSets = '';
   /** the intro: which team's strap has been on already, and when the strap on now came on */
   private introDone: [boolean, boolean] = [false, false];
   private strapAt = 0;
@@ -178,6 +183,7 @@ export class Broadcast {
     this.lastReactPoint = -9;
     this.replaysShown = 0;
     this.matchPoint = false;
+    this.setPoint = false;
     this.introDone = [false, false];
     this.rallyStart = m.t;
     audio.crowdBase = 1;
@@ -262,10 +268,13 @@ export class Broadcast {
     const s = this.setup;
     if (!s) return;
     const srv = m.server();
-    const key = `${m.games.join()}|${m.points.join()}|${m.tiebreak}|${m.rules.golden}|${m.serverTeam}|${srv.id}|${m.serveNum}|${this.matchPoint}|${m.phase === 'over'}`;
+    const key = `${m.sets.join()}|${m.games.join()}|${m.points.join()}|${m.tiebreak}|${m.rules.golden}|${m.serverTeam}|${srv.id}|${m.serveNum}|${this.matchPoint}|${this.setPoint}|${m.phase === 'over'}`;
     if (!force && key === this.bugKey && scored === null) return;
     // (a game was just won: the games flip rather than the points, which are back to 0)
     const gameWon = scored !== null && m.points[0] === 0 && m.points[1] === 0;
+    // (the best of three: a column with the sets before the games; a set just won flips it)
+    const multi = (m.rules.sets ?? 1) > 1;
+    const setWon = gameWon && m.sets.join() !== this.bugSets;
     this.bugKey = key;
     const row = (k: 0 | 1) => {
       const tm = s.teams[k];
@@ -275,12 +284,15 @@ export class Broadcast {
       const badge = serving ? `<b class="ball"></b>${m.serveNum === 2 ? `<b class="no">${esc(t('tv.second'))}</b>` : ''}` : '';
       const fg = scored === k && gameWon ? 'flip' : '';
       const fp = scored === k && !gameWon ? 'flip' : '';
-      return `<div class="tr${serving ? ' serving' : ''}${scored === k ? ' scored' : ''}"><i class="tc" style="background:${tm.color}"></i><span class="nm">${nm}</span><span class="sv">${badge}</span><span class="sc"><span class="${fg}">${m.games[k]}</span></span><span class="pt"><span class="${fp}">${esc(m.pointText(k))}</span></span></div>`;
+      const fs = scored === k && setWon ? 'flip' : '';
+      const st = multi ? `<span class="st"><span class="${fs}">${m.sets[k]}</span></span>` : '';
+      return `<div class="tr${serving ? ' serving' : ''}${scored === k ? ' scored' : ''}"><i class="tc" style="background:${tm.color}"></i><span class="nm">${nm}</span><span class="sv">${badge}</span>${st}<span class="sc"><span class="${fg}">${m.games[k]}</span></span><span class="pt"><span class="${fp}">${esc(m.pointText(k))}</span></span></div>`;
     };
+    this.bugSets = m.sets.join();
     const tags = this.stateTags(m)
       .map(([txt, cls]) => `<span class="${cls}">${esc(txt)}</span>`)
       .join('');
-    this.bug.innerHTML = `<div class="bugwrap"><div class="tvbug${m.tiebreak ? ' tb' : ''}">${row(0)}${row(1)}</div>${tags ? `<div class="tv-state">${tags}</div>` : ''}</div><button class="icon-btn" id="pauseBtn" aria-label="${esc(t('pause.title'))}">${ICON.pause}</button>`;
+    this.bug.innerHTML = `<div class="bugwrap"><div class="tvbug${m.tiebreak ? ' tb' : ''}${multi ? ' sets' : ''}">${row(0)}${row(1)}</div>${tags ? `<div class="tv-state">${tags}</div>` : ''}</div><button class="icon-btn" id="pauseBtn" aria-label="${esc(t('pause.title'))}">${ICON.pause}</button>`;
     // (the tags make the bug taller: the umpire's call and the point's tag move down under them)
     this.bug.parentElement?.classList.toggle('bug-st', !!tags);
   }
@@ -294,6 +306,7 @@ export class Broadcast {
     const tags: [string, string][] = [];
     if (m.phase === 'over') return tags;
     if (this.matchPoint) tags.push([t('hud.matchPoint'), 'mp']);
+    else if (this.setPoint) tags.push([t('hud.setPoint'), 'sp']);
     if (m.goldenPoint()) tags.push([t('tv.golden'), 'gold']);
     else if (m.deuce()) tags.push([t('tv.deuce'), '']);
     else if (!m.tiebreak && !m.rules.golden && Math.min(m.points[0], m.points[1]) >= 3) tags.push([t('tv.adv'), '']);
@@ -306,11 +319,11 @@ export class Broadcast {
    * points, server's pair first («15-30»; «IGUALES» at deuce); a label for the moment (match point, golden point, the
    * tie-break, a second serve) and who serves.
    */
-  private umpire(m: Match, who: string, matchPoint: boolean) {
+  private umpire(m: Match, who: string, matchPoint: boolean, setPoint = false) {
     const second = m.serveNum === 2;
     const deuce = m.deuce();
     const nums = deuce ? [t('tv.deuce')] : m.call().split('-');
-    const label = matchPoint ? t('hud.matchPoint') : m.goldenPoint() ? t('tv.golden') : m.tiebreak ? t('tv.tiebreak') : '';
+    const label = matchPoint ? t('hud.matchPoint') : setPoint ? t('hud.setPoint') : m.goldenPoint() ? t('tv.golden') : m.tiebreak ? t('tv.tiebreak') : '';
     const gold = matchPoint || m.goldenPoint();
     this.call.className = `tv-call on${gold ? ' mp' : ''}${second ? ' second' : ''}`;
     this.call.setAttribute('aria-label', `${t('tv.score')} ${nums.join(' ')} · ${who}`);
@@ -322,15 +335,16 @@ export class Broadcast {
   }
 
   // ------------------------------------------------------------------ events of the live match
-  onEvent(m: Match, e: MatchEvent, extra: { matchPoint?: boolean; who?: string; reacts?: { pid: number; kind: 'cheer' | 'lost' }[] } = {}) {
+  onEvent(m: Match, e: MatchEvent, extra: { matchPoint?: boolean; setPoint?: boolean; who?: string; reacts?: { pid: number; kind: 'cheer' | 'lost' }[] } = {}) {
     switch (e.type) {
       case 'serveSetup': {
         this.after = this.after?.over ? this.after : null;
         this.lastHit = null;
         this.rallyStart = m.t;
         this.matchPoint = !!extra.matchPoint;
+        this.setPoint = !!extra.setPoint;
         this.renderBug(m);
-        this.umpire(m, extra.who ?? '', !!extra.matchPoint);
+        this.umpire(m, extra.who ?? '', !!extra.matchPoint, !!extra.setPoint);
         audio.tension = 0;
         this.view.crowd.tension = 0;
         if (extra.matchPoint || m.goldenPoint()) audio.crowdHush();
@@ -397,6 +411,9 @@ export class Broadcast {
         break;
       case 'game':
         this.gameStrap(m, e);
+        break;
+      case 'set':
+        this.setStrap(m, e);
         break;
       case 'over':
         if (this.after) {
@@ -482,6 +499,7 @@ export class Broadcast {
     if (react >= 0) this.lastReactPoint = this.pointNo;
     // (the match point has been played: the bug drops its tag until the umpire calls the next one)
     this.matchPoint = false;
+    this.setPoint = false;
     this.after = { tp: m.t, react, reacted: false, replay, replayAt: react >= 0 ? 1.3 : 0.7, over, winner: e.winner, victory: false, victoryT: 0, ended: false };
   }
 
@@ -709,12 +727,36 @@ export class Broadcast {
     }, 2400);
   }
 
+  /**
+   * A set won with the match still on (the best of three): a lower third with the pair («SET · 1–0 · NAVARRA /
+   * CHINGOTO · 6–4»), in place of the game's, for a moment in the pause after the point.
+   */
+  private setStrap(m: Match, e: SetEvent) {
+    const s = this.setup;
+    if (!s || m.phase === 'over') return;
+    const tm = s.teams[e.winner];
+    const o = e.winner === 0 ? 1 : 0;
+    this.strap.className = 'tv-strap game';
+    this.strap.innerHTML = this.strapHtml(tm, `<div class="lb">${esc(t('tv.set'))} · ${e.sets[e.winner]}–${e.sets[o]}</div>`, `<div class="nm">${tm.names.map(esc).join('<i>/</i>')}<span class="sc">${e.games[e.winner]}–${e.games[o]}</span></div>`);
+    void this.strap.offsetWidth;
+    this.strap.classList.add('on');
+    clearTimeout(this.strapTimer);
+    this.strapTimer = window.setTimeout(() => {
+      if (this.strap.classList.contains('game')) this.strap.classList.remove('on');
+    }, 3000);
+  }
+
   private victoryStrap(m: Match, team: 0 | 1) {
     const s = this.setup;
     if (!s) return;
     const tm = s.teams[team];
+    const o = team === 0 ? 1 : 0;
+    // (the best of three: the sets, and the games of each set on the label line)
+    const multi = (m.rules.sets ?? 1) > 1;
+    const score = multi ? `${m.sets[team]}–${m.sets[o]}` : `${m.games[team]}–${m.games[o]}`;
+    const detail = multi ? ` · ${m.setHist.map((g) => `${g[team]}–${g[o]}`).join(' ')}` : '';
     this.strap.className = 'tv-strap win';
-    this.strap.innerHTML = this.strapHtml(tm, `<div class="lb">${esc(t('tv.match'))}</div>`, `<div class="nm">${tm.full.map(esc).join('<i>/</i>')}<span class="sc">${m.games[team]}–${m.games[team === 0 ? 1 : 0]}</span></div>`);
+    this.strap.innerHTML = this.strapHtml(tm, `<div class="lb">${esc(t('tv.match'))}${esc(detail)}</div>`, `<div class="nm">${tm.full.map(esc).join('<i>/</i>')}<span class="sc">${score}</span></div>`);
     this.strap.classList.remove('on');
     void this.strap.offsetWidth;
     this.strap.classList.add('on');

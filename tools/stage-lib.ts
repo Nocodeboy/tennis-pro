@@ -73,7 +73,7 @@ export function stage(ch: CharLike, sc: Scenario, frame?: (tc: number, ball: { x
   const other = { id: 1, team: 1, side: -1, x: 0, z: -7, plan: null, human: false } as unknown as Player;
   const p = {
     id: 0, team: 0, side: 1, human: false, x: plan.fx, z: plan.fz, vx: 0, vz: 0, speed: 5, reaction: 0.2, plan, moveFrom: 0,
-    homeX: plan.fx, homeZ: plan.fz, depth: 0, lastHit: null, look: 0, lane: 1,
+    homeX: plan.fx, homeZ: plan.fz, depth: 0, lastHit: null, look: 0, lane: 1, fit: 1, dist: 0,
   } as unknown as Player;
   const legs = [{ s: seg, t0: tC - 3, t1: tC + 0.0001, floor: 1 }];
   const m = {

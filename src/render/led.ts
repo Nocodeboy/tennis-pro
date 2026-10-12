@@ -214,7 +214,7 @@ export function screenCanvas(): { canvas: HTMLCanvasElement; tex: THREE.CanvasTe
  * being played ("0" "15" "30" "40" "AD", or the tie-break's count) and who serves. `intro`: the match is being presented
  * (the board shows who plays whom instead of the score).
  */
-export function drawScreen(b: { canvas: HTMLCanvasElement; tex: THREE.CanvasTexture }, left: string, right: string, games: [number, number], points: [string, string], serving: 0 | 1 | null, footer: string, intro = false) {
+export function drawScreen(b: { canvas: HTMLCanvasElement; tex: THREE.CanvasTexture }, left: string, right: string, games: [number, number], points: [string, string], serving: 0 | 1 | null, footer: string, intro = false, sets: [number, number] | null = null) {
   const x = b.canvas.getContext('2d')!;
   const w = b.canvas.width;
   // ---- the video board (1024 × 384)
@@ -249,8 +249,15 @@ export function drawScreen(b: { canvas: HTMLCanvasElement; tex: THREE.CanvasText
   for (let i = 0; i < (intro ? 0 : 2); i++) {
     x.textAlign = 'left';
     x.fillStyle = WHITE;
-    fitText(x, names[i], 76, 700, HEAD_FONT, 560);
+    fitText(x, names[i], 76, 700, HEAD_FONT, sets ? 470 : 560);
     x.fillText(names[i], 96, rowY[i]);
+    // (the best of three: the sets, smaller and dimmer, before the games)
+    if (sets) {
+      x.textAlign = 'right';
+      x.fillStyle = '#9fb0c4';
+      x.font = `700 72px ${HEAD_FONT}`;
+      x.fillText(String(sets[i]), w - 348, rowY[i] + 4);
+    }
     // the games (white) and, in a box of their own, the points of the game (ball yellow)
     x.textAlign = 'right';
     x.fillStyle = WHITE;
@@ -290,9 +297,10 @@ export function drawScreen(b: { canvas: HTMLCanvasElement; tex: THREE.CanvasText
   x.fillRect(0, ROW_H - 7, rw, 3);
   x.fillRect(0, 4, rw, 3);
   x.textBaseline = 'middle';
-  const a = `${left} ${games[0]}`;
+  // (the best of three: «TÚ 1·3  40 – 15  2·0 RIVAL», the sets then the games)
+  const a = `${left} ${sets ? `${sets[0]}·` : ''}${games[0]}`;
   const mid = `  ${points[0]} – ${points[1]}  `;
-  const bb = `${games[1]} ${right}`;
+  const bb = `${sets ? `${sets[1]}·` : ''}${games[1]} ${right}`;
   fitText(x, a + mid + bb, 72, 700, HEAD_FONT, rw * 0.78);
   const wa = x.measureText(a).width;
   const wd = x.measureText(mid).width;

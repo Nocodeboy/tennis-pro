@@ -29,6 +29,8 @@ interface P {
   depth: 0;
   look: 0;
   lane: 1;
+  fit: number;
+  dist: number;
 }
 
 const pct = (a: number[], p: number) => {
@@ -45,7 +47,7 @@ const pct = (a: number[], p: number) => {
     const ch = new C.CharacterView(a, { shirtHue: null, paddle: 0xffffff, paddleEdge: 0 });
     // (SPEEDS='{"backpedal":1.6}' tries other ground speeds for the loops)
     if (process.env.SPEEDS) Object.assign(ch.speeds, JSON.parse(process.env.SPEEDS));
-    const p: P = { id: 0, team: 0, side: -1, human: false, x: 0, z: 0, vx: 0, vz: 0, speed: 5, reaction: 0.2, plan: null, lastHit: null, moveFrom: 0, homeX: 0, homeZ: 0, depth: 0, look: 0, lane: 1 };
+    const p: P = { id: 0, team: 0, side: -1, human: false, x: 0, z: 0, vx: 0, vz: 0, speed: 5, reaction: 0.2, plan: null, lastHit: null, moveFrom: 0, homeX: 0, homeZ: 0, depth: 0, look: 0, lane: 1, fit: 1, dist: 0 };
     const m = { t: 0, phase: 'rally', windup: null, players: [p], ballPos: () => null };
     const probe = new PM.PoseProbe(PM.NAT, { keep: 1 });
     const warm = 0.6;
