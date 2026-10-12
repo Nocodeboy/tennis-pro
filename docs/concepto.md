@@ -211,7 +211,9 @@ Germán: «mejorar este juego y conseguir el mejor simulador de pádel calidad A
 - **Cambio de lado** y descanso entre sets: no se modelan.
 - **Probar en el móvil** el físico tras un peloteo largo y la columna de sets con nombres largos.
 
-## Golpes desde vídeo (12 oct, rama `modelos-ia`)
+## 0.6 (12 oct): jugadores hechos con IA y golpes desde vídeo
+
+- **Jugadores con cuerpo propio** (`notas-05-trellis.md`): tú, Martín, Galván y Arturo, con cara, pelo y cuerpo hechos con IA en MimicPC (imagen con Qwen-Image 2512, malla con TRELLIS 2), montados en el esqueleto del jugador; la equipación se pinta encima. Sin créditos de Magnific.
 
 Germán: «Es importante que hagamos lo de los vídeos». Detalle en `notas-golpes-video.md`.
 
@@ -225,5 +227,5 @@ Germán: «Es importante que hagamos lo de los vídeos». Detalle en `notas-golp
   - los remates golpean más delante (el remate, 27 cm delante de la cadera, antes 11) y con la cara de la pala más de frente (35°, antes 73°);
   - la cara de la pala en la bajada queda peor (75°, antes 54°).
 - **Sonido:** los clips de KNSU están mudos; de estos vídeos no salen golpes reales. Lo que queda es grabarlos con el móvil en pista.
-- **Créditos:** citar a KNSU (CC BY) al publicar.
+- **Créditos:** en Ajustes → Créditos (KNSU, CMU, Rokoko, la IA y el sonido).
 
