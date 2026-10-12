@@ -141,3 +141,27 @@ python3 art/blender/ver_modelo.py assets/chars/rb_male01.json /tmp/manos.png --m
 - **Manos:** la palma a ras del mango elíptico del pádel, los dedos cerrados con sus huesos y la piel que quede dentro empujada fuera (`empujar`). `ALTURA_JUEGO` (1,83) es la altura para la que se cierra la mano.
 - **Atlas y máscara** (1024): la clase de cada texel (piel, camiseta, pantalón, calzado, pelo, otro) en el rojo y el recorte del pelo en el verde; la camiseta, sin rayas. `zones`: dónde acaba su ropa. Para revisar: `/tmp/pb-<nombre>-mask.png`.
 - **Licencia:** cada archivo lleva su campo `license`, y `assets/chars/ROCKETBOX-LICENSE.txt` dice de qué avatar sale.
+
+## Jugadores hechos con IA (`trellis_persona.py`)
+
+Un jugador con cuerpo, cara y pelo propios, desde una imagen y TRELLIS 2 (en MimicPC), montado en el esqueleto del jugador como las personas de Rocketbox (`persona.py`). Detalle, imagen de partida y resultados en `docs/notas-05-trellis.md`.
+
+```bash
+python3 art/blender/trellis_persona.py <modelo.glb> assets/chars/ia_jugador_x.json --imagen <imagen.png> [--fuente "licencia"]
+python3 art/blender/ver_modelo.py assets/chars/ia_jugador_x.json /tmp/ver.png
+```
+
+- El GLB, con la malla ya reducida por TRELLIS (`decimation_target` unas 20.000 caras): reducirla aquí rompe la textura.
+- La imagen, en la pose de reposo del jugador con los puños cerrados (`MANO=0.105`; con la mano abierta, `MANO=0.19`).
+- `--imagen`: la cara de la imagen se proyecta sobre la del modelo, ajustada con los puntos de la cara de MediaPipe (`~/.cache/padel/face_landmarker.task`, se baja solo). Necesita `pip install mediapipe opencv-python`. `VER_CARA=/tmp/cara.png` guarda los puntos en el render y en la imagen.
+- Luego, el nombre en `PEOPLE` y `model` en su equipación (`src/kits.ts`).
+
+## Vídeo → clip (`video_fuente.py`, `padel_clip.py video`, `tools/video_pose.py`)
+
+Del pickleball 0.13: un gesto grabado con el móvil, en el sitio, como los clips del juego.
+
+```bash
+python3 tools/video_pose.py <vídeo> /tmp/puntos.json [--espejo]
+python3 art/blender/padel_clip.py dist video /tmp/puntos.json assets/anims/<clip>.json <nombre> [desde hasta] [frente]
+python3 art/blender/padel_clip.py dist comparar <clip_bueno.json> <clip.json>
+```
