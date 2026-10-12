@@ -12,7 +12,7 @@ import { minFlight, posAt, seg, shotByClearance, type Vec3 } from '../sim/ball';
 import { HL, R, SERVICE, W, backSurface, sideSurface } from '../sim/court';
 import { LUNGE, SPIN, type Match } from '../sim/match';
 import type { MatchEvent, Player, PointReason, ShotKind } from '../sim/types';
-import { BALL_DROP, CLIP_NAMES, CharacterView, PADDLE_POSE, loadCharAssets, type CharAssets, type Kit } from './chars';
+import { BALL_DROP, CLIP_NAMES, CharacterView, PADDLE_POSE, loadCharAssets, loadPerson, type CharAssets, type Kit, type Person } from './chars';
 import { CrowdAnim } from './crowd';
 import { Director, type CamPose, type DirCtx } from './director';
 import { FxList, Particles } from './particles';
@@ -20,6 +20,21 @@ import { HEAD, Recorder, replaySpeed, type RecEvent, type ReplayRun } from './re
 import { blobTexture, stadiumShadowTexture } from './textures';
 import { ballMesh } from './gear';
 import { KitPainter } from './outfit';
+import { PEOPLE } from '../kits';
+
+/**
+ * The players' own bodies (Rocketbox, see Person) in the URL: `?rb=off` leaves them out (everyone in the AI-made body,
+ * to compare), `?rb=all` puts the first of them on every player (to watch it play from every side). The artifact host
+ * passes no query string, only a plain #anchor: `#rb-off` and `#rb-all` do the same there.
+ */
+const RB = (() => {
+  try {
+    const h = /^#rb-(off|all)$/.exec(location.hash);
+    return h ? h[1] : new URLSearchParams(location.search).get('rb') ?? '';
+  } catch {
+    return '';
+  }
+})();
 import { buildVenue, drawBoard, type Venue } from './venue';
 
 export type Tier = 'high' | 'medium' | 'low';
@@ -377,10 +392,26 @@ export class View {
 
   /** Loads the AI-made players and their animations. */
   async load(base: string) {
-    this.assets = await loadCharAssets(base, 'hero', CLIP_NAMES);
+    // (the players' own bodies load alongside; without one, its players play in the AI-made body)
+    const names = RB === 'off' ? [] : PEOPLE;
+    const [assets, ...people] = await Promise.all([
+      loadCharAssets(base, 'hero', CLIP_NAMES),
+      ...names.map((n) =>
+        loadPerson(base, n).catch((err) => {
+          console.warn(`body ${n} skipped:`, err?.message ?? err);
+          return null;
+        }),
+      ),
+    ]);
+    this.assets = assets;
     // the players' kits are painted on the GPU (outfit.ts); without it they are recoloured on the CPU
     try {
       this.assets.painter = new KitPainter(this.renderer, this.assets.rest ? new THREE.Mesh(this.assets.rest) : this.assets.template, this.assets.image);
+      people.forEach((p, i) => {
+        if (!p) return;
+        p.painter = new KitPainter(this.renderer, p.template, p.image, { mask: p.mask, zones: p.zones });
+        (this.assets!.people ??= {})[names[i]] = p as Person;
+      });
     } catch (err) {
       console.warn('kit painter unavailable:', err);
     }
@@ -412,7 +443,9 @@ export class View {
     this.kits = kits;
     if (this.assets) {
       m.players.forEach((p, i) => {
-        const kit = kits[i] ?? kits[0];
+        let kit = kits[i] ?? kits[0];
+        // (?rb=all: everyone in the first own body, to watch it play from every side)
+        if (RB === 'all' && !kit.model && PEOPLE.length) kit = { ...kit, model: PEOPLE[0] };
         const cv = new CharacterView(this.assets!, kit, kit.body?.height);
         cv.setPaddlePose(this.paddlePose[0], this.paddlePose[1], this.paddlePose[2], this.paddlePose[3], this.paddlePose[4], this.paddlePose[5]);
         this.scene.add(cv.root);

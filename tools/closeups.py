@@ -15,6 +15,7 @@ Env: W, H (viewport, default 390×844) · CAMS (default game,front,side,back) ·
      · CLOSE=pid list for the close cameras (default: everyone) · QUERY=mocap=off (more of the page's URL)
      · KINDS=3 (how many of each swing; padel: the overheads are told apart as remate, bandeja and víbora)
      · HIDE=1 (only the player being shot: no partner in the way) · CAMS can add wfront, wside (wider and higher)
+     and face (a TV close-up of the head and shoulders)
 Writes out_dir/<moment>.png (a sheet per moment: the game camera, then each player's close cameras), the single shots
 in out_dir/shots/, and out_dir/momentos.json."""
 import os, sys, threading, functools, http.server, json, time, base64, io
@@ -71,6 +72,18 @@ HARNESS = """(() => {
       }
       const x = ch.root.position.x, z = ch.root.position.z;
       const yaw = p.side === 1 ? Math.PI : 0, fx = Math.sin(yaw), fz = Math.cos(yaw), rx = -Math.cos(yaw), rz = Math.sin(yaw);
+      if (kind === 'face') {
+        // a TV close-up: head and shoulders, from the front a little to his right, on the head bone
+        const hd = ch.root.getObjectByName('Head').getWorldPosition(new pb.view.camera.position.constructor());
+        const c = v.camera;
+        c.fov = 16; c.updateProjectionMatrix();
+        c.position.set(hd.x + fx * 2.2 + rx * 0.7, hd.y + 0.02, hd.z + fz * 2.2 + rz * 0.7);
+        c.lookAt(hd.x, hd.y - 0.12, hd.z);
+        c.updateMatrixWorld();
+        const u = S.grab();
+        if (S.hide) v.chars.forEach((c) => { c.root.visible = true; });
+        return u;
+      }
       const P = { front: [4.6, 1.9, 1.25], frontc: [4.9, -0.5, 1.3], side: [0.4, 5.0, 1.05], back: [-4.4, 1.6, 1.55], hands: [1.9, 0.9, 1.3] }[kind];
       const c = v.camera;
       c.fov = 24; c.updateProjectionMatrix();

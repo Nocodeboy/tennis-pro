@@ -16,6 +16,10 @@
 //
 // Everything is measured on the bind pose of assets/chars/hero.json (metres, 1.7 m tall, facing +z, its right is −x).
 // If the model changes, the zones below must be measured again (tools/kits.py shows the result).
+//
+// A player's own body (a Rocketbox person on the same skeleton and rest pose, render/chars.ts Person) comes with a
+// mask of what each texel is and where its clothes end (BodyZones): its kits are painted from those (see uMask), with
+// the same cut, colours and marks.
 
 import * as THREE from 'three';
 
@@ -56,6 +60,17 @@ export interface Outfit {
   woman?: boolean;
 }
 
+/**
+ * Where a player's own body's clothes end, measured on its rest pose (art/blender/persona.py; metres, 1.7 m model):
+ * the sleeves (|x| of their end), the shirt's hem, the shorts' hem and the top of the shoes.
+ */
+export interface BodyZones {
+  cuff: number;
+  hem: number;
+  shortsHem: number;
+  shoeTop: number;
+}
+
 const STYLE = { sides: 0, yoke: 1, band: 2, sash: 3, fade: 4 } as const;
 const PRINT = { none: 0, pinstripe: 1, dots: 2, chevrons: 3 } as const;
 
@@ -91,6 +106,12 @@ uniform vec3 uSkinCol;   // the texture's mean skin colour (linear)
 uniform vec3 cShirt, cPanel, cTrim, cLogo, cShorts, cShortsTrim, cSocks, cSocksTrim, cShoe, cShoeAccent, cSole, cHair, cWristL, cWristR;
 uniform vec3 uSkin;
 uniform float uStyle, uPrint, uPanelCuffs, uShortsDouble, uSockStripes, uWristL, uWristR, uWoman;
+// a player's own body (persona.py, Rocketbox): a mask says what each texel is (red: skin 0, shirt 1, trousers 2,
+// shoes 3, hair 4, other 5, times 40), so its kit is not guessed from the colours; uZones: where its sleeves, shirt,
+// shorts and shoes end (BodyZones); uCuff, uShortsHem: where the cuffs and the shorts' hem are (the AI body's own by default)
+uniform sampler2D maskMap;
+uniform float uMask, uCuff, uShortsHem;
+uniform vec4 uZones;
 varying vec2 vUv;
 varying vec3 vP;
 #define PI 3.14159265
@@ -195,7 +216,7 @@ void main() {
   edge = max( edge, inside( abs( panelD ) - 0.0022 ) );
   shirt = mix( shirt, cTrim, edge );
   float collar = arm ? 0.0 : inside( neckY - 0.014 - y );
-  float cuff = arm ? inside( 0.313 - ax ) : 0.0;
+  float cuff = arm ? inside( uCuff - ax ) : 0.0;
   shirt = mix( shirt, cTrim, collar );
   shirt = mix( shirt, mix( cTrim, cPanel, uPanelCuffs ), cuff );
   // the mark on the left chest, a small one under the collar at the back
@@ -215,7 +236,7 @@ void main() {
   stripe *= 1.0 - waist;
   shorts = mix( shorts, shorts * 0.72, waist );
   shorts = mix( shorts, cShortsTrim, stripe );
-  float hemY = 0.59 + 0.013 * sin( tl );
+  float hemY = uShortsHem + 0.013 * sin( tl );
   float slogo = inside( mark( vec2( x - 0.17, y - hemY - 0.045 ) / 0.032 ) ) * step( 0.0, z ) * step( 0.0, x );
   shorts = mix( shorts, cShortsTrim, slogo );
   vec3 shortsAlb = shorts * detShorts;
@@ -274,6 +295,55 @@ void main() {
   vec3 detSkin = vec3( clamp( L / uSkinMean, 0.4, 1.4 ) );
   skinAlb = mix( skinAlb, cWristL * detSkin, wrL );
   skinAlb = mix( skinAlb, cWristR * detSkin, wrR );
+
+  if ( uMask > 0.5 ) {
+    // their own body: the shirt where theirs is (the kit's cut and marks from where the texel is; the cuffs at their
+    // sleeves' end), the shorts where theirs are, down to their own hem; below, their legs to the socks (painted on the
+    // skin above the shoes) and the court shoes painted on theirs; the face and the hair as they are (the hair tinted
+    // to the kit's colour looked like plastic)
+    float cls = floor( texture2D( maskMap, vUv ).r * 255.0 / 40.0 + 0.5 );
+    bool isShirt = abs( cls - 1.0 ) < 0.5, isShorts = abs( cls - 2.0 ) < 0.5, isShoe = abs( cls - 3.0 ) < 0.5, isHair = abs( cls - 4.0 ) < 0.5;
+    bool isSkin = cls < 0.5;
+    float detM = clamp( mix( 1.0, L / uMean.x, 0.7 ), 0.5, 1.15 );
+    vec3 shirtM = shirt * detM;
+    float detS = clamp( mix( 1.0, L / uMean.y, 0.65 ), 0.5, 1.12 );
+    vec3 shortsM = shorts * detS;
+    // socks over the ankles' skin, court shoes over theirs
+    // (the shoes keep the light and dark of theirs, so the upper, the toe and the laces show; then the sole and a band
+    // of the accent colour over it, from the floor up)
+    float detK = clamp( mix( 1.0, L / uSkinMean, 0.4 ), 0.85, 1.1 );
+    float detF = clamp( mix( 1.0, L / uMean.z, 0.75 ), 0.45, 1.25 );
+    vec3 shoeM = cShoe * detF;
+    // (their shoes are low and plain: the collar in the accent colour tells them from the socks)
+    shoeM = mix( shoeM, cShoeAccent * clamp( detF, 0.8, 1.1 ), inside( abs( y - uZones.w + 0.008 ) - 0.008 ) );
+    shoeM = mix( shoeM, cShoeAccent * clamp( detF, 0.8, 1.1 ), inside( abs( y - 0.037 ) - 0.007 ) );
+    shoeM = mix( shoeM, cSole, inside( y - 0.028 ) );
+    shoeM = mix( shoeM, cSole * 0.4, inside( y - 0.008 ) );
+    // (up to the top of their shoes, whatever the mask says, it is shoe)
+    isShoe = isShoe || ( !isShirt && !isShorts && !isHair && y < uZones.w );
+    vec3 footM = isShoe ? shoeM : sock * detK;
+    float sockTop = 0.228;
+    float wS = isShirt ? 1.0 : 0.0, wP = isShorts ? 1.0 : 0.0, wF = isShoe || ( isSkin && y < sockTop && !arm ) ? 1.0 : 0.0;
+    if ( uPass < 0.5 ) {
+      vec3 alb = isSkin ? skinAlb : lin;
+      alb = mix( alb, shirtM, wS );
+      alb = mix( alb, shortsM, wP );
+      alb = mix( alb, footM, wF );
+      gl_FragColor = vec4( min( alb, vec3( 0.86 ) ), 1.0 );
+    } else {
+      vec4 skinMt = vec4( 0.22, 0.56, 0.0, 0.7 );
+      skinMt = mix( skinMt, vec4( 1.0, 0.97, 1.0, 0.1 ), max( wrL, wrR ) );
+      vec4 m = skinMt;
+      m = mix( m, vec4( 0.35, 0.5, 0.0, 0.8 ), isHair ? 1.0 : 0.0 );
+      vec4 shirtMt = mix( vec4( 0.6, 0.86, 1.0, 0.1 ), vec4( 0.7, 0.9, 1.0, 0.1 ), max( collar, cuff ) );
+      shirtMt = mix( shirtMt, vec4( 0.1, 0.45, 0.0, 0.6 ), logo );
+      m = mix( m, shirtMt, wS );
+      m = mix( m, mix( vec4( 0.32, 0.88, 0.55, 0.08 ), vec4( 0.1, 0.45, 0.0, 0.6 ), slogo ), wP );
+      m = mix( m, isShoe ? mix( vec4( 0.25, 0.52, 0.5, 0.4 ), vec4( 0.1, 0.75, 0.0, 0.3 ), inside( y - 0.028 ) ) : vec4( 1.0, 0.95, 1.0, 0.1 ), wF );
+      gl_FragColor = m;
+    }
+    return;
+  }
 
   if ( uPass < 0.5 ) {
     vec3 alb = skinAlb;
@@ -355,6 +425,38 @@ function means(img: CanvasImageSource & { width: number; height: number }): { m:
   return { m: new THREE.Vector4(m(0, 0.3), m(1, 0.03), m(2, 0.7), m(3, 0.015)), skin: m(4, 0.3), col };
 }
 
+/**
+ * The same means for a player's own body (see BodyZones), read from its mask: its shirt, its trousers, its shoes, its
+ * hair and its skin (linear luminance; and the skin's colour).
+ */
+function maskedMeans(img: HTMLImageElement, mask: HTMLImageElement): { m: THREE.Vector4; skin: number; col: THREE.Vector3 } {
+  const S = 256;
+  const read = (im: HTMLImageElement) => {
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = S;
+    const x = cv.getContext('2d', { willReadFrequently: true })!;
+    x.drawImage(im, 0, 0, S, S);
+    return x.getImageData(0, 0, S, S).data;
+  };
+  const px = read(img);
+  const mk = read(mask);
+  const sum = [0, 0, 0, 0, 0];
+  const cnt = [0, 0, 0, 0, 0];
+  const skinRgb = [0, 0, 0];
+  const lin = (v: number) => Math.pow(v / 255, 2.2);
+  for (let i = 0; i < px.length; i += 4) {
+    const c = Math.round(mk[i] / 40);
+    if (c < 0 || c > 4) continue;
+    sum[c] += 0.2126 * lin(px[i]) + 0.7152 * lin(px[i + 1]) + 0.0722 * lin(px[i + 2]);
+    cnt[c]++;
+    if (c === 0) for (let j = 0; j < 3; j++) skinRgb[j] += lin(px[i + j]);
+  }
+  const m = (k: number, def: number) => (cnt[k] > 20 ? sum[k] / cnt[k] : def);
+  const n = Math.max(1, cnt[0]);
+  const col = cnt[0] > 20 ? new THREE.Vector3(skinRgb[0] / n, skinRgb[1] / n, skinRgb[2] / n) : new THREE.Vector3(0.45, 0.28, 0.2);
+  return { m: new THREE.Vector4(m(1, 0.1), m(2, 0.2), m(3, 0.05), m(4, 0.3)), skin: m(0, 0.3), col };
+}
+
 const lin = (hex: number) => new THREE.Color().setHex(hex, THREE.SRGBColorSpace);
 
 interface Entry {
@@ -388,6 +490,8 @@ export class KitPainter {
     private renderer: THREE.WebGLRenderer,
     template: THREE.Object3D,
     image: HTMLImageElement | ImageBitmap | HTMLCanvasElement,
+    /** a player's own body: what each texel is (see BAKE_FRAG) and where its clothes end; its kits are painted from them */
+    own?: { mask: HTMLImageElement; zones: BodyZones },
   ) {
     let geo: THREE.BufferGeometry | null = null;
     template.traverse((o) => {
@@ -398,7 +502,17 @@ export class KitPainter {
     this.src.flipY = false;
     this.src.colorSpace = THREE.SRGBColorSpace;
     this.src.needsUpdate = true;
-    const mm = means(image as HTMLImageElement);
+    const mm = own ? maskedMeans(image as HTMLImageElement, own.mask) : means(image as HTMLImageElement);
+    let maskTex: THREE.Texture | null = null;
+    if (own) {
+      maskTex = new THREE.Texture(own.mask);
+      maskTex.flipY = false;
+      maskTex.colorSpace = THREE.NoColorSpace;
+      maskTex.minFilter = maskTex.magFilter = THREE.NearestFilter;
+      maskTex.generateMipmaps = false;
+      maskTex.needsUpdate = true;
+    }
+    const z = own?.zones;
     const v3 = () => ({ value: new THREE.Vector3() });
     this.bake = new THREE.ShaderMaterial({
       uniforms: {
@@ -413,6 +527,11 @@ export class KitPainter {
         uSkin: { value: new THREE.Vector3(1, 1, 1) },
         uStyle: { value: 0 }, uPrint: { value: 0 }, uPanelCuffs: { value: 0 }, uShortsDouble: { value: 0 }, uSockStripes: { value: 0 },
         uWristL: { value: 0 }, uWristR: { value: 0 }, uWoman: { value: 0 },
+        maskMap: { value: maskTex }, uMask: { value: own ? 1 : 0 },
+        uZones: { value: z ? new THREE.Vector4(z.cuff, z.hem, z.shortsHem, z.shoeTop) : new THREE.Vector4() },
+        // (the cuff's rib 1.7 cm wide, as the AI body's)
+        uCuff: { value: z ? z.cuff - 0.017 : 0.313 },
+        uShortsHem: { value: z ? z.shortsHem : 0.59 },
       },
       vertexShader: BAKE_VERT,
       fragmentShader: BAKE_FRAG,
@@ -616,7 +735,7 @@ function knitTexture(): THREE.Texture | null {
  * its material texture, and the knit's relief only on fabric. (The sheen map's red channel is its amount and blue the
  * knit's: patched in, the rest is three's own.)
  */
-export function playerMaterial(look: KitLook): THREE.MeshPhysicalMaterial {
+export function playerMaterial(look: KitLook, alpha?: THREE.Texture | null): THREE.MeshPhysicalMaterial {
   const nt = knitTexture();
   const m = new THREE.MeshPhysicalMaterial({
     map: look.map,
@@ -631,12 +750,14 @@ export function playerMaterial(look: KitLook): THREE.MeshPhysicalMaterial {
     sheenRoughness: 0.55,
     envMapIntensity: 0.9,
     ...(nt ? { normalMap: nt, normalScale: new THREE.Vector2(0.45, 0.45) } : {}),
+    // (a player's own body: the hair's strands and the lashes cut out of their cards, seen from both sides)
+    ...(alpha ? { alphaMap: alpha, alphaTest: 0.5, side: THREE.DoubleSide } : {}),
   });
   m.onBeforeCompile = (sh) => {
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <lights_physical_fragment>', THREE.ShaderChunk.lights_physical_fragment.replace('texture2D( sheenColorMap, vSheenColorMapUv ).rgb', 'vec3( texture2D( sheenColorMap, vSheenColorMapUv ).r )'))
       .replace('#include <normal_fragment_maps>', THREE.ShaderChunk.normal_fragment_maps.replace('mapN.xy *= normalScale;', '#ifdef USE_SHEEN_COLORMAP\n\tmapN.xy *= normalScale * texture2D( sheenColorMap, vSheenColorMapUv ).b;\n#else\n\tmapN.xy *= normalScale;\n#endif'));
   };
-  m.customProgramCacheKey = () => 'player-kit';
+  m.customProgramCacheKey = () => (alpha ? 'player-kit-a' : 'player-kit');
   return m;
 }

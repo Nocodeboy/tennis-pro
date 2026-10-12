@@ -117,3 +117,16 @@ Germán, tras la 0.2: diferenciar víboras, bandejas, remates, por 3 y por 4; a�
 - **Por 4 desde muy alto y muy cerca:** a veces sale por encima de la pared y cuenta como por 3.
 - **El humano que globea una bola de bajada** ve primero la preparación de la bajada.
 - **El medio contra los campeones** baja al 17–19 %.
+
+## Prueba Rocketbox (12 oct): Arturo con un cuerpo de persona real
+
+Germán: el pádel también es propio del estudio; probar un modelo masculino de Rocketbox (Microsoft, licencia MIT, como la jugadora del pickleball 0.13) para recrear a los jugadores con más variedad. Luego, ver cómo sacar golpes de vídeos de pádel.
+
+- **Montaje** (`art/blender/persona.py`, `notas-04-rocketbox.md`): Male_Adult_01 (polo, pantalón corto y zapatillas) sobre el esqueleto del jugador tal cual. Le sirven todos los clips y la pala, y tiene dedos de verdad alrededor del mango. Lo lleva solo Arturo.
+- **Para verlo:** `?rb=all` en la web (en el artefacto, `#rb-all` al final del enlace) lo pone en los cuatro jugadores; `?rb=off` / `#rb-off` vuelve al cuerpo de siempre.
+- **Veredicto:**
+  - mejor la cara (una persona real, distinta de los demás) y las manos;
+  - peor el cuerpo: brazos y piernas finos, pantalón cargo hasta la rodilla y zapatillas planas;
+  - en la cámara de juego apenas se nota.
+- **Coste:** 589 KB y unos 11 MB de textura por persona; 4.803 vértices frente a 12.452.
+- **Siguiente paso propuesto:** probar un candidato con camiseta y vaqueros pintados como pantalón corto (09, 11, 16 o 20) y engordar algo brazos y piernas en `persona.py` antes de rehacer a todos.

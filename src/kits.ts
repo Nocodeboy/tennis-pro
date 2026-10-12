@@ -25,6 +25,12 @@ const BUILDS: Record<string, Build> = {
   marta: { height: 1.76, shoulders: 0.98, waist: 1.03, seat: 1.03, arms: 0.98 },
 };
 
+/**
+ * The players' own bodies (Rocketbox people on the player's skeleton, render/chars.ts Person; assets/chars/<name>.json),
+ * loaded with the AI-made one. A test for now: Arturo (reina) in Male_Adult_01, docs/notas-04-rocketbox.md.
+ */
+export const PEOPLE = ['rb_male01'];
+
 export interface KitInfo {
   kit: Kit;
   /** avatar colour in the menus (the shirt's) */
@@ -130,6 +136,7 @@ export const RIVAL_KITS: Record<string, KitInfo> = {
       },
       paddleLook: { shape: 'elongated', face: 'carbon', graphic: 0xd6a531, graphic2: 0xffffff, grip: 0xf0f0f0 },
       body: BUILDS.reina,
+      model: 'rb_male01',
     },
     css: '#d6a531',
     ink: '#0f1a2e',

@@ -126,3 +126,18 @@ python3 art/blender/padel_clip.py dist ver assets/anims/smash_mocap.json /tmp/sm
 **El pack de Rokoko no está en el repositorio:** solo los clips ya pasados al jugador. Antes de publicar el juego en una tienda hay que confirmar la licencia del pack en la web de Rokoko.
 
 `?mocap=off` en la URL vuelve a los clips de Meshy (correr, andar, golpes y reacciones), para comparar, si el juego lo conserva.
+
+## Cuerpos propios de Rocketbox (`persona.py`, `ver_modelo.py`)
+
+Personas de la biblioteca **Microsoft Rocketbox** (licencia MIT; esqueleto Biped de 80 huesos) montadas sobre **el esqueleto del jugador tal cual** (los mismos 24 huesos, giros de reposo y matrices de enlace de `hero.json`): les sirven todos los clips, las complexiones, la pala y el código de los golpes. Viene de `jugadora.py` del pickleball 0.13, generalizado y pasado al mango del pádel. Detalle, medidas y veredicto en `docs/notas-04-rocketbox.md`.
+
+```bash
+python3 art/blender/persona.py <Rocketbox>/Assets/Avatars/Adults/Male_Adult_01          # -> assets/chars/rb_male01.json
+python3 art/blender/ver_modelo.py assets/chars/rb_male01.json /tmp/ver.png               # frente, lado, cara y manos, junto al jugador
+python3 art/blender/ver_modelo.py assets/chars/rb_male01.json /tmp/manos.png --manos     # las manos con el mango
+```
+
+- **Pose de reposo:** cadera, rodillas y tobillos por la forma del cuerpo; el hombro donde gira el brazo del jugador, y el brazo y el antebrazo acortados al largo de los suyos (`estirar`), para que la mano quede donde va la pala.
+- **Manos:** la palma a ras del mango elíptico del pádel, los dedos cerrados con sus huesos y la piel que quede dentro empujada fuera (`empujar`). `ALTURA_JUEGO` (1,83) es la altura para la que se cierra la mano.
+- **Atlas y máscara** (1024): la clase de cada texel (piel, camiseta, pantalón, calzado, pelo, otro) en el rojo y el recorte del pelo en el verde; la camiseta, sin rayas. `zones`: dónde acaba su ropa. Para revisar: `/tmp/pb-<nombre>-mask.png`.
+- **Licencia:** cada archivo lleva su campo `license`, y `assets/chars/ROCKETBOX-LICENSE.txt` dice de qué avatar sale.

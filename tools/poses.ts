@@ -6,7 +6,9 @@
 // Env: MODES=cpu,human,doubles (which matches) · DUMP=run:pid:t,… (writes the bone positions at those times) ·
 // CHARS=path/to/chars.ts (another version of the characters, e.g. the one before a change: NODE_PATH=node_modules) ·
 // FORCE=1 (until the simulation plays them: every ball met at the shoulder deep off the back glass is played as a bajada,
-// the remates by turns flat, por 3 and por 4, and each shot gets a power: see forceShots)
+// the remates by turns flat, por 3 and por 4, and each shot gets a power: see forceShots) · KIT=reina (everyone in
+// that rival's kit and build, instead of a neutral 1.78 m one) · RB=1 (and in their own body, chars.ts Person, if the kit
+// has one: then also how the hand holds the handle at each contact, on the skinned mesh)
 
 import './node-chars';
 import * as THREE from 'three';
@@ -20,6 +22,8 @@ import type { Controller } from '../src/sim/match';
 import { velAt } from '../src/sim/ball';
 import type { Plan, Player, ShotSpec } from '../src/sim/types';
 import { HUMANS } from './humans';
+import { PEOPLE, RIVAL_KITS } from '../src/kits';
+import type { KitPainter } from '../src/render/outfit';
 import { ThumbBot } from './thumb';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const PM = require('./posemetrics.js');
@@ -144,7 +148,7 @@ function forceShots(m: Match, specs: (ShotSpec | null)[], seed: number) {
 
 function makeRun(a: CharAssets, mode: string, i: number): Run {
   const seed = 4242 + i * 7919 + (mode === 'human' ? 1 : mode === 'doubles' ? 2 : 0) * 104729;
-  const kit = { shirtHue: null, paddle: 0xffffff, paddleEdge: 0 };
+  const kit = process.env.KIT ? RIVAL_KITS[process.env.KIT].kit : { shirtHue: null, paddle: 0xffffff, paddleEdge: 0 };
   if (mode === 'doubles') {
     const pair = PAIRS[i % PAIRS.length];
     const m = new Match(
@@ -199,8 +203,62 @@ function makeRun(a: CharAssets, mode: string, i: number): Run {
   return { m, chars, gate: () => true, tick() {}, after() {}, label: `cpu vs ${rv.a.name}+${rv.b.name}` };
 }
 
+/**
+ * How the hand of a player in their own body holds the handle (gear.ts: elliptical, 13.1 × 16.3 mm, from 5 cm under the
+ * grip to 7 cm over it): the skin of the hand and the wrist, skinned as drawn, in the paddle's frame. Inside: how many
+ * vertices are more than 1 mm into the handle and the deepest; gap: the median of the 40 nearest to its surface.
+ */
+const gripVerts = new WeakMap<object, number[]>();
+function gripOf(ch: CharView): { inside: number; deepest: number; gap: number } | null {
+  const c = ch as unknown as { person: unknown; root: THREE.Object3D; paddle: THREE.Object3D };
+  if (!c.person) return null;
+  let mesh: THREE.SkinnedMesh | null = null;
+  c.root.traverse((o) => {
+    if ((o as THREE.SkinnedMesh).isSkinnedMesh && !mesh) mesh = o as THREE.SkinnedMesh;
+  });
+  if (!mesh) return null;
+  const m = mesh as THREE.SkinnedMesh;
+  c.root.updateMatrixWorld(true);
+  const v = new THREE.Vector3();
+  let ids = gripVerts.get(m);
+  if (!ids) {
+    // (the vertices that hang mostly from the right hand)
+    const hand = m.skeleton.bones.findIndex((b) => b.name === 'RightHand');
+    const si = m.geometry.getAttribute('skinIndex');
+    const sw = m.geometry.getAttribute('skinWeight');
+    ids = [];
+    for (let i = 0; i < si.count; i++) {
+      let w = 0;
+      for (let k = 0; k < 4; k++) if (si.getComponent(i, k) === hand) w += sw.getComponent(i, k);
+      if (w > 0.3) ids.push(i);
+    }
+    gripVerts.set(m, ids);
+  }
+  const inv = new THREE.Matrix4().copy(c.paddle.matrixWorld).invert();
+  const d: number[] = [];
+  for (const i of ids) {
+    // (a skinned mesh's vertex position is already skinned)
+    m.getVertexPosition(i, v);
+    v.applyMatrix4(m.matrixWorld).applyMatrix4(inv);
+    if (v.y < -0.05 || v.y > 0.07) continue;
+    const th = Math.atan2(v.z, v.x);
+    const re = 1 / Math.hypot(Math.cos(th) / 0.0131, Math.sin(th) / 0.0163);
+    d.push(Math.hypot(v.x, v.z) - re);
+  }
+  if (!d.length) return null;
+  d.sort((x, y) => x - y);
+  return { inside: d.filter((x) => x < -0.001).length, deepest: -d[0], gap: d[Math.min(d.length - 1, 20)] };
+}
+
 (async () => {
   const a = await loadCharAssets('', 'hero', CLIP_NAMES);
+  if (process.env.RB) {
+    // (their own bodies, painted by nothing: in Node there is no GPU, and the poses do not need the kit)
+    const stub = { paint: () => ({ map: new THREE.Texture(), aux: new THREE.Texture() }), release() {} } as unknown as KitPainter;
+    a.people = {};
+    for (const n of PEOPLE) a.people[n] = { ...(await C.loadPerson('', n)), painter: stub };
+  }
+  const grips: { inside: number; deepest: number; gap: number }[] = [];
   const { nat, ranges } = calibrateOn(a);
   const probe = new PM.PoseProbe(nat, { keep: 8 });
   const dumps = (process.env.DUMP ?? '')
@@ -275,6 +333,8 @@ function makeRun(a: CharAssets, mode: string, i: number): Run {
         probe.frame(r.chars, r.m, dt, { run: tag });
         for (const h of hits) {
           probe.hit(r.chars[h.pid], h.pid, h.x, h.y, h.z, h.kind, { run: tag, t: +r.m.t.toFixed(3) }, h.vel);
+          const g = gripOf(r.chars[h.pid]);
+          if (g) grips.push(g);
           // (padel: the overheads share the smash's swing, so the shot is told by its style (chars.ts OVER); and where
           // the ball is met against the hips, along where they face: + in front)
           const ch = r.chars[h.pid] as unknown as { swing: { kind: string } | null; over?: string; root: THREE.Object3D };
@@ -373,6 +433,13 @@ function makeRun(a: CharAssets, mode: string, i: number): Run {
       const ry = a.map((h) => h.rootY ?? 0);
       console.log(`${k.padEnd(11)} n=${String(a.length).padEnd(5)} pala p50 ${cm(pc(d, 0.5))} p90 ${cm(pc(d, 0.9))} máx ${cm(pc(d, 1))} · delante p10 ${cm(pc(f, 0.1))} p50 ${cm(pc(f, 0.5))} · bola p50 ${pc(y, 0.5).toFixed(2)} máx ${pc(y, 1).toFixed(2)} · salto p50 ${cm(pc(ry, 0.5))} máx ${cm(pc(ry, 1))}`);
     }
+  }
+  if (grips.length) {
+    const pc = (k: keyof (typeof grips)[0], q: number) => {
+      const v = grips.map((g) => g[k]).sort((x, y) => x - y);
+      return v[Math.min(v.length - 1, Math.floor(q * v.length))];
+    };
+    console.log(`\nagarre (su cuerpo, en ${grips.length} contactos): vértices de la mano dentro del mango p50 ${pc('inside', 0.5)} máx ${pc('inside', 1)} · lo más hondo p50 ${(pc('deepest', 0.5) * 1000).toFixed(1)} mm máx ${(pc('deepest', 1) * 1000).toFixed(1)} mm · holgura de la piel más cercana p50 ${(pc('gap', 0.5) * 1000).toFixed(1)} mm`);
   }
   if (S.idleFrozen) console.log(`espera congelada: ${(S.idleFrozen.share * 100).toFixed(1)} % de ${S.idleFrozen.n} fotogramas · tramos de más de 0,25 s: ${S.idleFrozen.runs} (p50 ${S.idleFrozen.p50} s, p90 ${S.idleFrozen.p90} s, máx ${S.idleFrozen.max} s)`);
   if (OUT) {

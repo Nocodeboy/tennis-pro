@@ -15,7 +15,7 @@ import { velAt } from '../sim/ball';
 import { paddleMesh as gearPaddle, type PaddleLook } from './gear';
 import { SERVE_DROP, refineClips } from './keyposes';
 import { applyBuild, shapeHands, womanTemplate, type Build } from './body';
-import { playerMaterial, type KitLook, type KitPainter, type Outfit } from './outfit';
+import { playerMaterial, type BodyZones, type KitLook, type KitPainter, type Outfit } from './outfit';
 
 export interface ClipJson {
   name: string;
@@ -39,6 +39,11 @@ export interface Kit {
   paddleLook?: PaddleLook;
   /** the player's build: height, shoulders, girth… (body.ts); without it the model as it is, 1.78 m */
   body?: Build;
+  /**
+   * a body of their own (assets/chars/<model>.json, see Person): a Rocketbox person on the player's skeleton; without
+   * it, or while it has not loaded (or failed to), the AI-made one
+   */
+  model?: string;
 }
 
 export interface CharAssets {
@@ -59,6 +64,24 @@ export interface CharAssets {
   rest?: THREE.BufferGeometry;
   /** the women's body (body.ts), when it is made */
   woman?: THREE.Object3D;
+  /** the players' own bodies (see Person) by name, those that have loaded */
+  people?: Record<string, Person>;
+}
+
+/**
+ * A player's own body: a person of Microsoft's Rocketbox library (MIT) on the player's own skeleton, the hands already
+ * closed round the handle with their own finger bones (art/blender/persona.py). The same clips, builds and paddle; their
+ * own texture, their mask (what each texel is, for the kits; its green the hair's cut-out), where their clothes end
+ * (zones) and their own kit painter. No shapeHands on them.
+ */
+export interface Person {
+  template: THREE.Object3D;
+  image: HTMLImageElement;
+  mask: HTMLImageElement;
+  zones: BodyZones;
+  /** the mask's green as the material's cut-out (the hair's strands, the lashes) */
+  alpha: THREE.Texture;
+  painter?: KitPainter;
 }
 
 /**
@@ -362,6 +385,39 @@ interface CharJson {
   gltf: Record<string, unknown>;
   bin: string;
   tex: string;
+  mask?: string;
+  zones?: BodyZones;
+}
+
+const loadImage = (src: string, what: string) =>
+  new Promise<HTMLImageElement>((res, rej) => {
+    const im = new Image();
+    im.onload = () => res(im);
+    im.onerror = () => rej(new Error(`texture ${what}`));
+    im.src = src;
+  });
+
+/** A player's own body (see Person). The view gives it a kit painter of its own. */
+export async function loadPerson(base: string, name: string): Promise<Person> {
+  const ch = await getJson<CharJson>(`${base}assets/chars/${name}.json`);
+  if (!ch.mask || !ch.zones) throw new Error(`${name}: no mask`);
+  const [image, mask] = await Promise.all([loadImage(ch.tex, name), loadImage(ch.mask, `${name} mask`)]);
+  const gltf = await new GLTFLoader().parseAsync(toGlb(ch.gltf, b64(ch.bin)), '');
+  // (the cut-out at half the mask's size: a quarter of the memory, and the strands' edges are soft anyway)
+  let src: HTMLImageElement | HTMLCanvasElement = mask;
+  try {
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = Math.max(1, mask.width >> 1);
+    cv.getContext('2d')!.drawImage(mask, 0, 0, cv.width, cv.height);
+    src = cv;
+  } catch {
+    // (no canvas: the mask itself)
+  }
+  const alpha = new THREE.Texture(src);
+  alpha.flipY = false;
+  alpha.colorSpace = THREE.NoColorSpace;
+  alpha.needsUpdate = true;
+  return { template: gltf.scene, image, mask, zones: ch.zones, alpha };
 }
 
 function getJson<T>(url: string): Promise<T> {
@@ -1315,25 +1371,33 @@ export class CharacterView {
   /** the kit painted for this player (released on dispose), or the texture recoloured for it alone (disposed) */
   private outfit: Outfit | null = null;
   private ownMap: THREE.Texture | null = null;
+  /** who paints this player's kit (the AI-made body's painter, or their own body's) */
+  private painter: KitPainter | undefined;
+  /** the player's own body (see Person), when they have one and it loaded */
+  readonly person: Person | null;
 
   constructor(
     private a: CharAssets,
     kit: Kit,
     private height = 1.78,
   ) {
-    this.model = cloneSkinned(kit.body?.woman && a.woman ? a.woman : a.template);
+    // a body of their own (Rocketbox, see Person) with its own painter; without it, the AI-made one
+    const own = (kit.model && a.people?.[kit.model]?.painter && a.people[kit.model]) || null;
+    this.person = own;
+    this.painter = own ? own.painter : a.painter;
+    this.model = cloneSkinned(own ? own.template : kit.body?.woman && a.woman ? a.woman : a.template);
     if (kit.body) applyBuild(this.model, kit.body);
     // the kit: painted on the GPU when there is a painter (skin, cloth, hair and shoes each their own), else recoloured
     let look: KitLook | null = null;
-    if (kit.outfit && a.painter)
+    if (kit.outfit && this.painter)
       try {
-        look = a.painter.paint(kit.outfit);
+        look = this.painter.paint(kit.outfit);
         this.outfit = kit.outfit;
       } catch (err) {
         console.warn('kit paint failed:', err);
       }
-    if (!look) this.ownMap = kitTexture(a.image as HTMLImageElement, kit);
-    const material = look ? playerMaterial(look) : new THREE.MeshStandardMaterial({ map: this.ownMap, roughness: 0.78, metalness: 0, envMapIntensity: 0.9 });
+    if (!look) this.ownMap = kitTexture((own ? own.image : a.image) as HTMLImageElement, kit);
+    const material = look ? playerMaterial(look, own?.alpha) : new THREE.MeshStandardMaterial({ map: this.ownMap, roughness: 0.78, metalness: 0, envMapIntensity: 0.9 });
     this.model.traverse((o) => {
       const m = o as THREE.SkinnedMesh;
       if (m.isMesh) {
@@ -3030,7 +3094,7 @@ export class CharacterView {
     this.mixer.stopAllAction();
     this.mixer.uncacheRoot(this.model);
     // (the kit's textures may go once no one wears it; the skeleton's bone texture and the material go with the player)
-    if (this.outfit) this.a.painter?.release(this.outfit);
+    if (this.outfit) this.painter?.release(this.outfit);
     this.outfit = null;
     this.ownMap?.dispose();
     this.ownMap = null;
