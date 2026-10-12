@@ -185,3 +185,14 @@ Al cargar, los valores que no son válidos vuelven al de por defecto, y los prog
   - tomas propias de tenis (raqueta con cordaje, bote de la bola de tenis, «Out!» del juez de línea);
   - escuchar en un móvil el bote de cada superficie.
 - **Probar en un móvil real:** el selector de modo encima de «Jugar» y el marcador con cuatro columnas de sets a 390 px.
+
+## Resuelto con la simulación de tenis (13 oct)
+
+- **`bounce.out`** llega también en las faltas de saque.
+- **El ace** es todo saque bueno que nadie toca (`rally === 1`, sin error: `winner`, `miss` o `letGo`), como se contaba aquí. Lo mismo cuenta `tools/bot.ts`.
+- **`human.cue()`** solo devuelve `'attack'`, `'block'` o `null`. **`kindForAim`** da `smash` con el latigazo sobre una bola por encima de la cabeza.
+- **Umbrales medidos con el bot** (`explain.ts`, `broadcast.ts`):
+  - un golpe de fondo sale a 108 km/h de mediana y a 131–135 km/h en el p90, y da 1,3 s al otro;
+  - `SPEED.fast` pasa a 36 m/s (130 km/h), `SPEED.vin` a 24, `FORCED` a 0,75 s, 25 y 38 m/s, y `FAST` de las repeticiones a 38 m/s.
+- **Duración:** un set a 4 juegos dura de 5 a 15 minutos con el humano simulado, según lo igualado.
+- **Concordancia:** «tu revés se fue largo», «tu derecha se fue larga» (`{g}` en `x.long` y `x.wide`).

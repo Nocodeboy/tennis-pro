@@ -96,3 +96,12 @@ Los `id` internos se mantienen (las equipaciones, los cuerpos y las caras van po
 - **Simulación** (`src/sim/*`, `src/human.ts`, `src/input.ts`, `tools/`): física, reglas, puntuación, IA, control.
 - **Gráficos** (`src/render/*`, `assets/anims`, `assets/props`, `assets/light`): pista, red, raqueta, estadio, cámaras, animaciones.
 - **Interfaz** (`src/main.ts`, `src/broadcast.ts`, `src/explain.ts`, `src/i18n.ts`, `src/tour.ts`, `src/kits.ts`, `src/audio.ts`, `src/style.css`, `build.mjs`): menús, cuadro, marcador, textos, sonido, marca.
+
+## Cambios al cerrar la 0.1 (13 oct)
+
+- **Saque:** el sacador está 15 cm detrás de la línea de fondo, a 0,55 m de la marca central en individual y a 2,4 m en dobles (`SERVE_SPOT`). `Match.serveContact(p)` da el punto de contacto.
+- **Vallas:** la bola viva que llega a las vallas acaba el punto. Si ya había botado dentro, es del que la pegó (`winner`, `miss` o `letGo`). Si no, es `out` (en el saque, falta).
+- **`ShotSpec.spin`:** el efecto propio de un golpe (plano, cortado o liftado en el saque). `hit` lo lleva siempre.
+- **`Plan.kind`:** el golpe que la CPU ya ha decidido al salir a por la bola (un cortado). La vista lo usa para preparar el golpe.
+- **`Rules.sets` 5:** el tie-break del quinto set va a 10 (`Match.tiebreakTo()`).
+- **Fichas:** Siner (control y reflejos 90, toque 73), Alcarás (control 87, toque 85) y Granoyers (control 85, reflejos 88, toque 69). Las medias no cambian (83, 88 y 78). Los detalles, en `notas-01-simulacion.md`.

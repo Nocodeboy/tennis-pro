@@ -190,3 +190,12 @@ En `/tmp/claude-0/tenis-render/final/`:
   - `poses-tenis.ts`: poses en partido;
   - `harness.ts`, `hshots.py` y `cost.py`: banco de pruebas, capturas y coste;
   - `build-shim.mjs` y `run-shim.mjs`: compilan y ejecutan con la simulación a medio cambiar.
+
+## Comprobado con la simulación de tenis (13 oct)
+
+`match.ts` ya es el de tenis, así que el banco de pruebas y la simulación de pega dejan de hacer falta (`tools/render/harness.ts`, `build-shim.mjs` y `run-shim.mjs` se quedan solo como referencia). Lo que estaba pendiente:
+
+- **Saque:** lanzamiento, trofeo y contacto con el `windup` real, en vertical y en horizontal (`tools/tenis/play.py`). En partido, el punto dulce queda a 7 cm de la bola.
+- **Individual con dos jugadores:** se ve bien en dura, tierra y hierba. El rival lejano que resta muy atrás debe quedarse a unos 2 m de la línea para no salirse por arriba en vertical: Medvédiev pasó de 2,5 m a 1,3 m más atrás.
+- **Raqueta en partido** (`tools/render/poses-tenis.ts`, ya con la simulación real y los pies a 0,72 m de la bola en los golpes de fondo): derecha a 0,2 cm de mediana (4,4 cm en el p90), remate a 0,2 cm. En los cortados, uno de siete se queda lejos (1,25 m); hay que mirarlo con más partidos.
+- **`Plan.kind`:** la CPU ya marca el cortado al salir a por la bola.

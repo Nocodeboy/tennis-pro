@@ -1,15 +1,19 @@
-# Pádel · Pro Tour (prototipo)
+# Tenis · Pro Tour (prototipo, rama `tenis`)
 
-Juego de pádel en 3D para web y móvil, propio del estudio Nocodeboy Games. El nombre y la marca son provisionales: los decide el estudio y se cambian en `src/tour.ts` (y el título de la página en `build.mjs`).
+Juego de tenis en 3D para web y móvil, propio del estudio Nocodeboy Games. El nombre y la marca son provisionales: los decide el estudio y se cambian en `src/tour.ts` (y el título de la página en `build.mjs`).
 
-- **Origen:** copia del juego de pickleball del estudio (`Nocodeboy/Pickleball@2f15030`, versión 0.10), convertida en pádel. Las notas de diseño del pickleball siguen en `docs/pickleball/` como referencia (la interfaz que se hereda: `notas-09-interfaz.md`).
-- **Web:** [padel-pro-one.vercel.app](https://padel-pro-one.vercel.app), proyecto `padel-pro` de Vercel enlazado a `main`: se publica sola con cada push. Las demás ramas solo tienen vista previa, con inicio de sesión de Vercel. Desde el 12 oct todo está en `main`, y las ramas de trabajo se borran al fusionarlas.
-- **Versión:** 0.6 (12 oct 2026): tú, tu pareja, Galván y Arturo con cuerpo, cara y pelo propios hechos con IA en MimicPC (Qwen-Image + TRELLIS 2; `docs/notas-05-trellis.md`), y el saque, el revés, el remate (con la bandeja, la víbora y los por 3 y por 4) y la bajada de una persona real, desde vídeos de pádel CC BY de KNSU; créditos en Ajustes (`docs/notas-golpes-video.md`).
-- **0.5:** sonido rehecho (`docs/notas-05-sonido.md`); partidos al mejor de tres sets, el físico de los jugadores (se cansan con los metros y los golpes fuertes y se recuperan en las pausas) con la distancia recorrida en las estadísticas, y una pasada de afinado medido: el globo de transición obliga a bajar, los siete atributos pesan parecido, el por 3 se planifica con la física, la bandeja varía y la pareja de la red manda algo más (`docs/notas-05-simulacion.md`).
-- **0.4:** auditoría de jugabilidad y simulación con dos revisores y dos rondas de arreglos (`docs/auditoria-04-*.md`, `docs/notas-04-*.md`).
-- **0.3:** atributos 0–99 visibles en fichas de jugador, la fuerza del golpe según la velocidad del gesto, la bajada de pared y los remates por 3 y por 4 (`docs/notas-03-interfaz.md` y `docs/notas-03-simulacion.md`).
-- **0.2:** animaciones de captura de movimiento y mobiliario y luz de Blender, traídos del pickleball 0.12.
-- **Estado:** se juega siempre en dobles: tú y Martín Di Neno (tu pareja, la CPU) contra un cuadro de cuatro parejas de la máquina, de octavos a la final. Pista de 20 × 10 m con cristal y malla; la bola rebota en las paredes y se puede jugar después del bote. Puntuación de pádel (15-30-40, punto de oro o ventajas, sets a 2, 3, 4 o 6 juegos con tie-break, un set o al mejor de tres). Marcador de televisión con sets, juegos y puntos, saque y segundo saque, punto de oro, iguales, tie-break, bola de set y de partido, y banners de falta, let y de cada forma de acabar el punto (a la red, pared directa, doble falta, por 3, por 4…). Los jugadores tienen físico: los metros corridos y los golpes fuertes lo gastan, las pausas y los cambios de juego lo devuelven, y cansados corren, reaccionan y golpean algo peor (se ve en la pausa y, como distancia recorrida, en las estadísticas del final). Cada jugador tiene una ficha con su media y siete atributos de 0 a 99 (potencia, control, velocidad, reflejos, remate, pared y toque) que mueven su juego; se ven en la presentación del partido, en el cuadro (la media de cada pareja) y en «Tu pareja». Textos en español e inglés. Sin online, sin modo individual y sin entrenamiento (se quitaron al pasar del pickleball).
+> **Esta rama no se fusiona en `main`.** `main` es el pádel y se publica sola en Vercel ([padel-pro-one.vercel.app](https://padel-pro-one.vercel.app)). El tenis vive en la rama `tenis`, con su propia vista previa de Vercel (con inicio de sesión). Si el tenis pasa a ser un juego publicado, se le hace su propio repositorio desde esta rama.
+
+- **Origen:** el motor del pádel 0.6 de `main` (`33e2ba3`) más lo que el pickleball sabía de individual (`Nocodeboy/Pickleball`). Las notas del pádel siguen en `docs/` y las del pickleball en `docs/pickleball/` como referencia; las del tenis, en `docs/tenis/`.
+- **Versión:** 0.1 (12–13 oct 2026), la primera jugable:
+  - **individual** contra un cuadro de cinco rivales, de dieciseisavos a la final;
+  - **dobles** con tu pareja, Marcel Granoyers, contra cuatro parejas, de octavos a la final;
+  - **tres superficies**, cada una con su bote: pista dura, tierra batida y hierba;
+  - pista ITF con líneas de individual y dobles, red con palos de individual, raqueta con cuerdas, revés a dos manos, cortados y saque por arriba;
+  - puntuación de tenis: 15-30-40 con ventajas o punto decisivo, sets a 2, 3, 4 o 6 juegos con tie-break, un set o al mejor de 3 o de 5 (tie-break a 10 en el quinto);
+  - marcador de televisión con hasta cinco sets, bola de break, de set y de partido, carteles de ace, doble falta, fuera (con los centímetros), let y ganador;
+  - textos en español e inglés.
+- **Detalle:** `docs/tenis/concepto.md` (estado, números y pendientes), `docs/tenis/contrato.md` (lo que comparten simulación, gráficos e interfaz) y las notas de cada parte: `notas-01-simulacion.md`, `notas-01-graficos.md` y `notas-01-interfaz.md`.
 
 ## Compilar
 
@@ -23,28 +27,30 @@ npx tsc --noEmit -p .   # comprobación de tipos
 
 ## Estructura
 
-- `src/sim/`: simulación determinista. Pista, paredes y red (`court.ts`), vuelo de la bola y rebotes en cristal y malla (`ball.ts`), reglas, puntuación por sets, físico, movimiento y planes (`match.ts`), IA, golpes, el planificador del por 3 y el cuadro de parejas (`brain.ts`).
-- `src/`: control (`input.ts`, `human.ts`), menús, ajustes y flujo del partido (`main.ts`), grafismo de TV y marcador (`broadcast.ts`), por qué se ganó o perdió cada punto (`explain.ts`), textos en español e inglés (`i18n.ts`), audio sintetizado: pala, bote, cristal y malla (`audio.ts`), equipaciones (`kits.ts`) y marca, apellidos y cabezas de serie (`tour.ts`).
-- `src/render/`:
-  - escena, luz y niveles de calidad: `view.ts`, `look.ts`;
-  - estadio y pista: `stadium.ts`, `venue.ts`, `led.ts`, `crowd.ts`;
-  - personajes: `chars.ts`, `keyposes.ts` y `body.ts`;
-  - equipaciones, pala y bola: `outfit.ts`, `gear.ts`;
-  - cámaras y repeticiones: `director.ts`, `replay.ts`.
-- `assets/`: el modelo del jugador (`chars/hero.json`) y las animaciones (`anims/`), convertidos con `tools/prep-character.mjs` y `tools/prep-clip.mjs`. Los originales (`art/raw`) no están en el repositorio.
-- `tools/`: bots y capturas. `bot-doubles.ts` mide el cuadro con un pulgar simulado, `review/fuzz.ts` juega partidos con pulgares al azar, `poses.ts` mide las poses, y hay scripts de captura con Playwright (`screens.py`: menús, partido y final en un móvil vertical; `hud.py`: los indicadores en pantalla).
+- `src/sim/`: simulación determinista.
+  - `court.ts`: la pista ITF, las líneas en juego (individual o dobles), la zona libre y las vallas;
+  - `ball.ts`: el vuelo de la bola y el bote de cada superficie (`GROUND`);
+  - `match.ts`: reglas, saque, puntuación, físico, movimiento, el planificador de contactos y el modelo de error (`SCATTER`);
+  - `brain.ts`: la IA (`TENNIS`, individual y dobles), los rivales y sus fichas, y el control compartido con el humano.
+- `src/`: control (`input.ts`, `human.ts`), menús, ajustes y flujo del partido (`main.ts`), grafismo de TV y marcador (`broadcast.ts`), por qué se ganó o perdió cada punto (`explain.ts`), textos (`i18n.ts`), audio (`audio.ts`), equipaciones (`kits.ts`) y marca, apellidos y cabezas de serie (`tour.ts`).
+- `src/render/`: escena y cámara (`view.ts`, `look.ts`), estadio y pista de tres superficies (`stadium.ts`, `venue.ts`, `textures.ts`, `led.ts`, `crowd.ts`), personajes y golpes (`chars.ts`, `keyposes.ts`, `body.ts`), equipaciones y raqueta (`outfit.ts`, `gear.ts`), tele y repeticiones (`director.ts`, `replay.ts`).
+- `assets/`: los jugadores (`chars/`) y las animaciones (`anims/`; el revés a dos manos, `backhand_mocap.json`, viene del pickleball).
+- `tools/`: bots, medidas y capturas (abajo).
 
 ## Comprobaciones habituales
 
 ```bash
-npx tsx tools/bot-doubles.ts 12 1          # el cuadro de parejas, ayuda media
-npx tsx tools/review/fuzz.ts 40            # partidos con pulgares al azar: sin fallos ni atascos
-npx tsx tools/audit/partidos.ts cpu 40     # estructura del punto, la red, los globos (tools/audit/: las sondas de la 0.4)
-DELTA=20 npx tsx tools/audit/atributos.ts 40  # cuánto pesa cada atributo de la ficha
-python3 tools/screens.py /tmp/padel-screens  # capturas de menús, fichas, avisos, marcador y final (necesita dist/)
-python3 tools/screens.py /tmp/padel-h dist en 844x390 8784  # lo mismo en inglés y en horizontal
+npx tsx tools/bot.ts singles 16 hard          # la escalera de individual: tres niveles de humano contra los cinco rivales
+npx tsx tools/bot.ts doubles 12 clay          # la de dobles, en tierra
+SHOTS=1 LEVELS=medio npx tsx tools/bot.ts singles 10 grass   # golpes, velocidades, cómo acaban los puntos
+npx tsx tools/review/fuzz.ts 120              # partidos con pulgares al azar: sin fallos ni atascos
+npx tsx tools/render/poses-tenis.ts 70        # la raqueta en la bola y las poses, con la simulación real
+python3 tools/tenis/play.py /tmp/tenis-play singles clay 2   # un partido en el navegador, fotograma a fotograma (necesita dist/)
+python3 tools/ui/screens.py /tmp/tenis-ui     # menús, fichas, ajustes, marcador y carteles (necesita dist/)
 ```
+
+`tools/bot.ts` acepta `[singles|doubles] [partidos por casilla] [superficie] [juegos] [sets] [ayuda] [punto decisivo]` y variables de entorno para probar otros valores sin tocar el código (`TENNIS`, `PRESSURE`, `WHIFF`, `REACH`…; la lista está en la cabecera del fichero).
 
 ## Para depurar en el navegador
 
-`window.__pb`: `start(i)` empieza el partido contra la pareja `i` del cuadro (sin la presentación de TV; `start(i, true)` con ella), `match` es el partido en juego, `autopilot()` hace que tu jugador juegue solo, y `manual` + `advance(seg)` paran el bucle y avanzan el partido a mano para capturas. Para las capturas de la 0.3: `forceCue = 'bajada'` (o `'attack'`) muestra ese aviso sea cual sea la bola, y `fakePoint(ganador, motivo, golpe, especial)` lanza un punto con el golpe que lo decidió (cartel, público y sonido), por ejemplo `fakePoint(0, 'exit', 'smash', 'por3')`.
+`window.__pb`: `start(i)` empieza un individual contra el rival `i` del cuadro (`startDoubles(i)`, dobles contra la pareja `i`; `start(i, true)` con la presentación de TV), `setSurface('clay')` y `setMode('doubles')` cambian el torneo, `match` es el partido en juego, `autopilot()` hace que tu jugador juegue solo, y `manual` + `advance(seg)` paran el bucle y avanzan el partido a mano para capturas. `fakePoint(ganador, motivo, golpe, golpes, fuera?)` lanza un punto con su cartel, por ejemplo `fakePoint(0, 'winner', 'serve', 1)` (un ace).
