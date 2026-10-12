@@ -1,43 +1,54 @@
-// Padel prototype: menus, the match loop, HUD and feedback. The rules live in sim/, the drawing in render/.
-// Always doubles: the human and his CPU partner (Martín) against a ladder of CPU pairs.
+// Tennis prototype: menus, the match loop, HUD and feedback. The rules live in sim/, the drawing in render/.
+// Two modes, each with its own ladder and progress: singles (the human against the five CPU rivals of a 32-player
+// draw, first round to the final) and doubles (the human and his CPU partner, Marcel Granoyers, against the four
+// pairs of a 16-pair draw). Every match is played on the tournament's surface (Settings: hard, clay or grass).
 
 import { audio, vibrate } from './audio';
-import { Broadcast, type BroadcastSetup, type TeamInfo } from './broadcast';
-import { Explainer } from './explain';
+import { Broadcast, isAce, type BroadcastSetup, type TeamInfo } from './broadcast';
+import { Explainer, fmtLen } from './explain';
 import { AIM_D0, HumanController, servePulse, type SwingMode } from './human';
 import { t, lang, setLang } from './i18n';
 import { ICON } from './icons';
 import { Input } from './input';
-import { HERO, PARTNER_KIT, RIVAL_KITS, kitOf } from './kits';
+import { HERO, PARTNER_KIT, kitOf, onSurface, type KitInfo } from './kits';
 import { View, aimHue, cssHue, type Tier } from './render/view';
-import { AIController, ATTACK, HUMAN_REACTION, HUMAN_SPEED, PAIRS, PARTNER, RIVALS, kindForAim, specialOk, type Pair, type Rival } from './sim/brain';
+import { AIController, HUMAN_REACTION, HUMAN_SPEED, PAIRS, PARTNER, RIVALS, kindForAim, type Pair, type Rival } from './sim/brain';
 import { ATTR_KEYS, HUMAN_ATTRS, overall, type Attributes } from './sim/attributes';
+import { SURFACES, type CourtSurface } from './sim/court';
 import { IDEAL_RELEASE, LUNGE, Match, PERFECT_WINDOW, type Controller, type PlayerCfg } from './sim/match';
 import { Rng } from './sim/rng';
-import type { MatchEvent, Plan, Player, PointReason, Rules, ShotKind, Special } from './sim/types';
+import type { MatchEvent, Plan, Player, PointReason, Rules, ShotKind } from './sim/types';
 import type { Kit } from './render/chars';
-import { EVENT, TOUR, brand, court, bugName, fullName, initials, pairInfo, pairSeed, playerInfo, roundName, seedTag, surname } from './tour';
+import { DRAW, EVENT, TOUR, brand, bugName, fullName, initials, pairInfo, pairSeed, playerInfo, roundName, seedOf, seedTag, surfaceName, surname, venue } from './tour';
 
 declare const __VERSION__: string;
 
 // ------------------------------------------------------------------ save
+/** singles or doubles: the menu's choice (each has its own draw and progress) */
+type Mode = 'singles' | 'doubles';
 interface Save {
   sound: boolean;
   /** the menus' music (assets/music, made with AI), apart from the sound */
   music: boolean;
-  /** the length of the match (one set): games to win it, a tie-break at games-games */
+  /** games to win a set (6 is the real one; 2, 3 and 4 for a quick match): a tie-break to 7 at games-games */
   games: 2 | 3 | 4 | 6;
-  /** one set, or the best of three (0.5) */
-  sets: 1 | 3;
-  /** at 40-40: the golden point (the next point wins the game) or advantages */
+  /** one set, the best of three or the best of five */
+  sets: 1 | 3 | 5;
+  /** at 40-40: the deciding point (no-ad: the next point wins the game) or advantages (the tour's rule, the default) */
   golden: boolean;
+  /** the tournament's surface: both draws are played on it (Settings) */
+  surface: CourtSurface;
+  /** the draw the menu plays: singles or doubles */
+  mode: Mode;
+  /** singles: the rivals of the ladder beaten (0 … 5) */
+  beaten: number;
+  /** doubles: the pairs of the ladder beaten (0 … 4) */
+  beatenPairs: number;
   tutorial: boolean;
   lang?: 'en' | 'es';
   /** how the human swings, and how much help to get into position */
   swing: SwingMode;
   assist: number;
-  /** the pairs of the ladder beaten */
-  beatenPairs: number;
   /** TV replays of great points */
   replays: boolean;
   /** between shots, with the thumb off the stick, the player jogs back to a good spot by himself */
@@ -51,11 +62,18 @@ interface Save {
   played: number;
   /** a tip between points when the same mistake keeps coming back (src/explain.ts, Coach) */
   coach: boolean;
-  /** the first-time hints already shown (0.3: the power of the gesture, the bajada, the por 3 / por 4 chance) */
+  /** the first-time hints already shown (the power of the gesture, the smash) */
   seen: string[];
 }
-const KEY = 'padel-proto-v1';
-const save: Save = { sound: true, music: true, games: 3, sets: 1, golden: true, tutorial: false, swing: 'assist', assist: 1, beatenPairs: 0, replays: true, recover: false, haptics: true, hud: 'min', skips: 0, played: 0, coach: true, seen: [] };
+// (a key of its own: the padel game's save, on the same origin in a local test, is not read)
+const KEY = 'tenis-proto-v1';
+/**
+ * The defaults for a phone: one set to 4 games with a tie-break at 4-4 and advantages (the tour's rule) on a hard
+ * court. Sets to 4 games are a real short format (Fast4); a set to 6 is 12–20 minutes, too long for a first match on
+ * a phone; to 4 it is about 6–10 (the padel game's one set to 3 with the golden point was 4–7). The full match (best
+ * of 3 or 5 sets to 6) is one tap away in Settings.
+ */
+const save: Save = { sound: true, music: true, games: 4, sets: 1, golden: false, surface: 'hard', mode: 'singles', beaten: 0, beatenPairs: 0, tutorial: false, swing: 'assist', assist: 1, replays: true, recover: false, haptics: true, hud: 'min', skips: 0, played: 0, coach: true, seen: [] };
 try {
   Object.assign(save, JSON.parse(localStorage.getItem(KEY) || '{}'));
 } catch {
@@ -68,15 +86,22 @@ function persist() {
     /* storage may be blocked: progress lives for this session */
   }
 }
-if (![2, 3, 4, 6].includes(save.games)) save.games = 3;
-if (save.sets !== 3) save.sets = 1;
+if (![2, 3, 4, 6].includes(save.games)) save.games = 4;
+if (save.sets !== 3 && save.sets !== 5) save.sets = 1;
+if (!SURFACES.includes(save.surface)) save.surface = 'hard';
+if (save.mode !== 'doubles') save.mode = 'singles';
+save.beaten = Math.max(0, Math.min(RIVALS.length, Math.floor(Number(save.beaten) || 0)));
+save.beatenPairs = Math.max(0, Math.min(PAIRS.length, Math.floor(Number(save.beatenPairs) || 0)));
+save.golden = !!save.golden;
 if (!Array.isArray(save.seen)) save.seen = [];
-/** the rules of a match as Settings has them */
-const rules = (): Rules => ({ games: save.games, golden: save.golden, sets: save.sets });
+/** the rules of a match as Settings has them (the surface: the tournament's) */
+const rules = (): Rules => ({ games: save.games, golden: save.golden, sets: save.sets, surface: save.surface });
+const dbl = () => save.mode === 'doubles';
 if (save.lang) setLang(save.lang);
 else setLang(lang);
 audio.setSfx(save.sound);
 audio.setMusic(save.music);
+audio.surface = save.surface;
 // the menus' theme (the studio's, from the pickleball: Magnific, Google Lyria 3 Pro; looped round its 36 bars after
 // the intro). In the matches the crowd is the sound, as on TV.
 audio.setMusicTracks({ menu: { url: 'assets/music/menu-loop.mp3', loopStart: 11.2725, loopEnd: 83.2725, vol: 0.55 } });
@@ -122,7 +147,8 @@ if (document.fonts) document.fonts.ready.then(() => view.refreshBanner()).catch(
 let match: Match | null = null;
 /** why each point was won or lost (the banner's second line) and the tips when a mistake keeps coming back */
 const explainer = new Explainer();
-/** the pair being played, and every player's name by id (for the calls and toasts) */
+/** the rival or the pair being played, and every player's name by id (for the calls and toasts) */
+let rival: Rival = RIVALS[0];
 let pair: Pair = PAIRS[0];
 let names: string[] = [];
 /** the video board's footer and the TV title card: the event (provisional brand, src/tour.ts) */
@@ -183,27 +209,30 @@ hud.addEventListener('click', (e) => {
 });
 /** where a sound is on screen (−1 left … 1 right) and how far up the court (0 near … 1 far end) */
 const panOf = (x: number, y: number, z: number) => Math.max(-1, Math.min(1, (view.toScreen(x, y, z).x / Math.max(1, window.innerWidth)) * 2 - 1));
-const farOf = (z: number) => Math.max(0, Math.min(1, (-z * view.viewSide) / 7));
+const farOf = (z: number) => Math.max(0, Math.min(1, (-z * view.viewSide) / 9));
 view.onSqueak = (_pid, k, x, z) => audio.squeak(k, panOf(x, 0, z), farOf(z));
 view.onDeadBounce = (v, x, z) => audio.courtBounce(Math.min(1, v / 5), panOf(x, 0, z), farOf(z), true);
 function setFooter(f: string) {
   view.boardFooter = f;
   bc.footer = f;
 }
+/** a player's kit as worn on the tournament's surface (all white on grass, src/kits.ts) */
+const dress = (k: KitInfo): Kit => onSurface(k, save.surface).kit;
 
 // ------------------------------------------------------------------ the attract mode behind the menus
 let demo: Match | null = null;
 const cfgOf = (r: Rival, team: 0 | 1): PlayerCfg => ({ team, human: false, speed: r.skill.speed, reaction: r.skill.reaction, look: r.look });
 function startDemo() {
-  // the attract match: Galván and Chingoto against Tapira and Coeyo (four CPU players as they play in a pair, the
-  // default rules)
-  const near = [PAIRS[1].b, PAIRS[1].a];
-  const far = [PAIRS[3].a, PAIRS[3].b];
+  // the attract match, on the tournament's surface, in the menu's mode: Siner against Alcarás (the final everybody
+  // wants), or De Miñor and Medvédiev against Siner and Alcarás (four CPU players as they play in a pair)
+  const near = dbl() ? [PAIRS[1].b, PAIRS[1].a] : [RIVALS[3]];
+  const far = dbl() ? [PAIRS[3].a, PAIRS[3].b] : [RIVALS[4]];
   const all = [...near, ...far];
-  demo = new Match([...near.map((r) => cfgOf(r, 0)), ...far.map((r) => cfgOf(r, 1))], { games: 3, golden: true }, (Math.random() * 1e9) | 0);
+  audio.surface = save.surface;
+  demo = new Match([...near.map((r) => cfgOf(r, 0)), ...far.map((r) => cfgOf(r, 1))], { games: 4, golden: false, sets: 1, surface: save.surface }, (Math.random() * 1e9) | 0);
   demo.setControllers(all.map((r) => new AIController(r.skill)));
   demo.start();
-  view.setMatch(demo, all.map((r) => RIVAL_KITS[r.id].kit));
+  view.setMatch(demo, all.map((r) => dress(kitOf(r.id))));
   view.boardNames = [near.map(bugName).join(' / '), far.map(bugName).join(' / ')];
   view.boardFooter = BOARD_FOOTER;
   view.orbit = true;
@@ -231,9 +260,18 @@ function avatar(r: Rival | null, cls = 'av'): string {
 function duo(a: Rival | null, b: Rival): string {
   return `<div class="duo">${avatar(a)}${avatar(b)}</div>`;
 }
-/** a pair as the draw writes it: «Navarra / Chingoto» */
+/** a pair as the draw writes it: «Siner / Alcarás» */
 function pairName(p: Pair): string {
   return `${surname(p.a)} / ${surname(p.b)}`;
+}
+/** the surface as a small swatch of its colour and its name («● Tierra batida») */
+function surfChip(s: CourtSurface = save.surface): string {
+  return `<span class="surf ${s}"><i></i>${surfaceName(s)}</span>`;
+}
+/** «Un set · 4 juegos · Ventajas»: the format of the match */
+function formatLine(): string {
+  const sets = t(save.sets === 5 ? 'set.sets5' : save.sets === 3 ? 'set.sets3' : 'set.sets1');
+  return `${sets} · ${t('fmt.games', { n: save.games })} · ${t(save.golden ? 'fmt.golden' : 'fmt.adv')}`;
 }
 
 // ------------------------------------------------------------------ player cards (attributes 0 … 99)
@@ -282,13 +320,23 @@ function cardModal(host: HTMLElement, r: Rival | null) {
   });
   host.append(d);
 }
-/** the wordmark: PÁDEL, the tour (provisional brand) and the build */
+/** the wordmark: TENIS, the tour (provisional brand) and the build */
 function logo(): string {
   return `<div class="logo"><div class="w1">${brand()}</div><div class="tour"><i></i>${TOUR}<i></i></div><div class="sub">${t('title.sub')}</div></div>`;
 }
 /** a panel's header: back arrow, the event above the title */
 function head(title: string, eyebrow = EVENT): string {
   return `<div class="ph"><button class="back" data-a="back" aria-label="${t('back')}">${ICON.back}</button><div class="pt"><div class="eyebrow">${eyebrow}</div><h2>${title}</h2></div></div>`;
+}
+
+/** the next rival or pair of the menu's draw, its index and the draw's length */
+function nextUp(): { i: number; n: number; name: string } {
+  if (dbl()) {
+    const i = Math.min(save.beatenPairs, PAIRS.length - 1);
+    return { i, n: PAIRS.length, name: pairName(PAIRS[i]) };
+  }
+  const i = Math.min(save.beaten, RIVALS.length - 1);
+  return { i, n: RIVALS.length, name: fullName(RIVALS[i]) };
 }
 
 function menu() {
@@ -300,17 +348,18 @@ function menu() {
   clearHint();
   banner.innerHTML = '';
   if (!demo) startDemo();
-  const nextPair = PAIRS[Math.min(save.beatenPairs, PAIRS.length - 1)];
-  // the next match of the draw: its round and the opponents
-  const upNext = t('menu.nextMatch', { round: roundName(PAIRS.indexOf(nextPair), PAIRS.length), name: pairName(nextPair) });
-  const item = (a: string, ic: string, label: string) => `<button data-a="${a}">${ic}<span>${label}</span>${ICON.chev}</button>`;
+  const nx = nextUp();
+  // the next match of the draw: its round and the opponent(s)
+  const upNext = t('menu.nextMatch', { round: roundName(nx.i, nx.n), name: nx.name });
+  const item = (a: string, ic: string, label: string, extra = '') => `<button data-a="${a}">${ic}<span>${label}</span>${extra}${ICON.chev}</button>`;
   const el = show(
     `<div class="home-top">${logo()}</div>
     <div class="menu-col">
+      <div class="seg mode" data-k="mode" role="group"><button data-v="singles" class="${dbl() ? '' : 'on'}" aria-pressed="${!dbl()}">${t('menu.singles')}</button><button data-v="doubles" class="${dbl() ? 'on' : ''}" aria-pressed="${dbl()}">${t('menu.doubles')}</button></div>
       <button class="btn big primary play" data-a="play"><span class="pl"><b>${t('menu.play')}</b><small>${upNext}</small></span>${ICON.play}</button>
       <div class="menu-list">
-        ${item('rivals', ICON.draw, t('menu.pairs'))}
-        ${item('team', ICON.card, t('menu.team'))}
+        ${item('rivals', ICON.draw, t('menu.draw'), surfChip())}
+        ${item('team', ICON.card, t(dbl() ? 'menu.pair' : 'menu.team'))}
         ${item('how', ICON.help, t('menu.how'))}
         ${item('settings', ICON.sliders, t('menu.settings'))}
       </div>
@@ -323,9 +372,20 @@ function menu() {
     if (!b) return;
     audio.unlock();
     audio.play('click');
+    if ((b.parentElement as HTMLElement).dataset.k === 'mode') {
+      const m = b.dataset.v === 'doubles' ? 'doubles' : 'singles';
+      if (m === save.mode) return;
+      save.mode = m;
+      persist();
+      // (the attract match changes with it)
+      demo = null;
+      return menu();
+    }
     const a = b.dataset.a;
-    if (a === 'play') versusPair(nextPair);
-    else if (a === 'rivals') pairLadder();
+    if (a === 'play') {
+      if (dbl()) versusPair(PAIRS[nx.i]);
+      else versus(RIVALS[nx.i]);
+    } else if (a === 'rivals') ladder();
     else if (a === 'team') teamCards();
     else if (a === 'how') howTo();
     else if (a === 'settings') settings();
@@ -333,8 +393,8 @@ function menu() {
 }
 
 /**
- * One match of the draw: its round, the opponent (seed, name, a line about them), how good they are (the pair's
- * overall) and where the player stands with it (won, next, or locked behind the round before).
+ * One match of the draw: its round, the opponent (seed, name, a line about them), how good they are (the overall)
+ * and where the player stands with it (won, next, or locked behind the round before).
  */
 function drawRow(i: number, n: number, done: number, av: string, name: string, line: string, prev: string, ovr: number): string {
   const locked = i > done;
@@ -345,26 +405,36 @@ function drawRow(i: number, n: number, done: number, av: string, name: string, l
   return `<button class="rival ${cls}" data-i="${i}" ${locked ? 'disabled' : ''}>${av}<div class="rt"><div class="rd">${roundName(i, n)}</div><div class="nm">${name}</div><div class="tg">${sub}</div></div><div class="st">${st}${ovrChip(ovr)}</div></button>`;
 }
 
-/** a pair's overall in the draw: the number, «MED» / «OVR» beside it */
+/** an overall in the draw: the number, «MED» / «OVR» beside it */
 const ovrChip = (v: number) => `<span class="ovr-chip ${tier(v)}" aria-label="${t('card.ovrLong')} ${v}"><b>${v}</b><small>${t('card.ovr')}</small></span>`;
 
-function pairLadder() {
-  const n = PAIRS.length;
-  const rows = PAIRS.map((p, i) => drawRow(i, n, save.beatenPairs, duo(p.a, p.b), `${seedTag(pairSeed(p))}${pairName(p)}`, t(p.tag), i ? pairName(PAIRS[i - 1]) : '', pairOverall(p.a, p.b))).join('');
-  const el = show(`<div class="panel draw">${head(t('pairs.title'))}<div class="ladder">${rows}</div></div>`);
+/**
+ * The draw of the menu's mode: singles, the five rivals from the round of 32 to the final; doubles, the four pairs
+ * from the round of 16. Under the title, the draw's size and the surface it is played on.
+ */
+function ladder() {
+  const d = dbl();
+  const n = d ? PAIRS.length : RIVALS.length;
+  const rows = d
+    ? PAIRS.map((p, i) => drawRow(i, n, save.beatenPairs, duo(p.a, p.b), `${seedTag(pairSeed(p))}${pairName(p)}`, t(p.tag), i ? pairName(PAIRS[i - 1]) : '', pairOverall(p.a, p.b))).join('')
+    : RIVALS.map((r, i) => drawRow(i, n, save.beaten, avatar(r), `${seedTag(seedOf(r))}${fullName(r)}`, t(r.tag), i ? fullName(RIVALS[i - 1]) : '', overall(r.attrs))).join('');
+  const info = `<div class="draw-info"><span>${t(d ? 'draw.sizeD' : 'draw.size', { n: d ? DRAW.doubles : DRAW.singles })}</span>${surfChip()}<span>${formatLine()}</span></div>`;
+  const el = show(`<div class="panel draw">${head(t(d ? 'draw.doubles' : 'draw.singles'))}${info}<div class="ladder">${rows}</div></div>`);
   el.addEventListener('click', (e) => {
     const b = (e.target as HTMLElement).closest('button');
     if (!b) return;
     audio.play('click');
     if (b.dataset.a === 'back') return menu();
     const i = Number(b.dataset.i);
-    if (!Number.isNaN(i) && i <= save.beatenPairs) versusPair(PAIRS[i]);
+    if (Number.isNaN(i)) return;
+    if (d && i <= save.beatenPairs) versusPair(PAIRS[i]);
+    else if (!d && i <= save.beaten) versus(RIVALS[i]);
   });
 }
 
 function howTo() {
   // (each paragraph opens with its title in bold: the stylesheet sets it as the section's heading)
-  const parts = ['how.1', 'how.2', 'how.8', 'how.7', 'how.9', 'how.4', 'how.3', 'how.5', 'how.6'].map((k, i) => `<section class="how-s"><span class="hn">${i + 1}</span><p>${t(k, { name: PARTNER.name })}</p></section>`).join('');
+  const parts = ['how.1', 'how.2', 'how.8', 'how.7', 'how.9', 'how.10', 'how.3', 'how.5', 'how.11', 'how.6'].map((k, i) => `<section class="how-s"><span class="hn">${i + 1}</span><p>${t(k, { name: PARTNER.name })}</p></section>`).join('');
   const el = show(`<div class="panel how">${head(t('how.title'))}${miniCourt()}${parts}</div>`);
   el.querySelector('[data-a=back]')!.addEventListener('click', () => {
     audio.play('click');
@@ -372,64 +442,92 @@ function howTo() {
   });
 }
 
-/** Your pair: your card and Martín's, whole (from the menu; the match card opens them one at a time). */
+/**
+ * Your card (singles), or yours and Marcel's with the pair's overall (doubles): whole, from the menu (the match card
+ * opens them one at a time).
+ */
 function teamCards() {
-  const o = pairOverall(null, PARTNER);
-  const el = show(`<div class="panel team">${head(t('team.title'))}<div class="team-o">${ovrBox(o)}<span><b>${t('you')} / ${surname(PARTNER).toUpperCase()}</b><small>${t('tv.homePair')}</small></span></div><div class="pc-two">${playerCard(null, true)}${playerCard(PARTNER, true)}</div></div>`);
+  const d = dbl();
+  // (doubles: the pair's overall over the two cards; singles: the card says it all)
+  const top = d ? `<div class="team-o">${ovrBox(pairOverall(null, PARTNER))}<span><b>${t('you')} / ${surname(PARTNER).toUpperCase()}</b><small>${t('tv.homePair')}</small></span></div>` : '';
+  const el = show(`<div class="panel team${d ? '' : ' one'}">${head(t(d ? 'team.titleD' : 'team.title'))}${top}<div class="pc-two">${playerCard(null, true)}${d ? playerCard(PARTNER, true) : ''}</div></div>`);
   el.querySelector('[data-a=back]')!.addEventListener('click', () => {
     audio.play('click');
     menu();
   });
 }
 
+/** the court's colours for the diagram: inside the lines and the run-off round them */
+const SURF_INK: Record<CourtSurface, [string, string]> = {
+  hard: ['#2f6aa3', '#2a4f7a'],
+  clay: ['#c1653a', '#a9532d'],
+  grass: ['#4f8f3f', '#3f7834'],
+};
 /**
- * A small padel court diagram, seen from your end: the net, the service boxes, the glass (solid) and the mesh (dashed)
- * round it, the three aim zones on the far side and the two of you on the near side (you on the right, «drive»).
+ * A small tennis court diagram, seen from your end, in the colours of the tournament's surface: the doubles alleys,
+ * the singles sidelines, the service boxes and the net; the three aim zones on the far side (a drop shot just over
+ * the net, a deep ball, a lob past the baseline) and you behind the near baseline (and Marcel at the net in doubles).
  */
 function miniCourt(): string {
   const es = lang === 'es';
-  // (the shot colours are the game's: chiquita cyan, drive white, lob violet; the court 10 × 20 m at 7 px a metre)
+  const d = dbl();
+  // (the shot colours are the game's: the drop shot cyan, a groundstroke white, the lob violet; the court 23.77 ×
+  // 10.97 m at 6.2 px a metre)
   const f = `font-family="'Barlow Condensed', 'Arial Narrow', sans-serif" font-weight="700" letter-spacing=".06em"`;
-  const L = 'rgba(255,255,255,.85)';
-  const G = '#8fd8ff';
-  const M = 'rgba(255,255,255,.4)';
-  return `<svg class="court-mini" width="260" height="168" viewBox="0 0 260 168" aria-hidden="true">
-    <rect x="95" y="14" width="70" height="140" fill="#1d4f8f"/>
-    <line x1="95" y1="35.3" x2="165" y2="35.3" stroke="${L}" stroke-width="1.2"/>
-    <line x1="95" y1="132.7" x2="165" y2="132.7" stroke="${L}" stroke-width="1.2"/>
-    <line x1="130" y1="35.3" x2="130" y2="132.7" stroke="${L}" stroke-width="1.2"/>
-    <line x1="91" y1="84" x2="169" y2="84" stroke="#05080c" stroke-width="3"/>
-    <path d="M95 42 V14 H165 V42 M95 126 V154 H165 V126" fill="none" stroke="${G}" stroke-width="3"/>
-    <path d="M95 42 V126 M165 42 V126" fill="none" stroke="${M}" stroke-width="2" stroke-dasharray="2 3"/>
-    <circle cx="112" cy="76" r="5.5" fill="none" stroke="#5af0e8" stroke-width="2.5"/>
-    <text x="88" y="80" text-anchor="end" fill="#5af0e8" font-size="11" ${f}>${es ? 'CHIQUITA' : 'CHIQUITA'}</text>
-    <circle cx="146" cy="46" r="5.5" fill="none" stroke="#fff" stroke-width="2.5"/>
-    <text x="172" y="50" fill="#fff" font-size="11" ${f}>DRIVE</text>
-    <circle cx="124" cy="9" r="5" fill="none" stroke="#c49aff" stroke-width="2.5"/>
-    <text x="88" y="13" text-anchor="end" fill="#c49aff" font-size="11" ${f}>${es ? 'GLOBO' : 'LOB'}</text>
-    <text x="172" y="22" fill="${G}" font-size="10" ${f}>${es ? 'CRISTAL' : 'GLASS'}</text>
-    <text x="172" y="88" fill="rgba(255,255,255,.6)" font-size="10" ${f}>${es ? 'MALLA' : 'MESH'}</text>
-    <circle cx="112" cy="140" r="4.5" fill="#9aa3ad" stroke="#05080c" stroke-width="1.5"/>
-    <text x="88" y="144" text-anchor="end" fill="#9aa3ad" font-size="10" ${f}>${PARTNER.name.toUpperCase()}</text>
-    <circle cx="148" cy="140" r="4.5" fill="#d9f23f" stroke="#05080c" stroke-width="1.5"/>
-    <text x="172" y="144" fill="#d9f23f" font-size="10" ${f}>${es ? 'TÚ' : 'YOU'}</text>
+  const L = 'rgba(255,255,255,.88)';
+  const [inC, outC] = SURF_INK[save.surface];
+  const k = 6.2;
+  const cx = 130;
+  const top = 26;
+  const len = 23.77 * k;
+  const net = top + len / 2;
+  const hw = (10.97 * k) / 2;
+  const hs = (8.23 * k) / 2;
+  const sv = 6.4 * k;
+  const bot = top + len;
+  const n = (v: number) => v.toFixed(1);
+  return `<svg class="court-mini" width="260" height="200" viewBox="0 0 260 200" aria-hidden="true">
+    <rect x="${n(cx - hw - 12)}" y="${n(top - 16)}" width="${n(hw * 2 + 24)}" height="${n(len + 32)}" rx="3" fill="${outC}"/>
+    <rect x="${n(cx - hw)}" y="${top}" width="${n(hw * 2)}" height="${n(len)}" fill="${inC}"/>
+    <g fill="none" stroke="${L}" stroke-width="1.2">
+      <rect x="${n(cx - hw)}" y="${top}" width="${n(hw * 2)}" height="${n(len)}"/>
+      <path d="M${n(cx - hs)} ${top}V${n(bot)}M${n(cx + hs)} ${top}V${n(bot)}"/>
+      <path d="M${n(cx - hs)} ${n(net - sv)}H${n(cx + hs)}M${n(cx - hs)} ${n(net + sv)}H${n(cx + hs)}M${cx} ${n(net - sv)}V${n(net + sv)}"/>
+      <path d="M${cx} ${top}v3M${cx} ${n(bot)}v-3"/>
+    </g>
+    <line x1="${n(cx - hw - 6)}" y1="${n(net)}" x2="${n(cx + hw + 6)}" y2="${n(net)}" stroke="#05080c" stroke-width="3"/>
+    <line x1="${n(cx - hw - 6)}" y1="${n(net - 1.2)}" x2="${n(cx + hw + 6)}" y2="${n(net - 1.2)}" stroke="#fff" stroke-width="1"/>
+    <circle cx="${cx - 14}" cy="${n(net - 12)}" r="5.5" fill="none" stroke="#5af0e8" stroke-width="2.5"/>
+    <text x="${n(cx - hw - 16)}" y="${n(net - 8)}" text-anchor="end" fill="#5af0e8" font-size="11" ${f}>${es ? 'DEJADA' : 'DROP SHOT'}</text>
+    <circle cx="${cx + 14}" cy="${n(top + 14)}" r="5.5" fill="none" stroke="#fff" stroke-width="2.5"/>
+    <text x="${n(cx + hw + 16)}" y="${n(top + 18)}" fill="#fff" font-size="11" ${f}>${es ? 'AL FONDO' : 'DEEP'}</text>
+    <circle cx="${cx - 6}" cy="${n(top - 9)}" r="5" fill="none" stroke="#c49aff" stroke-width="2.5"/>
+    <text x="${n(cx - hw - 16)}" y="${n(top - 5)}" text-anchor="end" fill="#c49aff" font-size="11" ${f}>${es ? 'GLOBO' : 'LOB'}</text>
+    ${d ? `<circle cx="${cx - 16}" cy="${n(net + 24)}" r="4.5" fill="#9aa3ad" stroke="#05080c" stroke-width="1.5"/><text x="${n(cx - hw - 16)}" y="${n(net + 28)}" text-anchor="end" fill="#9aa3ad" font-size="10" ${f}>${PARTNER.name.toUpperCase()}</text>` : ''}
+    <circle cx="${cx + 16}" cy="${n(bot + 8)}" r="4.5" fill="#d9f23f" stroke="#05080c" stroke-width="1.5"/>
+    <text x="${n(cx + hw + 16)}" y="${n(bot + 12)}" fill="#d9f23f" font-size="10" ${f}>${es ? 'TÚ' : 'YOU'}</text>
+    <text x="${n(cx + hw + 16)}" y="${n(net + 4)}" fill="rgba(255,255,255,.6)" font-size="10" ${f}>${es ? 'RED' : 'NET'}</text>
   </svg>`;
 }
 
 function settings(scroll = -1) {
-  // one row: a label and a segmented choice (`stack`: long options, one under the other)
-  const row = (label: string, k: string, opts: [string, string, boolean][], stack = false) =>
-    `<div class="row${stack ? ' stack' : ''}"><span>${label}</span><div class="seg" data-k="${k}">${opts.map(([v, txt, on]) => `<button data-v="${v}" class="${on ? 'on' : ''}" aria-pressed="${on}">${txt}</button>`).join('')}</div></div>`;
+  // one row: a label and a segmented choice (`stack`: long options, one under the other; `wide`: the label over a
+  // choice as wide as the panel)
+  const row = (label: string, k: string, opts: [string, string, boolean][], how: '' | 'stack' | 'wide' = '') =>
+    `<div class="row${how ? ' ' + how : ''}"><span>${label}</span><div class="seg" data-k="${k}">${opts.map(([v, txt, on]) => `<button data-v="${v}" class="${on ? 'on' : ''}" aria-pressed="${on}">${txt}</button>`).join('')}</div></div>`;
   const onOff = (label: string, k: string, on: boolean) => row(label, k, [['1', t('set.on'), on], ['0', t('set.off'), !on]]);
+  const gamesNote = t(save.sets === 5 ? 'set.gamesNote5' : save.sets === 3 ? 'set.gamesNote3' : 'set.gamesNote', { n: save.games });
   const el = show(
     `<div class="panel settings">${head(t('menu.settings'))}
     <h3>${t('set.groupMatch')}</h3>
+    ${row(t('set.surface'), 'surface', SURFACES.map((s) => [s, `<i class="sw ${s}"></i>${t('set.surf.' + s)}`, save.surface === s] as [string, string, boolean]), 'wide')}
+    <p class="set-note">${t('set.surfNote.' + save.surface)}</p>
+    ${row(t('set.sets'), 'sets', [['1', t('set.sets1'), save.sets === 1], ['3', t('set.sets3'), save.sets === 3], ['5', t('set.sets5'), save.sets === 5]], 'wide')}
     ${row(t('set.games'), 'games', ([2, 3, 4, 6] as const).map((g) => [String(g), String(g), save.games === g] as [string, string, boolean]))}
-    ${row(t('set.sets'), 'sets', [['1', t('set.sets1'), save.sets === 1], ['3', t('set.sets3'), save.sets === 3]])}
-    <p class="set-note">${t(save.sets === 3 ? 'set.gamesNote3' : 'set.gamesNote', { n: save.games })}</p>
-    ${row(t('set.deuce'), 'golden', [['1', t('set.golden'), save.golden], ['0', t('set.adv'), !save.golden]], true)}
+    <p class="set-note">${gamesNote}</p>
+    ${row(t('set.deuce'), 'golden', [['0', t('set.adv'), !save.golden], ['1', t('set.golden'), save.golden]], 'stack')}
     <h3>${t('set.groupControl')}</h3>
-    ${row(t('set.swing'), 'swing', [['assist', t('set.swingAssist'), save.swing === 'assist'], ['manual', t('set.swingManual'), save.swing === 'manual']], true)}
+    ${row(t('set.swing'), 'swing', [['assist', t('set.swingAssist'), save.swing === 'assist'], ['manual', t('set.swingManual'), save.swing === 'manual']], 'stack')}
     ${row(t('set.assist'), 'assist', [['2', t('set.assistHigh'), save.assist === 2], ['1', t('set.assistMid'), save.assist === 1], ['0', t('set.assistOff'), save.assist === 0]])}
     ${onOff(t('set.recover'), 'recover', save.recover)}
     <h3>${t('set.groupScreen')}</h3>
@@ -472,8 +570,16 @@ function settings(scroll = -1) {
     else if (k === 'haptics') {
       save.haptics = v === '1';
       if (save.haptics) vibrate(20);
+    } else if (k === 'surface') {
+      if (SURFACES.includes(v as CourtSurface) && v !== save.surface) {
+        save.surface = v as CourtSurface;
+        audio.surface = save.surface;
+        // (the attract match behind the menus moves to the new court)
+        demo = null;
+        startDemo();
+      }
     } else if (k === 'games') save.games = Number(v) as Save['games'];
-    else if (k === 'sets') save.sets = v === '3' ? 3 : 1;
+    else if (k === 'sets') save.sets = v === '5' ? 5 : v === '3' ? 3 : 1;
     else if (k === 'golden') save.golden = v === '1';
     else if (k === 'swing') save.swing = v as SwingMode;
     else if (k === 'assist') save.assist = Number(v);
@@ -489,24 +595,53 @@ function settings(scroll = -1) {
 }
 
 /**
- * The match card before a match: the event and round, and both pairs, each with its overall and the cards of its two
- * players (a tap on one opens it whole); the rivals' line, and the buttons.
+ * The match card before a match: the event, the court and its surface, the round and the format; both sides, each
+ * with its overall and its players' cards (a tap on one opens it whole); the opponents' line, and the buttons.
  */
+function matchCard(i: number, n: number, me: string, them: string, tag: string): string {
+  return `<div class="vs-card">
+    <div class="vs-head"><div class="eyebrow">${EVENT} · ${venue(save.surface)}</div><div class="vs-round">${roundName(i, n)}</div><div class="vs-fmt">${surfChip()}<span>${formatLine()}</span></div></div>
+    <div class="vs-teams">${me}<div class="x">VS</div>${them}</div>
+    <div class="vs-tag">${tag}</div>
+    <div class="vs-go"><button class="btn big primary" data-a="go">${ICON.play}${t('vs.start')}</button><button class="btn ghost" data-a="back">${t('back')}</button></div>
+  </div>`;
+}
+/** one side of the match card: its overall, its name and seed, its cards */
+const side = (cls: string, ovr: number, name: string, info: string, cards: string) =>
+  `<div class="vt${cls}"><div class="vt-h">${ovrBox(ovr)}<span class="vt-n"><b>${name}</b><small>${info}</small></span></div><div class="vt-c">${cards}</div></div>`;
+
+/** Singles: you against rival r. */
+function versus(r: Rival) {
+  mode = 'vs';
+  rival = r;
+  const i = RIVALS.indexOf(r);
+  const el = show(
+    matchCard(
+      i,
+      RIVALS.length,
+      side(' me one', overall(HUMAN_ATTRS), t('you'), t('tour.wildcard'), playerCard(null)),
+      side(' them one', overall(r.attrs), `${seedTag(seedOf(r))}${surname(r)}`, playerInfo(r), playerCard(r)),
+      t(r.tag),
+    ),
+    'dim',
+    'vs-screen',
+  );
+  onCard(el, () => startSingles(r));
+}
+
+/** Doubles: you and Marcel against pair p. */
 function versusPair(p: Pair) {
   mode = 'vs';
   pair = p;
   const i = PAIRS.indexOf(p);
-  const n = PAIRS.length;
-  /** one pair: its overall, its name and seed, its two cards */
-  const team = (cls: string, a: Rival | null, b: Rival, name: string, info: string) =>
-    `<div class="vt${cls}"><div class="vt-h">${ovrBox(pairOverall(a, b))}<span class="vt-n"><b>${name}</b><small>${info}</small></span></div><div class="vt-c">${playerCard(a)}${playerCard(b)}</div></div>`;
   const el = show(
-    `<div class="vs-card">
-    <div class="vs-head"><div class="eyebrow">${EVENT} · ${court()}</div><div class="vs-round">${roundName(i, n)}</div></div>
-    <div class="vs-teams">${team(' me', null, PARTNER, `${t('you')} / ${surname(PARTNER)}`, t('tour.wildcard'))}<div class="x">VS</div>${team(' them', p.a, p.b, `${seedTag(pairSeed(p))}${pairName(p)}`, pairInfo(p))}</div>
-    <div class="vs-tag">${t(p.tag)}</div>
-    <div class="vs-go"><button class="btn big primary" data-a="go">${ICON.play}${t('vs.start')}</button><button class="btn ghost" data-a="back">${t('back')}</button></div>
-  </div>`,
+    matchCard(
+      i,
+      PAIRS.length,
+      side(' me', pairOverall(null, PARTNER), `${t('you')} / ${surname(PARTNER)}`, t('tour.wildcard'), playerCard(null) + playerCard(PARTNER)),
+      side(' them', pairOverall(p.a, p.b), `${seedTag(pairSeed(p))}${pairName(p)}`, pairInfo(p), playerCard(p.a) + playerCard(p.b)),
+      t(p.tag),
+    ),
     'dim',
     'vs-screen',
   );
@@ -534,8 +669,6 @@ function onCard(el: HTMLElement, go: () => void) {
 
 // ------------------------------------------------------------------ the match
 const tut = { served: false, hit: false, kinds: 0, attack: false, block: false, shownKinds: false, moveShown: false, perfect: false };
-/** points won «por 3» or «por 4» by each team (the end screen) */
-const por34: [number, number] = [0, 0];
 /**
  * The hint line at the bottom (auditoría 04, M1): one hint at a time, each up at least HINT_MIN s before another one
  * (or nothing) takes its place, so none is gone before it can be read. A hint asked for while the line is busy waits
@@ -601,9 +734,8 @@ function hintTick() {
   }
 }
 /**
- * A first-time hint (0.3: the power of the gesture, the bajada, the por 3 / por 4 chance): shown once ever, in any
- * match (not only the first one: players of 0.2 get them too), in its keyboard wording without a touch screen. Only
- * when the line is free for it (otherwise it waits for another ball: it is not spent).
+ * A first-time hint (the power of the gesture, the smash): shown once ever, in any match, in its keyboard wording
+ * without a touch screen. Only when the line is free for it (otherwise it waits for another ball: it is not spent).
  */
 function onceHint(k: string, sec: number, prio: number = PRIO.general): boolean {
   if (save.seen.includes(k) || !hintFree(prio) || hintNext) return false;
@@ -613,12 +745,28 @@ function onceHint(k: string, sec: number, prio: number = PRIO.general): boolean 
   return true;
 }
 
-/** the TV's home team: «TÚ» (and «RUIZ») in the bug, the full names on the strap, a wild card */
+/** the TV's home side: «TÚ» (and «GRANOYERS») in the bug, the full names on the strap, a wild card */
 const home = (bug: string[], full: string[]): TeamInfo => ({ names: bug, full, color: HERO.css, ink: HERO.ink, badge: 'WC', info: t(bug.length > 1 ? 'tv.homePair' : 'tv.home') });
-/** the umpire's names by player id (the surnames, as in the bug: «Saca Vidal») */
+/** the umpire's names by player id (the surnames, as in the bug: «Saca Medvédiev») */
 let callNames: string[] = [];
 
-/** The human and Martín (near side; the human plays the right, «drive», and serves first) against a pair. */
+/** Singles: the human (near side) against rival r. */
+function startSingles(r: Rival) {
+  rival = r;
+  const i = RIVALS.indexOf(r);
+  const k = kitOf(r.id);
+  const seed = seedOf(r);
+  const tv: BroadcastSetup = {
+    teams: [home([t('you')], [t('you')]), { names: [bugName(r)], full: [fullName(r).toUpperCase()], color: k.css, ink: k.ink, badge: seed ? String(seed) : '', info: playerInfo(r) }],
+    names: [t('you'), surname(r)],
+    title: BOARD_FOOTER,
+    round: `${roundName(i, RIVALS.length)} · ${venue(save.surface)}`,
+  };
+  callNames = tv.names;
+  begin([cfgOf(r, 1)], [new AIController(r.skill)], [dress(k)], [t('you'), bugName(r)], [t('you'), r.name], tv);
+}
+
+/** Doubles: the human and Marcel (near side; the human plays the right and serves first) against a pair. */
 function startDoubles(p: Pair) {
   pair = p;
   const i = PAIRS.indexOf(p);
@@ -631,20 +779,23 @@ function startDoubles(p: Pair) {
     ],
     names: [t('you'), surname(PARTNER), surname(p.a), surname(p.b)],
     title: BOARD_FOOTER,
-    round: `${roundName(i, PAIRS.length)} · ${court()}`,
+    round: `${roundName(i, PAIRS.length)} · ${venue(save.surface)}`,
   };
   callNames = tv.names;
   begin(
     [cfgOf(PARTNER, 0), cfgOf(p.a, 1), cfgOf(p.b, 1)],
     [new AIController(PARTNER.skill), new AIController(p.a.skill), new AIController(p.b.skill)],
-    [PARTNER_KIT.kit, RIVAL_KITS[p.a.id].kit, RIVAL_KITS[p.b.id].kit],
+    [dress(PARTNER_KIT), dress(kitOf(p.a.id)), dress(kitOf(p.b.id))],
     [`${t('you')} / ${bugName(PARTNER)}`, `${bugName(p.a)} / ${bugName(p.b)}`],
     [t('you'), PARTNER.name, p.a.name, p.b.name],
     tv,
   );
 }
 
-/** A match: the human (player 0, near side) plus the CPU players given. */
+/**
+ * A match: the human (player 0, near side) plus the CPU players given (one rival: singles; the partner and a pair:
+ * doubles), with the rules and the surface of Settings.
+ */
 function begin(cfgs: PlayerCfg[], ctls: Controller[], kits: Kit[], board: [string, string], who: string[], tv: BroadcastSetup) {
   mode = 'play';
   audio.music('none');
@@ -656,11 +807,12 @@ function begin(cfgs: PlayerCfg[], ctls: Controller[], kits: Kit[], board: [strin
   // the player serves first (control from the first second): a seed whose toss goes to the near team
   let seed = (Math.random() * 1e9) | 0;
   while (new Rng(seed).next() >= 0.5) seed = (seed + 1) | 0;
+  audio.surface = save.surface;
   match = new Match([{ team: 0, human: true, speed: HUMAN_SPEED, reaction: HUMAN_REACTION, look: 0 }, ...cfgs], rules(), seed);
   applyControls();
   match.setControllers([human, ...ctls]);
   match.start();
-  view.setMatch(match, [HERO.kit, ...kits], true);
+  view.setMatch(match, [dress(HERO), ...kits], true);
   view.boardNames = board;
   setFooter(BOARD_FOOTER);
   names = who;
@@ -671,7 +823,7 @@ function begin(cfgs: PlayerCfg[], ctls: Controller[], kits: Kit[], board: [strin
   // the TV intro: a flight over the court with the names (the match waits; a tap skips it)
   bc.begin(match, tv);
   tut.served = tut.hit = tut.attack = tut.block = tut.shownKinds = tut.moveShown = tut.perfect = false;
-  por34[0] = por34[1] = 0;
+  lastOut = null;
   input.clearStick();
   clearHint();
 }
@@ -684,9 +836,9 @@ function renderHud(scored: 0 | 1 | null = null) {
 
 /** a tip in the pause, a different one each time (the timing ring first: with the minimal indicators it only shows
  * while you aim, so a player who never aims may not know it) */
-const TIPS = ['tip.ring', 'tip.attack', 'tip.power', 'tip.walls', 'tip.bajada', 'tip.tap', 'tip.block', 'tip.por3', 'tip.lob'];
+const TIPS = ['tip.ring', 'tip.serve', 'tip.attack', 'tip.power', 'tip.tap', 'tip.block', 'tip.smash', 'tip.lob', 'tip.surface'];
 /** the tips with their own wording for the keyboard (`Keys`) */
-const KEYED = new Set(['tip.ring', 'tip.tap', 'tip.attack', 'tip.block', 'tip.power', 'tip.bajada', 'tip.por3']);
+const KEYED = new Set(['tip.ring', 'tip.tap', 'tip.attack', 'tip.block', 'tip.power', 'tip.smash']);
 let tipNo = 0;
 function pause() {
   if (mode !== 'play' || paused) return;
@@ -694,16 +846,16 @@ function pause() {
   input.clear();
   const k = TIPS[tipNo++ % TIPS.length];
   const tip = t(!isTouch && KEYED.has(k) ? `${k}Keys` : k);
-  // the match as it stands: the games, and the points of the game under them
+  // the match as it stands: the sets played, the games of this set, and the points of the game under them
   const m = match;
   let where = '';
   const tv = bc.teams;
   if (m && tv)
     where = `<div class="pause-score"><span>${tv[0].names.join(' / ')}</span><b>${m.games[0]}</b><i></i><b>${m.games[1]}</b><span>${tv[1].names.join(' / ')}</span></div><div class="pause-pts">${t(m.tiebreak ? 'tv.tiebreak' : 'tv.points')} <b>${m.pointText(0)}-${m.pointText(1)}</b></div>`;
-  // (the best of three: which set it is, the sets so far and the games of the sets played)
+  // (more than one set: which set it is, the sets so far and the games of the sets played)
   if (m && tv && (m.rules.sets ?? 1) > 1) where += `<div class="pause-pts">${t('tv.setN', { n: m.setNo })} <b>${m.sets[0]}-${m.sets[1]}</b>${m.setHist.length ? ` · ${m.setHist.map((g) => g.join('-')).join(' · ')}` : ''}</div>`;
-  // (the legs, FIT: yours and your partner's, as a percentage)
-  if (m && tv) where += `<div class="pause-pts">${t('pause.fit')} <b>${Math.round(m.players[0].fit * 100)}%</b> · ${PARTNER.name} <b>${Math.round(m.players[1].fit * 100)}%</b></div>`;
+  // (the legs, FIT: yours, and your partner's in doubles, as a percentage)
+  if (m && tv) where += `<div class="pause-pts">${t('pause.fit')} <b>${Math.round(m.players[0].fit * 100)}%</b>${m.doubles ? ` · ${PARTNER.name} <b>${Math.round(m.players[1].fit * 100)}%</b>` : ''}</div>`;
   const el = show(
     `<div class="panel pause">
     <div class="eyebrow">${bc.round || EVENT}</div><h2>${t('pause.title')}</h2>${where}
@@ -742,7 +894,7 @@ function showBanner(main: string, cls: string, sub = '', why = '', who = '') {
   const h = who ? `<span class="who">${who}</span>` : '';
   banner.innerHTML = `<div class="b1 ${cls}${w ? ' has-why' : ''}">${h}${main}${w}</div>${sub ? `<div class="b2">${sub}</div>` : ''}`;
   clearTimeout(bannerTimer);
-  bannerTimer = window.setTimeout(() => (banner.innerHTML = ''), why ? 3200 : 1600);
+  bannerTimer = window.setTimeout(() => (banner.innerHTML = ''), why ? 3200 : 1700);
 }
 function clearBanner() {
   clearTimeout(bannerTimer);
@@ -755,8 +907,14 @@ function toast(msg: string, ms = 1100) {
   clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => toastEl.classList.remove('on'), ms);
 }
-/** the shots over the head: the human's always get their name after the hit */
-const OVERHEAD = new Set<ShotKind>(['smash', 'vibora', 'bandeja', 'bajada']);
+/**
+ * A shot's name as the player sees it: a groundstroke or a return by its side (DERECHA, REVÉS: the hand of the
+ * contact), the rest by their kind (CORTADO, DEJADA, GLOBO, VOLEA, REMATE…).
+ */
+function kindLabel(kind: ShotKind, hand: 1 | -1 | undefined): string {
+  if ((kind === 'drive' || kind === 'return') && hand) return t(hand === 1 ? 'kind.fh' : 'kind.bh');
+  return t('kind.' + kind);
+}
 /**
  * A word over the hitter's head (never on the ball), small and quick (`sub`: a smaller word under it; `long`: up a
  * little longer, a shot's name to read).
@@ -785,6 +943,11 @@ function doFlash(a = 0.35) {
   });
 }
 
+/** the last bad bounce: how far out (m), for a serve fault's banner («Fuera del cuadro · por 4 cm») */
+let lastOut: number | null = null;
+/** a close call is said with its distance (m): under this, the banner says «por 4 cm» */
+const CLOSE_CALL = 0.3;
+
 function onEvent(m: Match, e: MatchEvent, live: boolean) {
   if (e.type === 'hit') view.onHit(e.pid, e.x, e.y, e.z, m.t, m.players[e.pid].lastHit?.hand ?? 1);
   // (why the point ended: the explainer follows every event of the live match)
@@ -808,18 +971,19 @@ function onEvent(m: Match, e: MatchEvent, live: boolean) {
     case 'serveSetup': {
       const me = m.players[e.server].human;
       if (me) human.serveSince = m.t;
+      lastOut = null;
       // (the last point's tag, or the fault's, gives way to the umpire's call: it says «second serve» itself)
       clearBanner();
       // the umpire calls the score (and who serves) with a chime; the camera frames the server
       const name = callNames[e.server] ?? names[e.server];
       const who = m.serveNum === 2 ? (me ? t('hud.youServe2') : t('hud.serves2', { name })) : me ? t('hud.youServe') : t('hud.serves', { name });
-      bc.onEvent(m, e, { matchPoint: matchPoint(m), setPoint: setPoint(m), who });
+      bc.onEvent(m, e, { who });
       if (me && !save.tutorial && !tut.served) setHint('tut.serve');
       break;
     }
     case 'serveStart': {
       bc.onEvent(m, e);
-      // the serve's timing is decided on the release: say so then, not 0.9 s later at the contact
+      // the serve's timing is decided on the release: say so then, not a second later at the contact
       const w = m.windup;
       if (m.players[e.pid].human && human.last && w) {
         const sp = view.toScreen(w.x, w.y + 0.6, w.z);
@@ -830,32 +994,29 @@ function onEvent(m: Match, e: MatchEvent, live: boolean) {
     }
     case 'hit': {
       const p = m.players[e.pid];
-      const power = Math.min(1, Math.max(0, (e.speed - 6) / 10));
-      const big = e.kind === 'smash' || e.kind === 'vibora' || e.kind === 'bajada';
-      // the paddle's pock: by the kind of shot, how hard it was meant (the gesture) and how fast it leaves, placed where
-      // it happened; a remate going for «por 3» / «por 4» has its own crack
-      audio.paddle(e.kind, e.speed, panOf(e.x, e.y, e.z), farOf(e.z), e.timing === 'perfect' && p.human, e.power ?? 0.5, e.special ?? null);
+      // (a tennis ball leaves the racket at 15–55 m/s: the effects' strength from 15 to 45)
+      const power = Math.min(1, Math.max(0, (e.speed - 15) / 30));
+      const big = e.kind === 'smash';
+      // the racket: by the kind of shot, how hard it was meant (the gesture) and how fast it leaves, placed where it
+      // happened
+      audio.racket(e.kind, e.speed, panOf(e.x, e.y, e.z), farOf(e.z), e.timing === 'perfect' && p.human, e.power ?? 0.5);
       bc.onEvent(m, e);
       view.hitFx(e.x, e.y, e.z, e.timing === 'perfect' && p.human, big ? 1 : power);
       if (p.human) {
         // over the head, not on the ball: PERFECT (gold), early or late (the manual swing), and in the full
-        // indicators the kind of an aimed shot; the automatic shot is the quiet default, and the serve's label came
-        // with the release
-        // (a remate going for «por 3» / «por 4» always says so, in gold: the gesture was read; any shot over the head
-        // says which one came out, also with the minimal indicators, its timing under it: auditoría 04, M2)
-        const over = OVERHEAD.has(e.kind);
+        // indicators the shot of an aimed ball (DERECHA, REVÉS, CORTADO…); the automatic shot is the quiet default,
+        // and the serve's label came with the release. A smash always says so (also with the minimal indicators),
+        // its timing under it (auditoría 04, M2)
+        const over = e.kind === 'smash';
         const timed = e.timing === 'perfect' || e.timing === 'early' || e.timing === 'late';
-        const lbl = e.special ? t('kind.' + e.special) : over ? t('kind.' + e.kind) : e.timing === 'good' ? (save.hud === 'full' ? t('kind.' + e.kind) : '') : e.timing === 'auto' ? '' : t('timing.' + e.timing);
+        const hand = p.lastHit?.hand;
+        const lbl = over ? t('kind.smash') : e.timing === 'good' ? (save.hud === 'full' ? kindLabel(e.kind, hand) : '') : e.timing === 'auto' ? '' : t('timing.' + e.timing);
         if (lbl && e.kind !== 'serve') {
-          // beside the head, away from the paddle side (where the ball leaves from)
+          // beside the head, away from the racket side (where the ball leaves from)
           const sp = view.toScreen(p.x, 2.1, p.z);
-          const paddle = view.toScreen(e.x, e.y, e.z).x >= sp.x ? 1 : -1;
-          const cls = e.special || (over && e.timing === 'perfect') ? 'perfect' : over ? 'shot' : e.timing;
-          floater(lbl, cls, sp.x - paddle * 30 * ui, sp.y, (e.special || over) && timed ? t('timing.' + e.timing) : '', !!e.special || over);
-        }
-        if (e.special) {
-          view.shake = 0.35;
-          doFlash(0.12);
+          const rk = view.toScreen(e.x, e.y, e.z).x >= sp.x ? 1 : -1;
+          const cls = over && e.timing === 'perfect' ? 'perfect' : over ? 'shot' : e.timing;
+          floater(lbl, cls, sp.x - rk * 30 * ui, sp.y, over && timed ? t('timing.' + e.timing) : '', over);
         }
         buzz(e.timing === 'perfect' ? [16, 34, 26] : e.timing === 'auto' ? 9 : 14);
         if (e.timing === 'perfect') {
@@ -864,7 +1025,6 @@ function onEvent(m: Match, e: MatchEvent, live: boolean) {
         }
         // the contact lands: a perfect swing (a soft one barely), a smash
         if (e.timing === 'perfect' && e.kind !== 'serve') freeze(e.kind === 'dink' || e.kind === 'drop' ? 0.03 : 0.06);
-        else if (e.special) freeze(0.07);
         else if (big) freeze(0.045);
         if (e.kind === 'serve') {
           tut.served = true;
@@ -878,15 +1038,16 @@ function onEvent(m: Match, e: MatchEvent, live: boolean) {
             setHint('tut.kinds', 6);
           } else if (tut.kinds >= 3 && hintKey === '') onceHint('tut.power', 6);
         }
-      } else if (big || e.special) {
-        view.shake = e.special ? 0.35 : 0.3;
-        freeze(e.special ? 0.06 : 0.045);
+      } else if (big) {
+        view.shake = 0.3;
+        freeze(0.045);
       }
       break;
     }
     case 'bounce':
       audio.courtBounce(e.first ? 0.75 : 0.4, panOf(e.x, 0, e.z), farOf(e.z));
       view.bounceFx(e.x, e.z, e.good);
+      if (e.first && !e.good && e.out !== undefined) lastOut = e.out;
       // (a ball just in: the stands' "ooh" says it, no toast)
       bc.onEvent(m, e);
       break;
@@ -900,45 +1061,47 @@ function onEvent(m: Match, e: MatchEvent, live: boolean) {
       }
       bc.onEvent(m, e);
       break;
-    case 'wall':
-      // the glass: a deep thud; the mesh: a metallic rattle (louder the harder it comes)
-      audio.wall(e.surface, Math.min(1, e.speed / 18), panOf(e.x, e.y, e.z), farOf(e.z));
-      bc.onEvent(m, e);
-      break;
     case 'fault': {
-      // a serve fault: «FALTA» and, the first time, the second serve
+      // a serve fault: «FALTA» and, the first time, the second serve (a close one, by how much it was out)
       const me = m.players[e.pid].team === 0;
       audio.play('fault');
-      if (e.second) showBanner(t('fault.title'), 'warn', t('fault.' + e.fault) + ' · ' + t('fault.second'));
+      const by = e.fault === 'serveOut' && lastOut !== null && lastOut < CLOSE_CALL ? ` · ${t('out.by', { d: fmtLen(Math.max(0.01, lastOut)) })}` : '';
+      if (e.second) showBanner(t('fault.title'), 'warn', t('fault.' + e.fault) + by + ' · ' + t('fault.second'));
       buzz(me ? 20 : 8);
       bc.onEvent(m, e);
       break;
     }
     case 'let':
-      showBanner(t('let.title'), 'warn', t('let.sub'));
+      showBanner(t('let.title'), 'warn', t(m.serveNum === 2 ? 'let.sub2' : 'let.sub1'));
       bc.onEvent(m, e);
       break;
     case 'point': {
       const mine = e.winner === 0;
+      const d = m.doubles;
+      const ace = isAce(e);
       let main: string;
-      // from the player's side: our winner, their clean winner, a ball we did not reach or let go
-      if (e.reason === 'winner' || e.reason === 'miss' || e.reason === 'letGo') main = mine ? t('reason.winner') : e.reason === 'winner' ? t('reason.winnerThem') : t('reason.' + e.reason);
+      // from the player's side: our winner (an ace), their clean winner (their ace), a ball we did not reach or let go
+      if (ace) main = t(mine ? 'reason.ace' : 'reason.aceThem');
+      else if (e.reason === 'winner' || e.reason === 'miss' || e.reason === 'letGo') main = mine ? t('reason.winner') : e.reason === 'winner' ? t('reason.winnerThem') : t(`reason.${e.reason}${d ? 'D' : ''}`);
       // (the ball hit a player of the receiving team: you, or someone else)
       else if (e.reason === 'body') main = t(e.touched !== undefined && m.players[e.touched]?.human ? 'reason.bodyMe' : 'reason.body');
       else main = t('reason.' + e.reason);
-      // (0.8 explained every point in a second line and gave tips; Germán, 10 oct: «no tiene mucho sentido». The
-      // explainer still runs: its lines are kept for the captures and the bots, window.__pb.why)
+      // (0.8 of the pickleball explained every point in a second line and gave tips; Germán, 10 oct: «no tiene mucho
+      // sentido». The explainer still runs: its lines are kept for the captures and the bots, window.__pb.why)
       lastWhy = why?.text ?? '';
-      // the shot that decided it, by name (a winning bajada, víbora or remate; «por 3» and «por 4» have their own
-      // reasons), and a remate going for por 3 / por 4 that ended in an error says so under the reason
+      // the shot that decided it, by name (a passing shot, a smash, a lob, a drop shot, a volley), and under an error
+      // whether it was forced or unforced, with the distance of a close call out («por 4 cm»)
       const call = explainer.callout(e);
-      if (call?.shout) main = t(call.shout);
-      const them = bc.teams?.[1]?.names.join(' / ') ?? '';
-      showBanner(main, mine ? 'good' : 'bad', call?.failed ? t(`shout.${call.failed}Miss`) : '', '', mine ? t('point.us') : them ? t('point.them', { name: them }) : t('point.themShort'));
-      if (e.reason === 'exit' || e.reason === 'back') {
-        por34[e.winner]++;
-        if (mine) doFlash(0.22);
+      if (call?.shout && !ace) main = t(call.shout);
+      const subs: string[] = [];
+      if (e.reason === 'out') {
+        const o = call?.out ?? lastOut;
+        if (o !== null && o !== undefined && o < CLOSE_CALL) subs.push(t('out.by', { d: fmtLen(Math.max(0.01, o)) }));
       }
+      if (call?.err) subs.push(t(call.err === 'forced' ? 'err.forced' : 'err.unforced'));
+      const them = bc.teams?.[1]?.names.join(' / ') ?? '';
+      showBanner(main, mine ? 'good' : 'bad', subs.join(' · '), '', mine ? t(d ? 'point.usD' : 'point.us') : them ? t('point.them', { name: them }) : t('point.themShort'));
+      if (ace && mine) doFlash(0.14);
       audio.play(mine ? 'point' : 'lost');
       buzz(mine ? [12, 40, 12] : e.fault === 0 ? 45 : 25);
       // (a double fault's sound came with its fault)
@@ -950,12 +1113,12 @@ function onEvent(m: Match, e: MatchEvent, live: boolean) {
       break;
     }
     case 'game':
-      // the game (or the tie-break) won: the bug shows the games, a strap says it
+      // the game (or the tie-break) won: the bug shows the games, a strap says it (BREAK when the receivers won it)
       renderHud(e.winner);
       bc.onEvent(m, e);
       break;
     case 'set':
-      // a set won with the match still on (the best of three): the bug shows the sets, a strap says it
+      // a set won: the bug shows it in its column, a strap says it
       renderHud(e.winner);
       bc.onEvent(m, e);
       break;
@@ -964,6 +1127,7 @@ function onEvent(m: Match, e: MatchEvent, live: boolean) {
       // (the victory strap has the bottom of the screen)
       clearHint();
       audio.play(won ? 'win' : 'lose');
+      renderHud(e.winner);
       // the end screen comes after the victory shot (bc.onEnd)
       bc.onEvent(m, e);
       break;
@@ -974,29 +1138,11 @@ function onEvent(m: Match, e: MatchEvent, live: boolean) {
 /** the last point's explanation (src/explain.ts), for the captures */
 let lastWhy = '';
 
-/** Would the point about to be played win the match for either team? */
-function matchPoint(m: Match): boolean {
-  return ([0, 1] as const).some((k) => wouldWinGame(m, k) && wouldWinSet(m, k) && m.sets[k] + 1 >= m.setsToWin());
-}
-/** Would the point about to be played win the set, but not yet the match, for either team (the best of three)? */
-function setPoint(m: Match): boolean {
-  return !matchPoint(m) && ([0, 1] as const).some((k) => wouldWinGame(m, k) && wouldWinSet(m, k));
-}
-/** Would team k win the game (or tie-break) by winning the next point? */
-function wouldWinGame(m: Match, k: 0 | 1): boolean {
-  const a = m.points[k] + 1;
-  const b = m.points[k === 0 ? 1 : 0];
-  if (m.tiebreak) return a >= 7 && a - b >= 2;
-  if (m.rules.golden) return a >= 4;
-  return a >= 4 && a - b >= 2;
-}
-/** Would team k win the set (the match) by winning the next game? */
-function wouldWinSet(m: Match, k: 0 | 1): boolean {
-  if (m.tiebreak) return true;
-  const g = m.games[k] + 1;
-  return g >= m.rules.games && g - m.games[k === 0 ? 1 : 0] >= 2;
-}
-
+/**
+ * The end of a match: the result, the final score as the broadcast shows it (every set's games, a tie-break's points
+ * small, the sets), the tennis stats (aces and double faults, first serves in, break points won, winners, errors, the
+ * longest rally, the distance run) and what comes next in the draw.
+ */
 function endScreen(m: Match, won: boolean) {
   if (match !== m || mode !== 'play') return;
   mode = 'end';
@@ -1004,48 +1150,55 @@ function endScreen(m: Match, won: boolean) {
   hud.hidden = true;
   clearHint();
   clearBanner();
-  const n = PAIRS.length;
-  const i = PAIRS.indexOf(pair);
-  if (won && i === save.beatenPairs) save.beatenPairs = Math.min(n, save.beatenPairs + 1);
+  const d = m.doubles;
+  const n = d ? PAIRS.length : RIVALS.length;
+  const i = d ? PAIRS.indexOf(pair) : RIVALS.indexOf(rival);
+  if (d && won && i === save.beatenPairs) save.beatenPairs = Math.min(n, save.beatenPairs + 1);
+  if (!d && won && i === save.beaten) save.beaten = Math.min(n, save.beaten + 1);
   save.tutorial = true;
   save.played = Math.min(99, save.played + 1);
   persist();
   const hasNext = won && i + 1 < n;
   const s = m.stats;
+  const sv = bc.serve;
   const allDone = won && i === n - 1;
-  // your own perfect shots and errors, the team's winners, and your partner's errors
-  // the final score as the broadcast shows it: both teams, the winner's row lit, the games of the set
   const tv = bc.teams;
-  // (the best of three: the games of each set in small, then the sets; one set: its games)
-  const multi = (m.rules.sets ?? 1) > 1;
+  const multi = m.setHist.length > 1 || (m.rules.sets ?? 1) > 1;
+  const oppCss = d ? kitOf(pair.a.id).css : kitOf(rival.id).css;
   const team = (k: 0 | 1) => {
-    const c = k === 0 ? HERO.css : kitOf(pair.a.id).css;
+    const c = k === 0 ? HERO.css : oppCss;
     const nm = tv ? tv[k].names.join(' / ') : k === 0 ? t('you') : '';
     const w = m.winner === k;
-    const sets = multi ? m.setHist.map((g) => `<span class="st${g[k] > g[k === 0 ? 1 : 0] ? ' w' : ''}">${g[k]}</span>`).join('') : '';
-    return `<div class="fr${w ? ' w' : ''}"><i style="background:${c}"></i><span class="nm">${nm}</span>${w ? `<span class="wk">${ICON.check}</span>` : ''}${sets}<span class="sc">${multi ? m.sets[k] : m.games[k]}</span></div>`;
+    const o = k === 0 ? 1 : 0;
+    // every set's games (the winner's bright), the tie-break's loser points small beside the loser's 6
+    const sets = m.setHist.map((g, j) => `<span class="st${g[k] > g[o] ? ' w' : ''}">${g[k]}${bc.tbLost[j] != null && g[k] < g[o] ? `<sup>${bc.tbLost[j]}</sup>` : ''}</span>`).join('');
+    return `<div class="fr${w ? ' w' : ''}"><i style="background:${c}"></i><span class="nm">${nm}</span>${w ? `<span class="wk">${ICON.check}</span>` : ''}${sets}${multi ? `<span class="sc">${m.sets[k]}</span>` : ''}</div>`;
   };
   const stat = (label: string, v: number | string) => `<div class="sr"><span>${label}</span><b>${v}</b></div>`;
   // the broadcast's «distance covered» (the metres run, Player.dist), in km with one decimal
-  const km = (d: number) => `${(d / 1000).toLocaleString(lang === 'es' ? 'es-ES' : 'en-GB', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} km`;
+  const km = (x: number) => `${(x / 1000).toLocaleString(lang === 'es' ? 'es-ES' : 'en-GB', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} km`;
+  const pct = (a: number, b: number) => (b ? `${Math.round((100 * a) / b)} %` : '–');
+  const mate = d ? PARTNER.name : '';
   const el = show(
     `<div class="end"><div class="end-a">
     <div class="eyebrow">${roundName(i, n)} · ${EVENT}</div>
     <div class="result ${won ? 'win' : 'lose'}">${won ? t('end.win') : t('end.lose')}</div>
-    <div class="final-board">${team(0)}${team(1)}</div>
-    ${allDone ? `<div class="champ">${ICON.trophy}<span>${t('end.ladderDoubles', { name: PARTNER.name })}</span></div>` : ''}
+    <div class="final-board${multi ? '' : ' one'}">${team(0)}${team(1)}</div>
+    <div class="end-surf">${surfChip()}<span>${formatLine()}</span></div>
+    ${allDone ? `<div class="champ">${ICON.trophy}<span>${d ? t('end.ladderDoubles', { name: PARTNER.name }) : t('end.ladder')}</span></div>` : ''}
     </div><div class="end-b">
     <div class="stats"><h3>${t('end.stats')}</h3>
-      ${stat(t('end.perfect'), s.perfectBy[0])}
+      ${stat(t('end.aces'), `${sv.aces[0]} · ${sv.dfs[0]}`)}
+      ${stat(t('end.first'), pct(sv.firstIn[0], sv.first[0]))}
+      ${stat(t('end.bp'), `${sv.bpWon[0]}/${sv.bp[0]}`)}
       ${stat(t('end.winners'), s.winners[0])}
-      ${stat(t('end.errors'), s.errorsBy[0])}
-      ${stat(t('end.errorsPartner', { name: PARTNER.name }), s.errorsBy[1])}
-      ${stat(t('end.por34'), por34[0])}
+      ${stat(d ? t('end.errorsBoth', { name: mate }) : t('end.errors'), d ? `${s.errorsBy[0]} / ${s.errorsBy[1]}` : s.errorsBy[0])}
+      ${stat(t('end.perfect'), s.perfectBy[0])}
       ${stat(t('end.longest'), s.longest)}
-      ${stat(t('end.distance', { name: PARTNER.name }), `${km(m.players[0].dist)} / ${km(m.players[1].dist)}`)}
+      ${stat(d ? t('end.distanceD', { name: mate }) : t('end.distance'), d ? `${km(m.players[0].dist)} / ${km(m.players[1].dist)}` : km(m.players[0].dist))}
     </div>
     <div class="btn-col">
-      ${hasNext ? `<button class="btn primary" data-a="next">${t('end.nextPair')}<small>${roundName(i + 1, n)}</small></button>` : ''}
+      ${hasNext ? `<button class="btn primary" data-a="next">${t('end.next')}<small>${roundName(i + 1, n)}</small></button>` : ''}
       <button class="btn ${hasNext ? 'ghost' : 'primary'}" data-a="again">${t('end.rematch')}</button>
       <button class="btn ghost" data-a="menu">${t('end.menu')}</button>
     </div></div></div>`,
@@ -1055,9 +1208,13 @@ function endScreen(m: Match, won: boolean) {
     if (!a) return;
     audio.play('click');
     bc.reset();
-    if (a === 'next') versusPair(PAIRS[i + 1]);
-    else if (a === 'again') versusPair(pair);
-    else {
+    if (a === 'next') {
+      if (d) versusPair(PAIRS[i + 1]);
+      else versus(RIVALS[i + 1]);
+    } else if (a === 'again') {
+      if (d) versusPair(pair);
+      else versus(rival);
+    } else {
       match = null;
       menu();
     }
@@ -1080,11 +1237,11 @@ chip.className = 'chip';
 chip.innerHTML = '<span class="mr"><i></i></span><span class="cl"></span>';
 const chipRing = chip.firstElementChild as HTMLElement;
 const chipText = chip.lastElementChild as HTMLElement;
-/** over the head, while you aim: what each flick would play (auditoría 04, M2), under the shot's name */
+/** over the head, while you aim: what a flick would play (auditoría 04, M2: a hard smash), under the shot's name */
 const fan = document.createElement('div');
 fan.className = 'fan';
 fan.setAttribute('aria-hidden', 'true');
-/** «¡Atácala!»: beside the player when the coming ball sits up (never on the ball) */
+/** «¡ATACA!»: beside the player when the coming ball sits up (never on the ball) */
 const cueChip = document.createElement('div');
 cueChip.className = 'chip';
 cueChip.setAttribute('aria-hidden', 'true');
@@ -1180,22 +1337,16 @@ function drawChipRing(k: number, cls: string) {
 }
 
 /**
- * Over the head (auditoría 04, M2): what each gesture plays on this ball, as the swing will read it (brain.ts,
- * kindForAim, the same rules): a flick straight up, at full power, bent to a side, down towards you. Only the ones that
- * differ from the plain release (the shot's name already says that one), each once.
+ * Over the head (auditoría 04, M2): what the flick plays on this ball, as the swing will read it (brain.ts,
+ * kindForAim, the same rules): a plain release is a placed smash (the shot's name says it), a flick a hard one. Only
+ * when the flick plays something (a hard smash, or another shot than the release's).
  */
 function overheadOptions(m: Match, me: Player, plan: Plan): [string, string][] {
-  const name = (k: { kind: ShotKind; special?: Special }) => t('kind.' + (k.special ?? k.kind));
-  const base = name(kindForAim(m, me, plan, AIM_D0, false, false, 0, { power: 0.5 }));
-  const touch = isTouch;
-  const opts: [string, string][] = [
-    [touch ? '↑' : 'F', name(kindForAim(m, me, plan, AIM_D0, false, true, 0, { power: 0.75 }))],
-    [touch ? '⇈' : t('fan.hold'), name(kindForAim(m, me, plan, AIM_D0, false, true, 0, { power: 1 }))],
-    ...(touch ? [['↖↗', name(kindForAim(m, me, plan, AIM_D0, false, true, ATTACK.bend, { power: 0.75 }))] as [string, string]] : []),
-    [touch ? '↓' : '⇧F', name(kindForAim(m, me, plan, AIM_D0, false, false, 0, { down: true, power: 0.75 }))],
-  ];
-  const seen = new Set([base]);
-  return opts.filter(([, n]) => !seen.has(n) && !!seen.add(n));
+  const base = kindForAim(m, me, plan, AIM_D0, false, false, 0, { power: 0.5 }).kind;
+  const hard = kindForAim(m, me, plan, AIM_D0, false, true, 0, { power: 0.85 }).kind;
+  const g = isTouch ? '↑' : t('fan.hold');
+  if (hard === 'smash') return [[g, `${t('kind.smash')} ${t('fan.hard')}`]];
+  return hard !== base ? [[g, t('kind.' + hard)]] : [];
 }
 let fanKey = '';
 /**
@@ -1298,16 +1449,16 @@ function overlays(m: Match, dt = 1 / 60) {
   let fanOn = false;
   if (input.active && (m.phase === 'serve' ? m.server() === me : m.phase === 'rally')) {
     const plan = hp?.plan ?? null;
-    // (an attack key held, F or the right button: its power grows with the hold, and over a high ball near the net
-    // the preview is the remate por 3, or with Shift the por 4)
+    // (an attack key held, F or the right button: its power grows with the hold; over the head, a hard smash)
     const rally = m.phase === 'rally';
-    const keyed = rally && (input.attackHeld || input.downHeld);
+    const keyed = rally && input.attackHeld;
     const pw = keyed ? input.powerNow() : 0.5;
-    const a = human.aim(m, me, plan, input.dx, input.dy, input.attackHeld && rally, 0, { power: pw, down: rally && input.downHeld });
+    const a = human.aim(m, me, plan, input.dx, input.dy, input.attackHeld && rally, 0, { power: pw });
     view.aim = { x: a.x, z: a.z, kind: a.kind, ok: a.ok, from: human.contactPoint(m, me, plan), clear: a.clear, pace: a.pace };
     const sp = view.toScreen(a.x, 0, a.z);
     chip.hidden = false;
-    const [cx, cy, cw] = placeChip(m, me.team, sp.x, sp.y, !a.ok ? t('aim.out') : a.special ? t('kind.' + a.special) : t('kind.' + a.kind), cssHue(aimHue(a.kind, a.ok)), !!timing, avoid);
+    // (a groundstroke by its side: DERECHA or REVÉS, the hand of the contact)
+    const [cx, cy, cw] = placeChip(m, me.team, sp.x, sp.y, !a.ok ? t('aim.out') : kindLabel(a.kind, plan?.hand), cssHue(aimHue(a.kind, a.ok)), !!timing, avoid);
     if (timing) drawChipRing(timing.k, timing.cls);
     // the power of the held key, a bar under the shot's name (a finger's is the speed of its flick: known at the lift)
     chip.classList.toggle('pw', keyed);
@@ -1349,24 +1500,15 @@ function overlays(m: Match, dt = 1 / 60) {
   if (hintKey.startsWith('tut.move') && input.moved && !hintOn.until) hintOn.until = performance.now() + 1500;
 }
 
-/** what the coming ball asks for (brain.ts, ballCue): attack it, block it, a bajada off the back glass, or nothing */
-type Cue = 'attack' | 'block' | 'bajada' | null;
+/** what the coming ball asks for (brain.ts, ballCue): attack it, block it, or nothing */
+type Cue = 'attack' | 'block' | null;
 /** debug (captures): the cue shown whatever the ball (window.__pb.forceCue) */
 let forceCue: Cue = null;
 /**
- * A ball over the head, high and near the net, that can go «por 3» (brain.ts, specialOk: the same test the swing
- * uses): the first one gets its hint. Read from the circle, or from the contact in reach.
- */
-function por3Chance(m: Match, me: Player): boolean {
-  const plan = m.targetFor(me.id) ?? me.plan;
-  return !!plan && plan.overhead && specialOk('por3', plan);
-}
-/**
  * What the coming ball asks for (brain.ts, ballCue): an attack (it sits up: the circle and the ring at the feet go
- * orange, «¡Atácala!» beside the player for a moment and a light double tick), a bajada (it comes back high off the
- * back glass: the circle and the ring go pink, «BAJADA» beside the player, the same tick) or a block (an attack at
- * you: the timing ring shows, tap on its gold). Once shown it stays for the ball, unless it is gone for a moment (the
- * contact was refined away from it); it goes as soon as the ball is played.
+ * orange, «¡ATACA!» beside the player for a moment and a light double tick) or a block (an attack at you: the timing
+ * ring shows, tap on its gold). Once shown it stays for the ball, unless it is gone for a moment (the contact was
+ * refined away from it); it goes as soon as the ball is played.
  */
 const cueNow = { key: '', kind: null as Cue, at: 0, lost: 0, buzzed: false };
 function ballCue(m: Match, me: Player, dt: number) {
@@ -1378,7 +1520,8 @@ function ballCue(m: Match, me: Player, dt: number) {
     cueNow.kind = null;
     cueNow.buzzed = false;
   }
-  const raw = forceCue ?? (incoming ? human.cue(m, me) : null);
+  const c = incoming ? human.cue(m, me) : null;
+  const raw: Cue = forceCue ?? (c === 'attack' || c === 'block' ? c : null);
   if (raw) {
     if (cueNow.kind !== raw) {
       cueNow.kind = raw;
@@ -1387,20 +1530,19 @@ function ballCue(m: Match, me: Player, dt: number) {
     cueNow.lost = 0;
   } else if (cueNow.kind && (cueNow.lost += dt) > 0.15) cueNow.kind = null;
   const attack = cueNow.kind === 'attack';
-  const bajada = cueNow.kind === 'bajada';
-  // (the circle and the ring at the feet: orange to attack, pink for a bajada)
+  // (the circle and the ring at the feet: orange to attack)
   view.cue = cueNow.kind;
-  if ((attack || bajada) && !cueNow.buzzed) {
+  if (attack && !cueNow.buzzed) {
     cueNow.buzzed = true;
     buzz([6, 28, 6]);
   }
   // the word: beside the player (the side away from the ball), small, for a moment, gone once he aims
-  const show = (attack || bajada) && !input.active && m.t - cueNow.at < 1.1;
+  const show = attack && !input.active && m.t - cueNow.at < 1.1;
   cueChip.hidden = !show;
   if (show) {
-    const txt = t(bajada ? 'cue.bajada' : 'cue.attack');
+    const txt = t('cue.attack');
     if (cueChip.textContent !== txt) cueChip.textContent = txt;
-    cueChip.style.color = cssHue(aimHue(bajada ? 'bajada' : 'speedup', true));
+    cueChip.style.color = cssHue(aimHue('speedup', true));
     const head = view.toScreen(me.x, 1.7, me.z);
     const b = m.ballPos();
     const away = b && view.toScreen(b.x, b.y, b.z).x > head.x ? -1 : 1;
@@ -1421,11 +1563,11 @@ function ballCue(m: Match, me: Player, dt: number) {
     tut.block = true;
     setHint(isTouch ? 'tut.block' : 'tut.blockKeys', 5, false, PRIO.ball);
   }
-  // 0.3, once ever (any match): the first bajada, and the first high ball at the net that can go «por 3» (after the
-  // attack's own hint, which comes first in a first match)
-  if (general && !hintKey.startsWith('tut.attack')) {
-    if (bajada) onceHint('tut.bajada', 5, PRIO.ball);
-    else if (attack && (save.tutorial || tut.attack) && por3Chance(m, me)) onceHint('tut.por3', 6, PRIO.ball);
+  // once ever (any match): the first ball over the head to smash (after the attack's own hint, which comes first in a
+  // first match)
+  if (general && !hintKey.startsWith('tut.attack') && attack && (save.tutorial || tut.attack)) {
+    const plan = m.targetFor(me.id) ?? me.plan;
+    if (plan?.overhead) onceHint('tut.smash', 6, PRIO.ball);
   }
 }
 
@@ -1564,45 +1706,93 @@ view
   /** the TV presentation (skip the intro, force replays, read where the camera is) */
   bc,
   audio,
-  /** debug: the human's player plays by itself like a club player (captures of long rallies) */
+  /** debug: the human's player plays by himself like a tour player (captures of long rallies) */
   autopilot() {
-    if (match) match.controllers[0] = new AIController(PARTNER.skill);
+    if (match) match.controllers[0] = new AIController(match.doubles ? PARTNER.skill : RIVALS[2].skill);
   },
   view,
   input,
-  /** a match against pair i (tv: with the TV moments; off by default, so captures get the gameplay camera) */
-  start: (i = 0, tv = false) => {
+  /**
+   * A match without the TV moments by default (captures get the gameplay camera; tv: with them): `start(i)` singles
+   * against rival i of the ladder (0 … 4), `startSingles(i)` the same, `startDoubles(i)` doubles against pair i
+   * (0 … 3). `start(i, tv, 'doubles')` picks the mode too.
+   */
+  start: (i = 0, tv = false, m: Mode = 'singles') => {
     bc.cinema = tv;
-    startDoubles(PAIRS[Math.min(i, PAIRS.length - 1)]);
+    if (m === 'doubles') startDoubles(PAIRS[Math.max(0, Math.min(i, PAIRS.length - 1))]);
+    else startSingles(RIVALS[Math.max(0, Math.min(i, RIVALS.length - 1))]);
+  },
+  startSingles: (i = 0, tv = false) => {
+    bc.cinema = tv;
+    startSingles(RIVALS[Math.max(0, Math.min(i, RIVALS.length - 1))]);
   },
   startDoubles: (i = 0, tv = false) => {
     bc.cinema = tv;
-    startDoubles(PAIRS[i]);
+    startDoubles(PAIRS[Math.max(0, Math.min(i, PAIRS.length - 1))]);
+  },
+  /** the menu's mode (singles or doubles) and the tournament's surface, as Settings sets them (redraws the menu) */
+  setMode(m: Mode) {
+    save.mode = m === 'doubles' ? 'doubles' : 'singles';
+    persist();
+    demo = null;
+    if (mode === 'menu') menu();
+  },
+  setSurface(s: CourtSurface) {
+    if (!SURFACES.includes(s)) return;
+    save.surface = s;
+    audio.surface = s;
+    persist();
+    demo = null;
+    if (mode === 'menu') menu();
+  },
+  /** the screens by name (captures): 'menu', 'draw', 'team', 'how', 'settings', 'vs' (the next match's card) */
+  screen(name: string) {
+    if (name === 'menu') menu();
+    else if (name === 'draw') ladder();
+    else if (name === 'team') teamCards();
+    else if (name === 'how') howTo();
+    else if (name === 'settings') settings();
+    else if (name === 'vs') {
+      const nx = nextUp();
+      if (dbl()) versusPair(PAIRS[nx.i]);
+      else versus(RIVALS[nx.i]);
+    }
   },
   save,
   /** why the last point was won or lost, in a line (src/explain.ts; not on screen) */
   get why() {
     return lastWhy;
   },
-  /** what the coming ball asks for right now, as the HUD shows it: 'attack', 'block', 'bajada' or null (captures) */
+  /** what the coming ball asks for right now, as the HUD shows it: 'attack', 'block' or null (captures) */
   get cue() {
     return cueNow.kind;
   },
-  /** debug (captures): show this cue whatever the ball ('attack', 'bajada', 'block'; null: the game's own) */
+  /** debug (captures): show this cue whatever the ball ('attack', 'block'; null: the game's own) */
   set forceCue(c: Cue) {
     forceCue = c;
   },
   /**
-   * debug (captures): a point as the match would send it, with the shot that decided it (the banner, the stands, the
-   * sounds), handled at once (the match's own score does not change)
+   * debug (captures): a point as the match would send it (the banner, the stands, the sounds), handled at once (the
+   * match's own score does not change). `kind`: the deciding shot; `rally`: the shots of the point (an ace: 'winner',
+   * 'serve', 1); `out`: for an 'out', how far out the ball bounced (m: «por 4 cm» under a close call); `hand`: +1
+   * forehand, −1 backhand. Examples: fakePoint(0, 'winner', 'serve', 1) an ace; fakePoint(1, 'out', 'drive', 7, 0.04)
+   * their groundstroke out by 4 cm; fakePoint(0, 'doubleFault', 'serve', 1) their double fault.
    */
-  fakePoint(winner: 0 | 1, reason: PointReason, kind: ShotKind = 'smash', special: Special | null = null) {
+  fakePoint(winner: 0 | 1, reason: PointReason, kind: ShotKind = 'drive', rally = 9, out?: number, hand: 1 | -1 = 1) {
     const m = match;
     if (!m) return;
-    const error = reason === 'net' || reason === 'out' || reason === 'wall';
-    const hitter = m.players.find((p) => p.team === (error ? 1 - winner : winner))!;
-    onEvent(m, { type: 'hit', pid: hitter.id, kind, timing: 'good', q: 0.9, x: hitter.x, y: 2.6, z: hitter.z, speed: 22, shot: 9, volley: true, power: 1, ...(special ? { special } : {}) }, true);
-    onEvent(m, { type: 'point', winner, reason, fault: error ? hitter.id : null, rally: 9 }, true);
+    const error = reason === 'net' || reason === 'out' || reason === 'doubleFault' || reason === 'twoBounce';
+    const team = error ? 1 - winner : winner;
+    const hitter = (kind === 'serve' ? m.players.find((p) => p.team === team && p.id === m.serverId) : null) ?? m.players.find((p) => p.team === team)!;
+    hitter.lastHit = { t: m.t, kind, hand, overhead: kind === 'smash', timing: 'good' };
+    const y = kind === 'smash' ? 2.6 : kind === 'serve' ? 2.75 : 0.9;
+    onEvent(m, { type: 'hit', pid: hitter.id, kind, timing: 'good', q: 0.9, x: hitter.x, y, z: hitter.z, speed: kind === 'serve' ? 52 : kind === 'smash' ? 40 : 30, shot: rally, volley: kind === 'smash' || kind === 'speedup', power: 0.8, tx: 0, tz: -hitter.side * 10 }, true);
+    if (reason === 'out' && out !== undefined) onEvent(m, { type: 'bounce', x: 0, z: -hitter.side * (11.885 + out), good: false, first: true, close: out < 0.3, out }, true);
+    onEvent(m, { type: 'point', winner, reason, fault: error ? hitter.id : null, rally }, true);
+  },
+  /** debug (captures): any match event, handled at once as the live match's (a strap: { type: 'game', … }) */
+  fakeEvent(e: MatchEvent) {
+    if (match) onEvent(match, e, true);
   },
   set timeScale(v: number) {
     timeScale = v;

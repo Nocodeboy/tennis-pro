@@ -5,7 +5,10 @@
 // prefers-reduced-motion the shots hold still (no flights, orbits or zooms).
 
 import * as THREE from 'three';
-import { HL, W, WALL, sideTop } from '../sim/court';
+import { BOARDS, HL, W_D } from '../sim/court';
+
+/** the court as drawn: the doubles court's half width */
+const W = W_D;
 
 export interface CamPose {
   pos: THREE.Vector3;
@@ -64,14 +67,17 @@ export const INTRO_KEYS = [0, 1.7, 3.2, 5.2];
 const fovFor = (h: number, d: number) => THREE.MathUtils.radToDeg(2 * Math.atan(h / 2 / Math.max(0.5, d)));
 
 /**
- * A camera within `band` m of a wall of the cage (either side of it) and below its top is moved in off it, onto the
- * court: the frame and the glass a few centimetres from the lens fill the screen. (The stands' cameras are further out,
- * the gameplay camera is high over the near wall.)
+ * A camera low behind the boards (the stands' front wall: court.ts BOARDS) is lifted over them or moved in off them:
+ * the wall a few centimetres from the lens would fill the screen. (The stands' cameras are higher up, the gameplay
+ * camera is high over the near end's stands.)
  */
-function clearOfCage(p: THREE.Vector3, band = 0.6) {
-  const hw = W / 2;
-  if (Math.abs(p.z) < HL + band && Math.abs(Math.abs(p.x) - hw) < band && p.y < sideTop(Math.min(HL, Math.abs(p.z))) + 0.3) p.x = Math.sign(p.x) * (hw - band);
-  if (Math.abs(p.x) < hw + band && Math.abs(Math.abs(p.z) - HL) < band && p.y < WALL.topH + 0.3) p.z = Math.sign(p.z) * (HL - band);
+function clearOfBoards(p: THREE.Vector3, band = 0.5) {
+  const x = Math.abs(p.x);
+  const z = Math.abs(p.z);
+  if ((x > BOARDS.x - band || z > BOARDS.z - band) && p.y < 1.6) {
+    if (x > BOARDS.x - band) p.x = Math.sign(p.x) * Math.min(x, BOARDS.x - band);
+    if (z > BOARDS.z - band) p.z = Math.sign(p.z) * Math.min(z, BOARDS.z - band);
+  }
 }
 
 export class Director {
@@ -137,17 +143,16 @@ export class Director {
     const portrait = ctx.aspect < 0.8;
     const g = ctx.game;
     // (it opens on the stadium: from high over the near corner's stands, across the court to the far stands, the
-    // boxes and the ring of floodlights under the roof, and cranes down over the side wall into the cage, onto the far
-    // team; across the net inside the cage to the near team, and up and back over the near wall to the gameplay
-    // camera)
-    const inX = (x: number) => Math.max(-W / 2 + 1.2, Math.min(W / 2 - 1.2, x));
+    // boxes and the ring of floodlights under the roof, and cranes down over the side of the court onto the far
+    // team; across the net to the near team, and up and back over the near stands to the gameplay camera)
+    const inX = (x: number) => Math.max(-W / 2 - 1.5, Math.min(W / 2 + 1.5, x));
     this.path = new THREE.CatmullRomCurve3(
-      [new THREE.Vector3(-7.5, 10.5, 15.5 * sd), new THREE.Vector3(inX(far.x + 3.6), 2.7, far.z + sd * 4.8), new THREE.Vector3(inX(near.x - 3.4), 2.0, near.z - sd * 4.4), g.pos.clone()],
+      [new THREE.Vector3(-9.5, 12.5, 19 * sd), new THREE.Vector3(inX(far.x + 4.2), 2.9, far.z + sd * 5.6), new THREE.Vector3(inX(near.x - 4.0), 2.2, near.z - sd * 5.2), g.pos.clone()],
       false,
       'centripetal',
     );
     this.lookPath = new THREE.CatmullRomCurve3(
-      [new THREE.Vector3(0, portrait ? 4.5 : 6.0, -13 * sd), new THREE.Vector3(far.x, 1.1, far.z), new THREE.Vector3(near.x, 1.1, near.z), g.look.clone()],
+      [new THREE.Vector3(0, portrait ? 4.5 : 6.0, -16 * sd), new THREE.Vector3(far.x, 1.1, far.z), new THREE.Vector3(near.x, 1.1, near.z), g.look.clone()],
       false,
       'centripetal',
     );
@@ -343,7 +348,7 @@ export class Director {
         }
         if (R) {
           // reduced motion: one wide, still angle high behind the far end (the whole court in the frame)
-          pos.set(0, 9, -ctx.side * (HL + 6));
+          pos.set(0, 11, -ctx.side * (HL + 8));
           look.set(0, 0, 0.5 * ctx.side);
           fov = portrait ? 64 : 42;
           break;
@@ -367,15 +372,15 @@ export class Director {
         if (s.angle === 'side') {
           // up in the stands on the side, dollying along with the ball
           this.trackZ += (lz * 0.55 - this.trackZ) * (1 - Math.exp(-2.5 * dt));
-          pos.set(s.camSide * (W / 2 + 6.6), portrait ? 5.6 : 4.3, this.trackZ);
-          fov = portrait ? 50 : 30;
+          pos.set(s.camSide * (BOARDS.x + 3.2), portrait ? 6.4 : 4.9, this.trackZ);
+          fov = portrait ? 52 : 32;
         } else if (s.angle === 'end') {
-          // the reverse angle: high behind the far end, looking back up the court
-          pos.set(look.x * 0.4 + s.camSide * 1.4, portrait ? 7.2 : 5.0, -ctx.side * (HL + 6.2));
-          fov = portrait ? 50 : 34;
+          // the reverse angle: high behind the far end, over the boards, looking back up the court
+          pos.set(look.x * 0.4 + s.camSide * 1.4, portrait ? 7.6 : 5.6, -ctx.side * (BOARDS.z + 1.2));
+          fov = portrait ? 48 : 32;
         } else {
-          // low by the net post on the receiving side, inside the cage against the side mesh, looking along the tape
-          pos.set(s.camSide * (W / 2 - 0.35), portrait ? 1.6 : 1.15, -hs * (portrait ? 2.6 : 1.5));
+          // low by the net post on the receiving side, just outside the doubles sideline, looking along the tape
+          pos.set(s.camSide * (W / 2 + 0.6), portrait ? 1.6 : 1.15, -hs * (portrait ? 2.8 : 1.7));
           fov = portrait ? 62 : 46;
         }
         break;
@@ -400,8 +405,8 @@ export class Director {
       look = look.lerpVectors(this.from.look, look, k);
       fov = lerp(this.from.fov, fov, k);
     }
-    // never in the cage's walls: a TV camera right by the glass or the mesh steps in off it
-    if (s.kind !== 'play') clearOfCage(pos);
+    // never in the boards: a TV camera low against the stands' front wall steps in off it
+    if (s.kind !== 'play') clearOfBoards(pos);
     out.fov = fov;
     this.cur.pos.copy(pos);
     this.cur.look.copy(look);

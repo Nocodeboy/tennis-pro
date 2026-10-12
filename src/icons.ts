@@ -26,7 +26,10 @@ export const ICON = {
   card: svg('<rect x="5" y="2.8" width="14" height="18.4" rx="2"/><circle cx="12" cy="8.6" r="2.6"/><path d="M8.6 14.4h6.8M8.6 17.6h4.4"/>'),
   person: svg('<circle cx="12" cy="8" r="4"/><path d="M4 21c1.4-4.2 4.4-6.2 8-6.2s6.6 2 8 6.2z"/>', true),
   star: svg('<path d="M12 3.2l2.7 5.5 6 .9-4.35 4.25 1.03 6L12 17l-5.38 2.85 1.03-6L3.3 9.6l6-.9z"/>', true),
+  /** a tennis ball: its two seams */
   ball: svg('<circle cx="12" cy="12" r="8.5"/><path d="M4.6 7.6c3.2 1.4 4.6 4 4.6 4.4s-1.4 3-4.6 4.4M19.4 7.6c-3.2 1.4-4.6 4-4.6 4.4s1.4 3 4.6 4.4"/>'),
+  /** a racket: the head, the strings across, the throat and the handle */
+  racket: svg('<ellipse cx="13.5" cy="9" rx="6" ry="6.5" transform="rotate(35 13.5 9)"/><path d="M10.6 6.2l5.8 5.6M12.4 4.6l5.4 5.2M9.8 8.6l4.6 4.4M9.4 14.2L4 19.6"/>'),
 } as const;
 
 /** a difficulty meter: five bars, the first `n` lit */

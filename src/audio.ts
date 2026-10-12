@@ -1,16 +1,19 @@
-// The sound of the match (0.5). The ball's contacts are recorded sounds (AI-made, assets/sfx: the paddle hard and soft,
-// the glass, the turf; see FAMILIES), placed where they happen (pan by x, the far end quieter and duller) in a light
-// indoor arena (a generated impulse response). The rest is synthesised live with WebAudio: the mesh's rattle, the
-// sneakers, the net, the remate por 3 / por 4's crack on top of the paddle, and the crowd, whose murmur, «uy», roar and
-// applause are rendered once into buffers from many voices and hands (no recording of a crowd: no licences). Without
-// the files (a failed fetch, an old browser) every contact falls back to its synthesised version.
+// The sound of the match. The ball's contacts are recorded sounds (AI-made, assets/sfx: the racket hard and soft and
+// the bounce; recorded for the padel game, they do for tennis until there are tennis takes; see FAMILIES), placed
+// where they happen (pan by x, the far end quieter and duller) in an open stadium (a generated impulse response). The
+// bounce and the shoes depend on the court's surface (`surface`): a hard court rings and squeaks, clay is duller and
+// the shoes slide on it, grass is soft and nearly silent underfoot. The rest is synthesised live with WebAudio: the
+// net, the shoes, and the crowd, whose murmur, «uy», roar and applause are rendered once into buffers from many voices
+// and hands (no recording of a crowd: no licences). Tennis manners: the stands go quiet while the ball is in play
+// (`inPlay`) and applaud after the point. Without the files (a failed fetch, an old browser) every contact falls back
+// to its synthesised version.
 // Music is made with AI (Magnific, Google Lyria 3 Pro) and played from files next to the page (assets/music, see
 // setMusicTracks): decoded into WebAudio buffers and looped between two points without a gap. Menus only: in a match
 // the crowd is the sound, as on TV.
 //
-// The mix (tools/audio measures it): everything in the arena (contacts, crowd, the umpire's chime) goes dry to the
+// The mix (tools/audio measures it): everything in the stadium (contacts, crowd, the umpire's chime) goes dry to the
 // master and through a send to the reverb; the menus' clicks and jingles stay dry; a limiter at the end. The levels
-// are set so a drive and a glass sit together, the soft touches 6–8 dB under them, the murmur 15 dB under.
+// are set so a drive and the crowd's applause sit together, the soft touches 6–8 dB under them, the murmur 15 dB under.
 
 type Mode = 'menu' | 'game' | 'none';
 /** a piece of music: its file and where its loop starts and ends (s; without them the whole file loops) */
@@ -22,13 +25,28 @@ export interface Track {
   vol?: number;
 }
 
-/** the recorded takes, by family (assets/sfx; tools/audio/prep-sfx.py trims them to the onset and evens them out) */
+/**
+ * The recorded takes, by family (assets/sfx; tools/audio/prep-sfx.py trims them to the onset and evens them out). The
+ * files keep their padel names (pala = paddle, bote = bounce): the racket uses the paddle's takes for now.
+ */
 const FAMILIES = {
   hard: ['pala-fuerte-1', 'pala-fuerte-2'],
   soft: ['pala-suave-1', 'pala-suave-2'],
-  glass: ['cristal-1', 'cristal-2', 'cristal-3'],
   bounce: ['bote-1', 'bote-2'],
 } as const;
+/** the court's surface (sim/court.ts CourtSurface) */
+export type Surface = 'hard' | 'clay' | 'grass';
+/**
+ * How a bounce sounds on each surface, over the recorded take: its level, pitch and the low-pass on it (a hard court
+ * as recorded, bright; clay duller and a little lower, with the grit of the clay; grass soft, low and short), and the
+ * shoes: a squeak on a hard court, a slide on clay, almost nothing on grass (`shoes`: how loud; `slide`: the scrape's
+ * length).
+ */
+const SURF: Record<Surface, { v: number; rate: number; lp: number; grit: number; shoes: number; squeak: boolean; slide: number }> = {
+  hard: { v: 1, rate: 1.04, lp: 16000, grit: 0, shoes: 1, squeak: true, slide: 0 },
+  clay: { v: 0.85, rate: 0.92, lp: 3600, grit: 0.035, shoes: 1.1, squeak: false, slide: 0.22 },
+  grass: { v: 0.62, rate: 0.86, lp: 2000, grit: 0, shoes: 0.35, squeak: false, slide: 0.06 },
+};
 type Family = keyof typeof FAMILIES;
 const SFX_DIR = 'assets/sfx/';
 /** a decoded take and where its sound starts (the decoder may add a few ms of silence before it) */
@@ -37,7 +55,7 @@ interface Take {
   start: number;
 }
 /** the levels of the mix (linear gains on the takes, which come evened out at about −16 LUFS over their first 120 ms) */
-const LVL = { hard: 0.62, soft: 0.3, glass: 0.6, bounce: 0.36, bed: 0.05, voices: 0.2, claps: 0.6, rev: 0.5 };
+const LVL = { hard: 0.62, soft: 0.3, bounce: 0.36, bed: 0.05, voices: 0.2, claps: 0.6, rev: 0.42 };
 
 export class Audio {
   ctx: AudioContext | null = null;
@@ -70,8 +88,14 @@ export class Audio {
   private roarBufs: AudioBuffer[] = [];
   /** 0 … 1: how loud the crowd murmurs at rest (0.4 behind the menus, 1 in a match) */
   crowdBase = 0;
-  /** 0 … 1: a long rally, the stands grow tense (louder and brighter; hushed before a match point) */
+  /** 0 … 1: a long rally, the stands grow tense (between the points: during the point they hold their breath) */
   tension = 0;
+  /** the ball is in play (from the serve's setup to the end of the point): the stands are quiet */
+  inPlay = false;
+  /** the court's surface: the bounce and the shoes (SURF) */
+  surface: Surface = 'hard';
+  /** how quiet the stands go while the ball is in play (a fraction of the murmur left) */
+  private quiet = 1;
   /** a replay is on: the bed is lower and the sounds of the replay are slowed down */
   replayMode = false;
   /** (the time the replay mode went on: a replay that never says it ended lets the bed back up after 25 s) */
@@ -112,7 +136,7 @@ export class Audio {
     this.arena.connect(this.sfx);
     this.ui = ctx.createGain();
     this.ui.connect(this.sfx);
-    // the hall: a light reverb (about 1.3 s, darker as it fades) under the arena's sounds
+    // the stadium: a light reverb (about 1.3 s, darker as it fades) under the court's sounds
     const conv = ctx.createConvolver();
     conv.buffer = arenaIR(ctx);
     this.verb = ctx.createGain();
@@ -253,7 +277,7 @@ export class Audio {
   }
 
   // ---------- continuous ----------
-  /** Every frame: the crowd's murmur follows the match (`kind`: the venue; the padel has one, an indoor arena). */
+  /** Every frame: the crowd's murmur follows the match (`kind`: the venue; there is one, the stadium). */
   loops(_kind: string, dt: number) {
     const c = this.ctx;
     if (!c) return;
@@ -288,16 +312,21 @@ export class Audio {
     }
   }
 
-  /** The murmur of the stands: an uneven bed; louder and brighter in a long rally and after every swell, hushed on demand. */
+  /**
+   * The murmur of the stands: an uneven bed, almost silent while the ball is in play (it settles in about a second as
+   * the server gets ready, and comes back as the point ends), louder and brighter after every swell, hushed on demand.
+   */
   private crowd(dt: number, t: number) {
     this.swell = Math.max(0, this.swell - dt * 0.35);
     this.hush = Math.max(0, this.hush - dt * 0.5);
+    const want = this.inPlay ? 0.12 : 1;
+    this.quiet += (want - this.quiet) * Math.min(1, dt * (this.inPlay ? 1.6 : 3));
     if (this.replayMode) {
       if (this.replaySince < 0) this.replaySince = t;
     } else this.replaySince = -1;
     const replay = this.replayMode && t - this.replaySince < 25;
     const wobble = 0.85 + 0.15 * Math.sin(t * 0.61) * Math.sin(t * 0.23 + 1);
-    const base = this.crowdBase * wobble * (1 + this.tension * 0.6) * (1 - 0.75 * Math.min(1, this.hush)) * (replay ? 0.5 : 1);
+    const base = this.crowdBase * wobble * this.quiet * (1 + (this.inPlay ? 0 : this.tension * 0.4)) * (1 - 0.75 * Math.min(1, this.hush)) * (replay ? 0.5 : 1);
     const lvl = LVL.bed * (base + this.swell * 1.4);
     this.bedGain.gain.setTargetAtTime(lvl, t, 0.15);
     this.bedF.frequency.setTargetAtTime(2000 + this.tension * 900 + this.swell * 2200, t, 0.3);
@@ -306,7 +335,7 @@ export class Audio {
   crowdSwell(x: number) {
     this.swell = Math.min(1.2, Math.max(this.swell, x));
   }
-  /** Quiet in the stands (a match point being served): lasts about two seconds. */
+  /** Quiet in the stands (a big point being served): lasts about two seconds. */
   crowdHush() {
     this.hush = 1.4;
   }
@@ -373,22 +402,23 @@ export class Audio {
 
   // ---------- the ball ----------
   /**
-   * The padel paddle meeting the ball. The recorded takes: the soft family for the touches (a chiquita, a dejada, a
-   * block), the hard one for the firm shots (drives, volleys, remates), and a crossfade between the two by how hard it
-   * was meant (`power`, the hit event's: 0.5 a plain release), brighter and louder the harder; overhead shots a notch
-   * lower and fuller. `special`: a remate going for «por 3» or «por 4» gets its crack and the boom of the frame on top
-   * (and only those). `pan`: where on screen (−1 … 1); `far`: 0 … 1 for the far end.
+   * The racket meeting the ball. The recorded takes: the soft family for the touches (a drop shot, a drop volley, a
+   * block), the hard one for the firm shots (groundstrokes, the serve, volleys, the smash), and a crossfade between
+   * the two by how hard it was meant (`power`, the hit event's: 0.5 a plain release), brighter and louder the harder;
+   * the serve and the smash a notch lower and fuller, a slice a touch softer. `pan`: where on screen (−1 … 1); `far`:
+   * 0 … 1 for the far end.
    */
-  paddle(kind: string, speed: number, pan = 0, far = 0, perfect = false, power = 0.5, special: string | null = null) {
+  racket(kind: string, speed: number, pan = 0, far = 0, perfect = false, power = 0.5) {
     if (!this.ctx || !this.sfxOn) return;
     // (one contact is one sound: an echo of the same event within 30 ms is dropped)
-    if (!this.limit('paddle', 0.03)) return;
+    if (!this.limit('racket', 0.03)) return;
     const pw = Math.min(1, Math.max(0, power));
-    const n = Math.min(1, Math.max(0, (speed - 5) / 18));
+    // (tennis balls leave the racket at 15–55 m/s)
+    const n = Math.min(1, Math.max(0, (speed - 10) / 35));
     const soft = kind === 'dink' || kind === 'drop' || kind === 'auto';
-    const over = kind === 'smash' || kind === 'vibora' || kind === 'bajada' || kind === 'bandeja';
+    const over = kind === 'smash' || kind === 'serve';
     // how much of the hard take: none for a touch; by the power for the rest (a placed ball 0.3 → soft, a flick → hard)
-    const hard = soft ? 0 : special ? 1 : Math.min(1, Math.max(0, (pw - 0.3) / 0.4 + (over ? 0.3 : 0)));
+    const hard = soft ? 0 : Math.min(1, Math.max(0, (pw - 0.3) / 0.4 + (over ? 0.35 : 0) + n * 0.3 - (kind === 'slice' ? 0.25 : 0)));
     // the level: a still release −4 dB under a flick; the touches under both
     const lvl = soft ? 0.75 + 0.25 * n : 0.62 + 0.38 * Math.max(pw, n * 0.8);
     // pitch: the overheads a little lower and fuller, a lob a touch lower, a fast ball a touch higher
@@ -400,20 +430,23 @@ export class Audio {
     let ok = true;
     if (a > 0.05) ok = this.take('soft', LVL.soft * lvl * a, o) && ok;
     if (b > 0.05) ok = this.take('hard', LVL.hard * lvl * b, o) && ok;
-    if (!ok) this.paddleSynth(kind, speed, pan, far, pw);
-    if (special === 'por3' || special === 'por4') this.crack(pan * 0.6, far, special === 'por4');
+    if (!ok) this.racketSynth(kind, speed, pan, far, pw);
     if (perfect && !this.replayMode) {
       // the perfect timing: a small bright «ting» (the game's, not the court's: dry)
       this.tone(1568, 0.08, 'sine', 0.03, 0.02, undefined, this.ui);
       this.tone(2093, 0.12, 'sine', 0.025, 0.06, undefined, this.ui);
     }
   }
+  /** (the padel name, kept for the tools that still call it) */
+  paddle(kind: string, speed: number, pan = 0, far = 0, perfect = false, power = 0.5) {
+    this.racket(kind, speed, pan, far, perfect, power);
+  }
 
-  /** the paddle without its takes: a short pock of a triangle and filtered noise over a low thump */
-  private paddleSynth(kind: string, speed: number, pan: number, far: number, pw: number) {
+  /** the racket without its takes: a short pock of a triangle and filtered noise over a low thump (the strings' ping) */
+  private racketSynth(kind: string, speed: number, pan: number, far: number, pw: number) {
     const o = this.out(pan * 0.6, far, 0.22, 2.2);
     const slow = this.replayMode ? 0.86 : 1;
-    const n = Math.min(1, Math.max(0, (speed - 5) / 18));
+    const n = Math.min(1, Math.max(0, (speed - 10) / 35));
     const dist = (1 - far * 0.4) * (0.8 + pw * 0.4);
     const j = 1 + (Math.random() - 0.5) * 0.06;
     if (kind === 'dink' || kind === 'drop' || kind === 'auto') {
@@ -432,126 +465,54 @@ export class Audio {
   }
 
   /**
-   * A remate going for «por 3» (flat, the hardest there is) or «por 4» (with topspin, brushed up), on top of the
-   * paddle's take: a dry, very bright snap at the contact and the boom of the frame (100 → 55 Hz, a third of a second),
-   * the por 4's brush of the strings up the felt.
+   * The ball on the court: a recorded bounce (live: by how hard it lands; dead: the little bounces after the point),
+   * coloured by the surface (SURF): bright on a hard court, duller with a little grit on clay, soft and low on grass.
    */
-  private crack(pan: number, far: number, topspin: boolean) {
-    const o = this.out(pan, far, 0.3);
-    const dist = 1 - far * 0.4;
-    const slow = this.replayMode ? 0.86 : 1;
-    this.noiseBurst(0.02, 'highpass', 6400, 3800, 0.28 * dist, 0.6, 0, o);
-    this.noiseBurst(0.05, 'bandpass', 2400 * slow, 1400 * slow, 0.12 * dist, 1.4, 0, o);
-    this.tone(100 * slow, 0.32, 'sine', 0.2 * dist, 0, 55 * slow, o);
-    this.tone(180 * slow, 0.12, 'sine', 0.08 * dist, 0, 120 * slow, o);
-    if (topspin) this.noiseBurst(0.12, 'bandpass', 3800 * slow, 6800 * slow, 0.05 * dist, 3, 0.01, o);
-  }
-
-  /**
-   * The ball meets a wall. The glass: a recorded knock of the panel (deep, with its ring), louder and a touch lower the
-   * harder it comes, with a short knock in the mids on top (a phone's speaker plays nothing of the panel's 90 Hz). The
-   * mesh: a metal fence, synthesised: the clank of the wire and a rattle of the panel in its frame. `k`: 0 … 1 how hard.
-   */
-  wall(surface: 'glass' | 'mesh', k: number, pan = 0, far = 0) {
-    if (!this.ctx || !this.sfxOn) return;
-    if (!this.limit('wall', 0.05)) return;
-    const s = Math.min(1, Math.max(0.15, k));
-    if (surface === 'glass') {
-      const v = 0.4 + 0.6 * s;
-      const ok = this.take('glass', LVL.glass * v, { pan: pan * 0.7, far, rate: 1.04 - s * 0.08, rev: 0.3, eq: [520, 9] });
-      // the knock of the panel in the mids (the take's own click is thin there)
-      const o = this.out(pan * 0.7, far, ok ? 0.3 : 0.2, ok ? 1 : 2.5);
-      const dist = 1 - far * 0.45;
-      const slow = this.replayMode ? 0.86 : 1;
-      this.noiseBurst(0.05, 'bandpass', 620 * slow, 380, (ok ? 0.08 : 0.09) * v * dist, 1.1, 0, o);
-      if (!ok) {
-        this.tone(118 * slow, 0.16 + s * 0.06, 'sine', 0.16 * v * dist, 0, 62 * slow, o);
-        this.tone(240 * slow, 0.07, 'triangle', 0.07 * v * dist, 0, 150 * slow, o);
-        this.tone(2650 * slow, 0.12, 'sine', 0.012 * v * dist, 0.004, 2580 * slow, o);
-      }
-    } else this.mesh(s, pan * 0.7, far);
-  }
-
-  /**
-   * The mesh: a welded wire panel on a steel frame. A dull thud of the ball on the wire, the clank (a few inharmonic
-   * partials of the steel, struck), then the panel shivering in its frame: the same partials re-struck faster and
-   * fainter for a quarter of a second.
-   */
-  private mesh(s: number, pan: number, far: number) {
-    const c = this.ctx!;
-    const t = c.currentTime;
-    const o = this.out(pan, far, 0.28);
-    const slow = this.replayMode ? 0.86 : 1;
-    const dist = (1 - far * 0.45) * (0.45 + 0.55 * s);
-    // the ball on the wire: the turf's take, muffled (or a low knock)
-    if (!this.take('bounce', LVL.bounce * 0.8 * dist, { pan, far, rate: 0.8, lp: 900, rev: 0.2 })) this.tone(170 * slow, 0.07, 'sine', 0.06 * dist, 0, 110 * slow, o);
-    // the rattle: a pattern of strikes on a bank of resonances
-    const exc = c.createGain();
-    exc.gain.value = 0;
-    const src = c.createBufferSource();
-    src.buffer = this.noise;
-    src.connect(exc);
-    const strikes = 6 + Math.floor(s * 5);
-    let at = 0;
-    for (let i = 0; i < strikes; i++) {
-      const a = (i === 0 ? 1 : 0.55 * Math.pow(0.78, i)) * dist;
-      exc.gain.setValueAtTime(a, t + at);
-      exc.gain.exponentialRampToValueAtTime(0.0001, t + at + 0.006);
-      at += (0.018 + Math.random() * 0.03) * (1 + i * 0.12);
-    }
-    const sum = c.createGain();
-    sum.gain.value = 1;
-    const j = 1 + (Math.random() - 0.5) * 0.06;
-    for (const [f, q] of [
-      [1180, 9],
-      [1730, 11],
-      [2470, 12],
-      [3390, 12],
-      [4610, 14],
-      [6020, 12],
-    ]) {
-      const bp = c.createBiquadFilter();
-      bp.type = 'bandpass';
-      bp.frequency.value = f * j * slow;
-      bp.Q.value = q;
-      exc.connect(bp).connect(sum);
-    }
-    sum.connect(o);
-    src.start(t, Math.random(), at + 0.25);
-  }
-
-  /** The ball on the turf: a recorded bounce (live: by how hard it lands; dead: the little bounces after the point). */
   courtBounce(strength: number, pan = 0, far = 0, dead = false) {
     if (!this.ctx || !this.sfxOn) return;
     if (!this.limit(dead ? 'deadb' : 'bounce', 0.04)) return;
+    const sf = SURF[this.surface] ?? SURF.hard;
     const s = Math.min(1, Math.max(0.05, strength));
-    const v = dead ? 0.55 * s : 0.6 + 0.4 * s;
-    if (this.take('bounce', LVL.bounce * v, { pan: pan * 0.6, far, rate: dead ? 1.08 : 0.98 + s * 0.04, rev: 0.18 })) return;
+    const v = (dead ? 0.55 * s : 0.6 + 0.4 * s) * sf.v;
+    const rate = (dead ? 1.08 : 0.98 + s * 0.04) * sf.rate;
+    const ok = this.take('bounce', LVL.bounce * v, { pan: pan * 0.6, far, rate, lp: sf.lp, rev: 0.16 });
+    // (clay: the grit of the crushed brick under the ball, a short dry scratch)
+    if (sf.grit > 0 && !dead) this.noiseBurst(0.05, 'bandpass', 3800, 2400, sf.grit * (0.5 + 0.5 * s) * (1 - far * 0.5), 1.1, 0.004, this.out(pan * 0.6, far, 0.1));
+    if (ok) return;
     const o = this.out(pan * 0.6, far, 0.18, 3.5);
     const slow = this.replayMode ? 0.86 : 1;
-    const g = (dead ? 0.05 : 0.06 + s * 0.07) * (1 - far * 0.35) * (dead ? s : 1);
-    const f = (dead ? 560 : 470 + s * 120) * (1 + (Math.random() - 0.5) * 0.08) * slow;
+    const g = (dead ? 0.05 : 0.06 + s * 0.07) * (1 - far * 0.35) * (dead ? s : 1) * sf.v;
+    const f = (dead ? 560 : 470 + s * 120) * (1 + (Math.random() - 0.5) * 0.08) * slow * sf.rate;
     this.tone(f, 0.045, 'triangle', g, 0, f * 0.6, o);
     this.tone(f * 0.5, 0.06, 'sine', g * 0.6, 0, f * 0.35, o);
-    this.noiseBurst(0.03, 'lowpass', 2400 * slow, 600, g * 0.9, 0.8, 0, o);
+    this.noiseBurst(0.03, 'lowpass', Math.min(2400, sf.lp) * slow, 600, g * 0.9, 0.8, 0, o);
   }
 
   /**
-   * Shoes on the court on a hard stop or a turn. Padel turf is sanded artificial grass: a sole does not squeal on it as
-   * on a hard court, it scrapes the sand (a short, soft «shh»). Only on real stops (strength over 0.55), and rarely
-   * (one at a time, 1.2 s apart at least): it was 27 a minute, a constant chirp under the rally.
+   * Shoes on the court on a hard stop or a turn, by the surface: on a hard court the rubber squeaks (a short,
+   * pitched chirp, the sound of hard-court tennis), on clay the shoe slides through the top dressing (a longer «shh»),
+   * on grass almost nothing. Only on real stops (strength over 0.55), and rarely (one at a time, 1.2 s apart at least).
    */
   squeak(strength: number, pan = 0, far = 0) {
     if (!this.ctx || !this.sfxOn) return;
     if (strength < 0.55 || !this.limit('squeak', 1.2)) return;
+    const sf = SURF[this.surface] ?? SURF.hard;
     const o = this.out(pan * 0.6, far, 0.12);
-    const v = (0.018 + 0.03 * Math.min(1, strength)) * (1 - far * 0.6);
-    const dur = 0.09 + Math.random() * 0.07;
-    this.noiseBurst(dur, 'bandpass', 2600 + Math.random() * 1400, 1500, v, 0.9, 0, o);
+    const v = (0.018 + 0.03 * Math.min(1, strength)) * (1 - far * 0.6) * sf.shoes;
+    if (sf.squeak) {
+      // (the rubber's chirp: a pitched tone that bends up, over a little hiss)
+      const f = 1900 + Math.random() * 900;
+      const dur = 0.07 + Math.random() * 0.06;
+      this.tone(f, dur, 'sine', v * 0.55, 0, f * (1.08 + Math.random() * 0.08), o);
+      this.noiseBurst(dur, 'bandpass', f, f * 1.1, v * 0.5, 4, 0, o);
+      return;
+    }
+    const dur = 0.09 + Math.random() * 0.07 + sf.slide;
+    this.noiseBurst(dur, 'bandpass', 2600 + Math.random() * 1400, 1300, v, 0.9, 0, o);
   }
 
   // ---------- the stands and the umpire ----------
-  /** The umpire's chime before the score is called (match point: three notes), through the hall's PA. */
+  /** The umpire's chime before the score is called (match point: three notes), through the stadium's PA. */
   chime(big = false) {
     if (!this.ctx || !this.sfxOn) return;
     const o = this.out(0, 0, 0.5);
@@ -562,7 +523,7 @@ export class Audio {
     });
   }
 
-  /** A crowd «uy» / «ooh» (a net cord, a ball just in, a por 3 got back): many voices rising and falling on the vowel. */
+  /** A crowd «uy» / «ooh» (a net cord, a ball just in or just out): many voices rising and falling on the vowel. */
   ooh(strength = 1) {
     if (!this.ctx || !this.sfxOn) return;
     if (!this.limit('ooh', 2.5)) return;
@@ -594,7 +555,7 @@ export class Audio {
     src.stop(t + hold + 2.6 + s);
   }
 
-  /** The stands erupt: a roar of voices over applause, its size 0 … 1 (a por 3 / por 4, a great point, the match). */
+  /** The stands erupt: a roar of voices over applause, its size 0 … 1 (a great point, the match). */
   roar(strength = 1) {
     if (!this.ctx || !this.sfxOn) return;
     if (!this.limit('roar', 1.0)) return;
@@ -739,8 +700,8 @@ function onset(b: AudioBuffer): number {
 }
 
 /**
- * The hall's impulse response: an indoor arena, lightly (about 1.3 s to −60 dB, a 12 ms gap before the first
- * reflections, a handful of early reflections off the stands and the roof, a tail that darkens as it fades).
+ * The stadium's impulse response, lightly (about 1.3 s to −60 dB, a 12 ms gap before the first reflections, a handful
+ * of early reflections off the stands, a tail that darkens as it fades; an open-air court, so the send is low).
  */
 function arenaIR(ctx: BaseAudioContext): AudioBuffer {
   const sr = ctx.sampleRate;

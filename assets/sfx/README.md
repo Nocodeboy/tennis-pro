@@ -4,10 +4,11 @@ Generados con IA (ElevenLabs, a través de Magnific) para Nocodeboy Games el 12 
 
 | Archivo | Toma original | Uso |
 |---|---|---|
-| pala-fuerte-1, -2 | pala-fuerte-3, -2 | golpes firmes: drive, volea, remates |
-| pala-suave-1, -2 | pala-suave-1, -2 | toques: chiquita, dejada, bloqueo |
-| cristal-1, -2, -3 | cristal-1, -2, -3 | la bola en el cristal |
-| bote-1, -2 | bote-1, -2 | bote en el césped (y, apagado, la bola en la malla y en la red) |
+| pala-fuerte-1, -2 | pala-fuerte-3, -2 | golpes firmes: golpes de fondo, saque, volea, remate |
+| pala-suave-1, -2 | pala-suave-1, -2 | toques: dejada, dejada de volea, bloqueo |
+| bote-1, -2 | bote-1, -2 | bote en la pista, coloreado según la superficie (`audio.ts`, `SURF`), y, apagado, la bola en la red |
+
+**Tenis (rama `tenis`, 12 oct 2026):** son las tomas del pádel, que sirven mientras no haya tomas de tenis (raqueta con cordaje y bote de una bola de tenis). Los nombres se quedan como estaban (pala, bote). Se quitaron `cristal-1`, `-2` y `-3`: el tenis no tiene paredes.
 
 Descartadas: pala-fuerte-1 y -4 (muy flojas, un zumbido grave y un timbre metálico), pala-suave-3 (un segundo golpe a 0,35 s), pala-suave-4 (sin chasquido: un tom grave), cristal-4 (ataque doble).
 

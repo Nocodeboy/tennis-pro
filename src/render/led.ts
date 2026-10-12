@@ -142,10 +142,10 @@ const MESSAGES: Draw[] = [
     ['FINALS', BALL],
   ], { rule: '#1b2533' }),
   message('#10161e', [['CENTER COURT', BALL]], { size: 80, rule: '#2a3340' }),
-  message('#0f2a44', [['GLASSWALL BANK', WHITE]], { mark: coin }),
+  message('#0f2a44', [['BASELINE BANK', WHITE]], { mark: coin }),
   message('#0b3560', [['VOLLEY WATER', WHITE]], { mark: drop }),
   message('#0b0b0d', [
-    ['BANDEJA', WHITE],
+    ['TOPSPIN', WHITE],
     ['ENERGY', '#ff8a2a'],
   ], { mark: bolt }),
   message('#173843', [['LOB AIR', WHITE]], { mark: wing, size: 84 }),

@@ -137,6 +137,11 @@ export function surface(opts: { seed: number; size?: number; grain: number; blot
   return { map: tex(c1, true, opts.repeat), roughnessMap: tex(c2, false, opts.repeat), normalMap: normalMap(h, size, opts.normal, opts.repeat) };
 }
 
+const smooth = (a: number, b: number, x: number) => {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+};
+
 /** bilinear sample of a size × size tileable field at (u, v) in texels */
 function sample(f: Float32Array, size: number, u: number, v: number): number {
   const x0 = Math.floor(u);
@@ -155,42 +160,89 @@ function sample(f: Float32Array, size: number, u: number, v: number): number {
   return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
 }
 
+/** a tennis court's surface (court.ts) */
+export type Floor = 'hard' | 'clay' | 'grass';
+
 /**
- * The fine texture of the artificial grass, tiled: R the shade (0.5 = none: the tips of the fibres light, the sand
- * between them darker, a few lighter grains of the sand infill), G the roughness, plus a normal map from the same
- * field. A tile is `tile` metres; the court's own colour (courtPaint) carries everything that does not repeat.
+ * The fine texture of a court's surface, tiled (a tile is TILE metres, see venue.ts): R the shade (0.5 = none), G the
+ * roughness, plus a normal map from the same field. The court's own colour (floorPaint) carries everything that does
+ * not repeat.
+ *  · hard: the acrylic over the concrete, a fine sand in the paint (a speckle, a few lighter and darker grains);
+ *  · clay: the crushed brick, grains and small lumps, matte and rough;
+ *  · grass: the blades, short streaks across the court (the mower's way), the soil between them a touch darker.
  */
-export function turfDetail(size: number, seed: number): { detail: THREE.CanvasTexture; normal: THREE.CanvasTexture } {
+export function floorDetail(kind: Floor, size: number, seed: number): { detail: THREE.CanvasTexture; normal: THREE.CanvasTexture; strength: number } {
   const fine = noise(size, seed, 2, 128);
   const mid = noise(size, seed + 5, 3, 24);
   const r = rng(seed + 3);
   const h = new Float32Array(size * size);
   const [c, x, img] = canvasOf(size);
+  // (grass: each texel is a few millimetres of a blade: short streaks along x, the mowing direction)
+  const blades = kind === 'grass' ? noise(size, seed + 9, 2, 64) : null;
   for (let i = 0; i < size * size; i++) {
-    // a fibre tip or the sand between the fibres (per texel: a few mm), and now and then a grain of the infill on top
-    const tip = r();
-    const sand = r() < 0.06 ? 1 : 0;
-    const f = fine[i] * 0.45 + tip * 0.55;
-    h[i] = f + sand * 0.4;
-    const shade = 0.5 + (f - 0.5) * 0.7 + (mid[i] - 0.5) * 0.14 + sand * 0.16;
-    const rough = Math.min(1, 0.86 + (f - 0.5) * 0.18);
+    const px = i % size;
+    const py = (i / size) | 0;
+    let shade: number;
+    let rough: number;
+    if (kind === 'hard') {
+      const g = r();
+      const speck = g < 0.035 ? 0.22 : g > 0.975 ? -0.2 : 0;
+      const f = fine[i] * 0.6 + r() * 0.4;
+      h[i] = f * 0.6 + speck * 0.5;
+      shade = 0.5 + (f - 0.5) * 0.22 + (mid[i] - 0.5) * 0.06 + speck;
+      rough = 0.62 + (f - 0.5) * 0.12 - speck * 0.1;
+    } else if (kind === 'clay') {
+      const g = r();
+      const lump = Math.max(0, mid[i] - 0.62) * 2.5;
+      const f = fine[i] * 0.45 + r() * 0.55;
+      h[i] = f + lump * 0.8 + (g < 0.05 ? 0.5 : 0);
+      shade = 0.5 + (f - 0.5) * 0.5 + lump * 0.12 + (g < 0.05 ? 0.12 : g > 0.97 ? -0.15 : 0);
+      rough = 0.94 + (f - 0.5) * 0.06;
+    } else {
+      // a blade: a streak a few texels long, lit or in shade; soil between blades now and then
+      const b = blades![py * size + ((px + ((py * 7) % 5)) % size)];
+      const blade = sample(blades!, size, px / 6, py) * 0.6 + r() * 0.4;
+      const soil = r() < 0.04 ? 1 : 0;
+      h[i] = blade * 1.2 - soil * 0.4 + b * 0.1;
+      shade = 0.5 + (blade - 0.5) * 0.55 + (mid[i] - 0.5) * 0.1 - soil * 0.18;
+      rough = 0.84 + (blade - 0.5) * 0.12;
+    }
     img.data[i * 4] = Math.max(0, Math.min(255, shade * 255));
-    img.data[i * 4 + 1] = rough * 255;
+    img.data[i * 4 + 1] = Math.max(0, Math.min(255, rough * 255));
     img.data[i * 4 + 2] = 128;
     img.data[i * 4 + 3] = 255;
   }
   x.putImageData(img, 0, 0);
-  return { detail: tex(c, false, 1), normal: normalMap(h, size, 2.2, 1) };
+  const strength = kind === 'hard' ? 1.2 : kind === 'clay' ? 2.6 : 2.2;
+  return { detail: tex(c, false, 1), normal: normalMap(h, size, strength, 1), strength };
 }
 
+/** the colours of each surface: in the court (the doubles court), outside it (the run-off), and the wear */
+export const FLOOR_COLORS: Record<Floor, { court: number; run: number; wear: number; line: number }> = {
+  // New York's: blue inside the lines, green round it (acrylic)
+  hard: { court: 0x2f62a0, run: 0x3c7a50, wear: 0x6f8fb4, line: 0xf4f6f2 },
+  // brick dust, the run-off the same clay (it darkens away from the lines: less played, damper); the lines white
+  // tapes, dusty
+  clay: { court: 0xbf6438, run: 0xbf6438, wear: 0xd08a5c, line: 0xf0e6dc },
+  // the lawn's green (the light stripe), and the bare earth where it is worn
+  grass: { court: 0x4b8a3b, run: 0x4b8a3b, wear: 0x8f7a55, line: 0xf6f6f0 },
+};
+
 /**
- * The colour of the whole court and its surround as one canvas (no tiling, about 4 cm a texel): the blue artificial
- * grass inside the glass, the dark floor round it, the rolls of the turf as faint bands along the court, the broad
- * mottling of the pile and the paler, flattened patches where the players stand most (at the back, along the
- * service lines, at the net), where the sand infill shows. RGB: colour (sRGB). A: wear 0…1 (the shader reads it).
- * Court frame: x across (−sw/2 … sw/2), z along (−sl/2 … sl/2), metres.
+ * The colour of the whole floor inside the boards as one canvas (no tiling, about 5 cm a texel), for a surface: the
+ * court and its run-off in their colours, the broad mottling, and what play leaves on it. RGB: colour (sRGB); A: wear
+ * 0…1 (the shader makes it a little smoother). The floodlights' pool is in it too: the run-off by the boards a little
+ * darker than the court (the light baked in Blender for the padel cage did not fit this court: it is gone).
+ *  · hard: the court's paint evenly matte, paler and smoother where the players run most (behind the baselines, the
+ *    serve and return spots), a few dark scuffs of rubber;
+ *  · clay: the brushed brick dust: the drag mat's arcs and the brush's straight passes (the tram lines), damp and dry
+ *    patches, the slides of the players behind the baselines (long pale streaks with a darker edge), footprints;
+ *  · grass: the mown stripes across the court (light and dark bands), and the bare earth behind each baseline where
+ *    the players serve, return and rally, worn brown with tufts of grass left in it.
+ * Court frame: x across (−sw/2 … sw/2), z along (−sl/2 … sl/2), metres; `cw`, `cl` the doubles court, `sv` the
+ * service line, `cs` the singles court's width.
  */
-export function courtPaint(o: { sw: number; sl: number; cw: number; cl: number; service: number; apron: number; court: number; px: number; seed: number }): THREE.DataTexture {
+export function floorPaint(o: { kind: Floor; sw: number; sl: number; cw: number; cl: number; cs: number; sv: number; px: number; seed: number }): THREE.DataTexture {
   const W = Math.round(o.px);
   const H = Math.round((o.px * o.sl) / o.sw);
   const mpp = o.sw / W;
@@ -199,51 +251,128 @@ export function courtPaint(o: { sw: number; sl: number; cw: number; cl: number; 
   const broad = noise(N, o.seed, 4, 3);
   const patchy = noise(N, o.seed + 1, 4, 8);
   const streak = noise(N, o.seed + 2, 3, 16);
+  const fine = noise(N, o.seed + 4, 2, 64);
+  const r = rng(o.seed + 7);
   const rgb = (h: number) => [(h >> 16) & 255, (h >> 8) & 255, h & 255];
-  const A = rgb(o.apron);
-  const C = rgb(o.court);
+  const F = FLOOR_COLORS[o.kind];
+  const C = rgb(F.court);
+  const RUNC = rgb(F.run);
+  const WEAR = rgb(F.wear);
   const hl = o.cl / 2;
   const g2 = (dx: number, dz: number, rx: number, rz: number) => Math.exp(-((dx * dx) / (rx * rx) + (dz * dz) / (rz * rz)));
+  // clay: the slides (start x, z, length, which way along x, a little slant), drawn after the colour
+  const slides: [number, number, number, number, number][] = [];
+  if (o.kind === 'clay')
+    for (let i = 0; i < 46; i++) {
+      const end = r() < 0.5 ? 1 : -1;
+      const x = (r() - 0.5) * (o.cs + 1.0);
+      const z = end * (hl - 1.0 + r() * 3.2);
+      slides.push([x, z, 0.5 + r() * 1.1, r() < 0.5 ? 1 : -1, (r() - 0.5) * 0.5]);
+    }
   for (let py = 0; py < H; py++) {
     const z = -o.sl / 2 + (py + 0.5) * mpp;
     const az = Math.abs(z);
     for (let px = 0; px < W; px++) {
       const xx = -o.sw / 2 + (px + 0.5) * mpp;
-      const inCourt = Math.abs(xx) <= o.cw / 2 && az <= hl;
-      const col = inCourt ? C : A;
+      const ax = Math.abs(xx);
+      const inCourt = ax <= o.cw / 2 && az <= hl;
       const u = (px / W) * N * (o.sw / 6);
       const v = (py / H) * N * (o.sl / 6);
       const pt = sample(patchy, N, u * 0.7, v * 0.7);
-      let wear = 0;
-      if (inCourt) {
-        // at the back (both halves of each end), along the service line, at the net (the volleys), the serve spots
-        wear += 0.75 * g2(Math.abs(xx) - 2.6, az - (hl - 1.3), 1.6, 1.1);
-        wear += 0.45 * g2(0, az - (o.service + 0.2), 4.5, 0.7);
-        wear += 0.55 * g2(Math.abs(xx) - 2.4, az - 3.0, 1.5, 1.0);
-        wear += 0.5 * g2(Math.abs(xx) - 1.3, az - (o.service + 1.0), 0.6, 0.5);
-        // (the glass' foot: the infill swept there by the ball and the shoes)
-        wear += 0.35 * Math.max(0, 1 - Math.min(o.cw / 2 - Math.abs(xx), hl - az) / 0.25);
-        wear = Math.min(1, wear * (0.45 + 1.1 * pt));
-      }
-      // broad mottling (a few %); inside, the rolls of turf (2 m wide, laid along the court) in slightly different
-      // shades and the pile brushed in passes
       const b = sample(broad, N, u * 0.25, v * 0.25) - 0.5;
       const s = sample(streak, N, u * 0.05, v * 3.5) - 0.5;
-      let k = 1 + b * (inCourt ? 0.06 : 0.08);
-      if (inCourt) {
-        const roll = Math.floor((xx + o.cw / 2) / 2);
-        k *= 1 + ((roll * 0.37) % 1 - 0.5) * 0.035 + s * 0.03;
+      const fn = sample(fine, N, u * 2, v * 2) - 0.5;
+      let col = inCourt ? C : RUNC;
+      let k = 1;
+      // the floodlights' pool: the run-off darker towards the boards (clay and grass: the same surface, less played,
+      // so a little more)
+      const edge = Math.max(ax - o.cw / 2, az - hl, 0);
+      k *= 1 - (o.kind === 'hard' ? 0.1 : 0.14) * smooth(0, 4, edge);
+      // where the players are most: behind the baselines (around the middle), the serve and return spots
+      let play = 0.8 * g2(xx * 0.55, az - (hl + 0.6), 3.2, 1.3) + 0.45 * g2(ax - 1.4, az - (hl + 0.2), 0.8, 0.6) + 0.25 * g2(xx * 0.4, az - (hl - 2.0), 3.5, 1.2) + 0.3 * g2(xx * 0.5, az - 2.6, 3.5, 1.1);
+      let wear = 0;
+      if (o.kind === 'hard') {
+        k *= 1 + b * 0.05 + fn * 0.015;
+        wear = Math.min(1, play * (0.4 + 0.9 * pt) * 0.55);
+      } else if (o.kind === 'clay') {
+        // the drag mat's passes: straight bands across the court about a mat wide (2 m), each a touch lighter or
+        // darker, their edges a faint ridge of dust; and the broad drag marks along them
+        const band = (z + 100) / 2.05;
+        const bi = Math.floor(band);
+        const bf = band - bi;
+        const pass = ((bi * 0.618) % 1) - 0.5;
+        const ridge = Math.max(0, 1 - Math.min(bf, 1 - bf) / 0.03);
+        k *= 1 + b * 0.09 + (pt - 0.5) * 0.06 + pass * 0.03 + ridge * 0.03 + s * 0.02 + fn * 0.03;
+        // (damp patches darker)
+        k *= 1 - 0.06 * Math.max(0, sample(broad, N, u * 0.6 + 40, v * 0.6) - 0.6) * 4;
+        wear = Math.min(1, play * (0.3 + 1.1 * pt) * 0.5);
+      } else {
+        // the stripes across the court (parallel to the net), the run-off's the same; a little patchiness
+        const band = Math.floor((z + 100) / 0.915) % 2 === 0 ? 1 : 0;
+        k *= (band ? 1.07 : 0.9) + b * 0.06 + (pt - 0.5) * 0.05 + fn * 0.03;
+        // the bare earth: behind each baseline and a metre into the court, between the singles sidelines, worn
+        // brown in the middle (the serve, the rally), with ragged edges and tufts left; the serve and return spots;
+        // a faint path along the singles sidelines
+        const back = Math.exp(-((xx / 3.0) ** 4)) * Math.exp(-(((az - (hl + 0.1)) / 1.05) ** 2));
+        play = 1.2 * back + 0.5 * g2(ax - 1.1, az - (hl + 0.1), 0.7, 0.6) + 0.22 * g2(xx, az - (hl - 2.4), 2.4, 1.0) + 0.18 * g2(ax - o.cs / 2, az - (hl - 1.0), 0.45, 2.4) + 0.12 * g2(xx, az - 2.4, 1.6, 0.9);
+        const rag = 0.55 + 0.9 * pt + 0.5 * fn;
+        wear = Math.min(1, Math.max(0, play * rag - 0.18) * 1.35);
       }
       const i = (py * W + px) * 4;
-      // worn: paler and a little greyer (the sand infill showing through the flattened pile)
-      const pale = wear * 0.13;
+      // worn: towards the wear colour (paler acrylic, lighter brick dust, bare earth), with its own grain
+      const ww = o.kind === 'grass' ? Math.min(1, wear * 1.1) * (0.8 + 0.4 * (fn + 0.5)) : wear * 0.35;
       for (let ch = 0; ch < 3; ch++) {
         const base = col[ch] * k;
-        data[i + ch] = Math.max(0, Math.min(255, base + (150 - base) * pale));
+        const worn = WEAR[ch] * (o.kind === 'grass' ? 0.85 + 0.3 * (pt - 0.5) + 0.12 * fn : 1);
+        data[i + ch] = Math.max(0, Math.min(255, base + (worn - base) * Math.min(1, ww)));
       }
       data[i + 3] = Math.round(Math.min(1, wear) * 255);
+      col = C;
     }
   }
+  // clay: the slides, two thin scraped tracks side by side (the soles), paler, fading in and deepening to a darker
+  // heap of dust where the slide stopped; footprints scattered round the baselines
+  if (o.kind === 'clay') {
+    const put = (x: number, z: number, k: number) => {
+      const px = Math.round((x + o.sw / 2) / mpp - 0.5);
+      const py = Math.round((z + o.sl / 2) / mpp - 0.5);
+      if (px < 0 || py < 0 || px >= W || py >= H) return;
+      const i = (py * W + px) * 4;
+      for (let ch = 0; ch < 3; ch++) data[i + ch] = Math.max(0, Math.min(255, data[i + ch] * k));
+    };
+    for (const [x0, z0, len, dir, slant] of slides) {
+      const n = Math.ceil(len / (mpp * 0.5));
+      for (let j = 0; j <= n; j++) {
+        const t = j / n;
+        const x = x0 + dir * t * len;
+        const z = z0 + slant * t * len;
+        const k = 1 + 0.05 * Math.sin(Math.PI * Math.min(1, t * 1.3));
+        put(x, z - 0.06, k);
+        put(x, z + 0.06, k);
+      }
+      put(x0 + dir * (len + mpp), z0 + slant * len, 0.9);
+    }
+    for (let i = 0; i < 700; i++) {
+      const end = r() < 0.5 ? 1 : -1;
+      put((r() - 0.5) * (o.cw + 1), end * (hl - 3 + r() * 6), 0.94);
+    }
+  }
+  // hard: rubber scuffs, short dark arcs behind the baselines
+  if (o.kind === 'hard')
+    for (let i = 0; i < 40; i++) {
+      const end = r() < 0.5 ? 1 : -1;
+      const x0 = (r() - 0.5) * o.cs;
+      const z0 = end * (hl - 0.8 + r() * 2.2);
+      const a0 = r() * Math.PI * 2;
+      const len = 0.15 + r() * 0.3;
+      for (let t = 0; t < len; t += mpp * 0.5) {
+        const px = Math.round((x0 + Math.cos(a0 + t) * t + o.sw / 2) / mpp - 0.5);
+        const py = Math.round((z0 + Math.sin(a0 + t) * t + o.sl / 2) / mpp - 0.5);
+        if (px < 0 || py < 0 || px >= W || py >= H) continue;
+        const i = (py * W + px) * 4;
+        for (let ch = 0; ch < 3; ch++) data[i + ch] = data[i + ch] * 0.94;
+      }
+    }
   const t = new THREE.DataTexture(data, W, H, THREE.RGBAFormat);
   t.colorSpace = THREE.SRGBColorSpace;
   t.magFilter = THREE.LinearFilter;

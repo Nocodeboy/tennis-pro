@@ -1,7 +1,7 @@
 :root {
   color-scheme: dark;
-  /* PRO TOUR (provisional brand): deep night blacks, white, and the ball's yellow as the one accent. A sports title
-     and a TV graphics package: a condensed face for titles, names and numbers, a neutral sans for reading. */
+  /* TENIS · PRO TOUR (provisional brand): deep night blacks, white, and the ball's yellow as the one accent. A sports
+     title and a TV graphics package: a condensed face for titles, names and numbers, a neutral sans for reading. */
   --bg-0: #06080c;
   --bg-1: #0b0f15;
   --bg-2: #121821;
@@ -20,6 +20,10 @@
   --ink: #0b0f14;
   /* (names the game's indicators already use) */
   --lime: #dcff3c;
+  /* the court's surfaces, for their swatches (the court itself is drawn by the render) */
+  --hard: #3b7bc0;
+  --clay: #c8683a;
+  --grass: #5aa046;
   --display: 'Barlow Condensed', 'Arial Narrow', 'Roboto Condensed', system-ui, sans-serif;
   --ui: 'Barlow', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --r: 6px;
@@ -1297,9 +1301,10 @@ button.pcard:active {
   color: var(--ink);
   background: var(--fg);
 }
-/* (the best of three: the games of each set, small, before the sets) */
+/* (the games of each set, before the sets; a tie-break's loser points small, up, beside the loser's 6) */
 .fr .st {
-  width: 24px;
+  position: relative;
+  width: 26px;
   align-self: stretch;
   display: grid;
   place-items: center;
@@ -1311,6 +1316,39 @@ button.pcard:active {
 }
 .fr .st.w {
   color: var(--fg);
+}
+.fr .st sup {
+  position: absolute;
+  top: 7px;
+  right: 0;
+  font-size: 10px;
+  line-height: 1;
+}
+/* one set: its games are the score (no sets column), the last one big */
+.final-board.one .fr .st {
+  width: 58px;
+  font-size: 28px;
+  color: var(--fg-2);
+  background: rgba(255, 255, 255, 0.06);
+}
+.final-board.one .fr.w .st {
+  color: var(--ink);
+  background: var(--fg);
+}
+.final-board.one .fr .st sup {
+  top: 9px;
+  right: 6px;
+  font-size: 12px;
+}
+.end-surf {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 10px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg-3);
 }
 .champ {
   display: flex;
@@ -1473,7 +1511,8 @@ button.pcard:active {
   letter-spacing: 0.02em;
   color: var(--accent);
 }
-/* padel: the games of the set, then the points of the game (0 · 15 · 30 · 40 · AD; the tie-break's numbers) */
+/* tennis: the games of every set played, the games of this set, then the points (0 · 15 · 30 · 40 · AD; the
+   tie-break's numbers) */
 .tvbug .sc,
 .tvbug .pt {
   flex: none;
@@ -1492,13 +1531,14 @@ button.pcard:active {
   width: calc(30px * var(--k));
   background: rgba(255, 255, 255, 0.17);
 }
-/* padel 0.5, the best of three: a column with the sets before the games (smaller, dimmer) */
+/* the sets finished: one column each before the games of the set being played (smaller; the set's winner bright).
+   Up to four of them (the fifth set is the games column): the names give way, never the numbers */
 .tvbug.sets {
-  max-width: min(calc(284px * var(--k)), calc(100vw - 72px));
+  max-width: min(calc((262px + var(--ns, 0) * 19px) * var(--k)), calc(100vw - 72px));
 }
 .tvbug .st {
   flex: none;
-  width: calc(20px * var(--k));
+  width: calc(19px * var(--k));
   align-self: stretch;
   display: grid;
   place-items: center;
@@ -1506,8 +1546,26 @@ button.pcard:active {
   font-size: calc(13.5px * var(--k));
   font-variant-numeric: tabular-nums;
   letter-spacing: 0;
-  color: var(--fg-2);
+  color: var(--fg-3);
   perspective: 120px;
+}
+.tvbug .st.w {
+  color: var(--fg);
+}
+.tvbug .st + .sc {
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+}
+/* the match over: no points column; the winner's row lit */
+.tvbug.over .sc {
+  width: calc(26px * var(--k));
+}
+.tvbug .tr.won .nm {
+  color: var(--fg);
+}
+.tvbug .tr.won .sc,
+.tvbug .tr.won .sc span.flip {
+  color: var(--ink);
+  background: var(--accent);
 }
 .tvbug .st span {
   display: block;
@@ -1562,6 +1620,11 @@ button.pcard:active {
 .tv-state span.tb,
 .tv-state span.sp {
   color: var(--gold);
+}
+/* a break point: the receivers are one point from the game (the accent: it is a chance, a big one) */
+.tv-state span.bp {
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px rgba(217, 242, 63, 0.55);
 }
 /* (with that line the bug is taller: the umpire's call and the point's tag go under it) */
 .bug-st .tv-call,
@@ -1669,7 +1732,13 @@ button.pcard:active {
   height: 12px;
   background: rgba(255, 255, 255, 0.3);
 }
+.tv-call {
+  max-width: calc(100vw - 16px - var(--safe-l) - var(--safe-r));
+}
 .tv-call .who {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-weight: 600;
   font-size: calc(12.5px * var(--k));
   letter-spacing: 0.12em;
@@ -1797,6 +1866,14 @@ button.pcard:active {
   margin-left: 4px;
   color: var(--accent);
   font-variant-numeric: tabular-nums;
+}
+/* a break of serve: the label on the gold */
+.tv-strap.brk .lb {
+  display: inline-block;
+  padding: 1px 6px 0;
+  border-radius: 2px;
+  color: var(--ink);
+  background: var(--gold);
 }
 /* replays: the tag in the corner and soft bars top and bottom */
 .tv-replay {
@@ -2275,7 +2352,7 @@ button.pcard:active {
 .chip .mr.past i {
   border-color: #9aa3ad;
 }
-/* over the head, while aiming: what each flick plays (↑ remate, ⇈ por 3, ↖↗ víbora, ↓ por 4), small, under the name */
+/* over the head, while aiming: what the flick plays (↑ REMATE FUERTE), small, under the name */
 .fan {
   position: absolute;
   left: 0;
@@ -2572,6 +2649,120 @@ button.pcard:active {
   }
 }
 
+/* ---------- tennis: the mode (singles or doubles), the surface ---------- */
+/* the menu's mode: two big segments over the play button */
+.seg.mode {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: var(--r);
+  background: rgba(6, 8, 12, 0.75);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.seg.mode button {
+  flex: 1;
+  height: 36px;
+  padding: 0;
+  border-radius: 4px;
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+.seg.mode button.on {
+  background: var(--fg);
+  color: var(--ink);
+}
+/* a surface: a swatch of its colour and its name */
+.surf {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-2);
+  white-space: nowrap;
+}
+.surf i,
+.seg .sw {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--hard);
+  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.85);
+}
+.surf.clay i,
+.seg .sw.clay {
+  background: var(--clay);
+}
+.surf.grass i,
+.seg .sw.grass {
+  background: var(--grass);
+}
+.seg .sw {
+  display: inline-block;
+  margin-right: 6px;
+  vertical-align: -1px;
+}
+/* (in the menu list, the surface sits by the draw, before the chevron) */
+.menu-list button:has(.surf) {
+  grid-template-columns: 20px 1fr auto 16px;
+}
+.menu-list .surf {
+  font-size: 11px;
+  color: var(--fg-3);
+}
+/* the draw: its size, the surface and the format under the title */
+.draw-info {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 6px 2px 10px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg-3);
+}
+/* settings: a row whose choice spans the panel (the surface, the sets) */
+.row.wide {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.row.wide .seg button {
+  flex: 1;
+  padding: 8px 6px;
+  white-space: nowrap;
+}
+/* the match card: the surface and the format under the round */
+.vs-fmt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 10px;
+  margin-top: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg-3);
+}
+/* singles: one card each side */
+.vt.one .vt-c .pcard {
+  flex: 1;
+}
+/* your card alone (singles, from the menu) */
+.panel.team.one .pc-two {
+  max-width: 400px;
+  margin: 0 auto;
+}
+
 /* ---------- landscape phones: two columns, nothing taller than the screen ---------- */
 @media (orientation: landscape) and (max-height: 560px) {
   .screen {
@@ -2605,6 +2796,12 @@ button.pcard:active {
   }
   .menu-list button {
     height: 40px;
+  }
+  .seg.mode button {
+    height: 32px;
+  }
+  .vs-fmt {
+    margin-top: 0;
   }
   .screen.vs-screen {
     padding-top: calc(10px + var(--safe-t));

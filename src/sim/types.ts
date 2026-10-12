@@ -1,22 +1,19 @@
-import type { Side } from './court';
+import type { CourtSurface, Side } from './court';
 
 /**
- * The shots. Pickleball's names are kept where the shot is the same idea (the engine came from there):
- *  · dink: the soft, low ball at the feet of a player at the net (padel's «chiquita»), or a soft volley dropped short;
+ * The shots. The engine's names are kept where the shot is the same idea (it came from pickleball and padel):
+ *  · serve: the serve, overhead from behind the baseline (flat, sliced or kick: ShotSpec.spin);
+ *  · return: the return of serve;
+ *  · drive: a groundstroke with topspin, forehand or backhand («golpe de fondo»), and the passing shot;
+ *  · slice: the sliced groundstroke («cortado»): low, with backspin, to defend at a stretch or to approach;
+ *  · dink: a soft volley dropped short («dejada de volea»), or a soft, low ball at the feet of a player at the net;
  *  · drop: a soft ball from the back that dies short («dejada»);
- *  · speedup: a hard volley at the net («volea» attacking);
- *  · bandeja: the controlled overhead that keeps the net (sliced, deep, not too fast);
- *  · vibora: the aggressive sliced overhead, angled to the side glass;
- *  · smash: the flat overhead («remate»), hard enough to go out of the court off the back glass («por 3»);
- *  · bajada: the attack on a ball that comes back high off the back glass («bajada de pared»), hit down and hard.
+ *  · lob: the lob («globo»), defensive (high) or with topspin over a player at the net;
+ *  · smash: the overhead («remate»);
+ *  · speedup: a firm volley at the net («volea»);
+ *  · auto: the block, the reflex volley or the automatic safe ball.
  */
-export type ShotKind = 'serve' | 'return' | 'drive' | 'dink' | 'drop' | 'lob' | 'smash' | 'bandeja' | 'vibora' | 'bajada' | 'speedup' | 'auto';
-/**
- * A remate looking for the point off the walls (ShotSpec.special): «por 3» (flat, hard and steep: it bounces high and
- * leaves the court over the walls) or «por 4» (with topspin: it bounces, comes off the back glass and goes back over
- * the net to the hitter's side).
- */
-export type Special = 'por3' | 'por4';
+export type ShotKind = 'serve' | 'return' | 'drive' | 'slice' | 'dink' | 'drop' | 'lob' | 'smash' | 'speedup' | 'auto';
 /** how well the swing was timed (the human's release, or the AI's roll) */
 export type Timing = 'perfect' | 'good' | 'early' | 'late' | 'auto';
 
@@ -55,8 +52,11 @@ export interface ShotSpec {
    * fastest flick). Absent: 0.5. Harder is faster and riskier.
    */
   power?: number;
-  /** a remate looking for «por 3» or «por 4» (see Special) */
-  special?: Special;
+  /**
+   * −1 … 1: the spin, when the shot asks for its own (a serve: flat, sliced or kick; a drive with more or less topspin).
+   * Absent: the kind's (match.ts, SPIN).
+   */
+  spin?: number;
 }
 
 /** Where and when a player will meet the incoming ball. */
@@ -82,17 +82,6 @@ export interface Plan {
   out?: boolean;
   /** CPU players: seconds in hand when the contact was planned (time to set up; brain.ts CARD) */
   spare?: number;
-  /**
-   * the wall the ball last came off since it bounced ('back': the back glass, 'side': a side wall); absent: it has not
-   * met one. A ball off the back glass met high at the back is a bajada (brain.ts, isBajada).
-   */
-  wall?: 'back' | 'side';
-  /**
-   * CPU players: their call on a ball that allows a bajada, made when they set off for it (brain.ts, AIController.read):
-   * a bajada or not. The view shows that swing from the start and the hit keeps to it. Absent: not decided (the human
-   * decides at the release).
-   */
-  bajada?: boolean;
 }
 
 export interface Player {
@@ -131,18 +120,17 @@ export interface Player {
 
 /**
  * Why a point ended.
- *  · net: into the net · out: over the walls without bouncing in · wall: it hit the other side's wall or fence before
- *    bouncing (a fault of the hitter) · doubleFault: two faults on the serve · twoBounce: the return of serve was
- *    volleyed (it must bounce)
- *  · winner: nobody had a go at it · miss: the receiver went for it and did not get there · letGo: he was there and
- *    let it go · exit: after bouncing in it left the court over the walls («por 3») · back: after bouncing in it went
- *    back over the net to the hitter's side («por 4»)
- *  · body: the live ball touched a player of the receiving team (FIP: the other team's point; the volley at the body).
+ *  · net: into the net · out: it bounced out of the lines (or hit the boards, a chair or a player outside the court
+ *    before bouncing) · doubleFault: two faults on the serve · twoBounce: the return of serve was volleyed (it must
+ *    bounce)
+ *  · winner: nobody had a go at it (an ace, when it is the serve) · miss: the receiver went for it and did not get
+ *    there · letGo: he was there and let it go
+ *  · body: the live ball touched a player of the receiving team (ITF: the other side's point; the volley at the body).
  *    The point event says who (`touched`)
  */
-export type PointReason = 'net' | 'out' | 'wall' | 'doubleFault' | 'twoBounce' | 'winner' | 'miss' | 'letGo' | 'exit' | 'back' | 'body';
-/** a serve fault: out of the box, into the net, or into the fence after the bounce */
-export type ServeFault = 'serveOut' | 'serveNet' | 'serveFence';
+export type PointReason = 'net' | 'out' | 'doubleFault' | 'twoBounce' | 'winner' | 'miss' | 'letGo' | 'body';
+/** a serve fault: out of the box, or into the net */
+export type ServeFault = 'serveOut' | 'serveNet';
 
 export type MatchEvent =
   | { type: 'serveSetup'; server: number }
@@ -160,11 +148,10 @@ export type MatchEvent =
    *  · `avail`: seconds from the other side's contact to this one (absent for a serve or a fed ball);
    *  · `vin`: speed of the incoming ball at the contact (m/s, along the court).
    */
-  | { type: 'hit'; pid: number; kind: ShotKind; timing: Timing; q: number; x: number; y: number; z: number; speed: number; shot: number; volley: boolean; shank?: boolean; intent?: 'attack' | 'block'; power?: number; special?: Special; clear?: number; tx?: number; tz?: number; pop?: boolean; stretch?: number; avail?: number; vin?: number }
-  | { type: 'bounce'; x: number; z: number; good: boolean; first: boolean; close: boolean }
+  | { type: 'hit'; pid: number; kind: ShotKind; timing: Timing; q: number; x: number; y: number; z: number; speed: number; shot: number; volley: boolean; shank?: boolean; intent?: 'attack' | 'block'; power?: number; spin?: number; clear?: number; tx?: number; tz?: number; pop?: boolean; stretch?: number; avail?: number; vin?: number }
+  /** `out`: how far out a bad bounce was (m; the close calls and the review) */
+  | { type: 'bounce'; x: number; z: number; good: boolean; first: boolean; close: boolean; out?: number }
   | { type: 'net'; x: number; y: number; z: number; tape: boolean }
-  /** the ball meets a wall: glass (it comes back), mesh (it comes back dead and a little off) */
-  | { type: 'wall'; x: number; y: number; z: number; surface: 'glass' | 'mesh'; speed: number }
   /** a serve fault: the first one gives a second serve (`second`), the second one is the point (doubleFault) */
   | { type: 'fault'; pid: number; fault: ServeFault; second: boolean }
   /** the serve touched the net and bounced in the box: it is played again (same serve) */
@@ -183,8 +170,10 @@ export type MatchEvent =
 export interface Rules {
   /** games to win a set: 6 is a full set; a tie-break to 7 at games−games */
   games: number;
-  /** at 40-40 the next point wins the game («punto de oro»); false: advantages */
+  /** at deuce the next point wins the game («punto decisivo», no-ad); false: advantages, the tour's rule */
   golden: boolean;
-  /** sets of the match: 1 (one set, the default) or 3 (the best of three, as on the tour: two sets win it) */
-  sets?: 1 | 3;
+  /** sets of the match: 1 (one set, the default), 3 (the best of three) or 5 (the best of five, the Grand Slams) */
+  sets?: 1 | 3 | 5;
+  /** the court's surface: hard (the default), clay or grass (ball.ts, GROUND) */
+  surface?: CourtSurface;
 }

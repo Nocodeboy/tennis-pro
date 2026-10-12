@@ -64,6 +64,8 @@ const PANTS = [0x22304a, 0x2e4a72, 0x1e2126, 0x15171b, 0x3b4048, 0x5c6066, 0x3b5
 /** the court's staff: officials in navy and grey, camera crews and photographers in black */
 const OFFICIAL = { shirt: 0x1b2a40, pants: 0x55595f };
 const CREW = { shirt: 0x141619, pants: 0x1c1e22 };
+/** the ball kids: the tournament's colour, dark shorts */
+const KIDS = { shirt: 0x2a63b0, pants: 0x1b2a40 };
 /** the club seats: dressed up a little */
 const CLUB_SHIRTS = [0x15171b, 0x1e2633, 0xf0eee8, 0x2b2f36, 0x3a2a30, 0xd9d6cf, 0x16365f];
 const SKINS = [0xf1c7a0, 0xd9a07a, 0xa9704a, 0xf5d2b5, 0x7a4a30, 0xe0b090, 0xc68a62];
@@ -153,7 +155,7 @@ export function crowdMesh(spots: Spot[], lookers: number, staff: number): Crowd 
     // builds: children to tall adults, slim to broad
     // (a woman or a man: the atlas' second body or the first; the crews mostly men)
     const woman = hash(k * 67 + 23) < (kind === 3 ? 0.15 : kind === 2 ? 0.33 : WOMEN);
-    tall[k] = (r3 < 0.08 ? 0.8 : 0.93 + r2 * 0.14) * (woman ? 0.95 : 1);
+    tall[k] = sp.dress === 'kid' ? 0.84 + r2 * 0.06 : (r3 < 0.08 ? 0.8 : 0.93 + r2 * 0.14) * (woman ? 0.95 : 1);
     seat.set([sp.x, sp.y, sp.z, sp.yaw], k * 4);
     // (and how much light reaches them: a neighbour's shadow, a coat's sheen)
     // (w: a spectator, who may take a photo; the staff never do)
@@ -161,8 +163,8 @@ export function crowdMesh(spots: Spot[], lookers: number, staff: number): Crowd 
     crossed[k] = kind < 2 && hash(k * 71 + 31) < CROSSED ? 1 : 0;
     state.setXYZW(k, 0, kind === 3 ? POSE.clap : crossed[k] ? POSE.crossed : POSE.seat, (r1 * 977.13 + k * 0.618) % 6.283, woman ? 1 : 0);
     const uni = kind === 2 ? OFFICIAL : kind === 3 ? CREW : null;
-    // (the photographers sit low behind the ends: crew too)
-    const crew = kind === 2 && sp.y < 0.4 ? CREW : uni;
+    // (the staff's own dress when the venue says; else the photographers sit low behind the ends: crew too)
+    const crew = sp.dress ? { official: OFFICIAL, crew: CREW, kid: KIDS }[sp.dress] : kind === 2 && sp.y < 0.4 ? CREW : uni;
     c.setHex(crew ? crew.shirt : pick(kind === 1 ? CLUB_SHIRTS : woman ? SHIRTS_W : SHIRTS, sp.v * 1.37 + r4)).toArray(shirt, k * 3);
     c.setHex(crew ? crew.pants : pick(PANTS, r2 + sp.v)).toArray(pants, k * 3);
     c.setHex(pick(SKINS, r3 * 1.7 + r1 * 0.3)).toArray(skin, k * 3);

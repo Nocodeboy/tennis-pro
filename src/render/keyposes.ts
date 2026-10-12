@@ -1,11 +1,13 @@
 // Key poses built in code and baked into the clips as they load (no new animation files, nothing more to do per frame).
-// The AI clips gave a ready stance like a waiter's (elbows at the sides, the paddle flat at the belly like a tray, the
-// free hand open beside it, standing tall), a free arm flung out to the side in the serve and the backhand, and one
-// drive for every forehand. Here the rig is posed on a copy of the model: an anatomical arm and leg (the elbow and the
-// knee bend about their own hinge, measured on the clips; the forearm takes the twist; the wrist within its limits),
-// placed by targets in the body's frame (the paddle face in front of the chest, the free hand at its throat, the feet
-// where the clip has them), and the result is written back as the clip. The rest of the game (the swing IK, the
-// blends, the feet) then works on these clips as before, at no cost per frame.
+// The AI clips gave a ready stance like a waiter's (elbows at the sides, the racket flat at the belly like a tray, the
+// free hand open beside it, standing tall), a free arm flung out to the side, and one drive for every forehand. Here the
+// rig is posed on a copy of the model: an anatomical arm and leg (the elbow and the knee bend about their own hinge,
+// measured on the clips; the forearm takes the twist; the wrist within its limits), placed by targets in the body's
+// frame (the racket in front of the chest, the free hand at its throat, the feet where the clip has them), and the
+// result is written back as the clip. The rest of the game (the swing IK, the blends, the feet) then works on these
+// clips as before, at no cost per frame. The tennis serve is built here too (SERVE): the legs and the trunk of the
+// overhead's motion capture, retimed, with the racket arm and the tossing arm on key poses. (The racket keeps the
+// padel paddle's names in the code: the paddle, its face.)
 //
 // The model faces +z, its right is −x; heights are for the 1.7 m model the clips are made on.
 
@@ -261,11 +263,11 @@ function orientHand(r: Rig, fore: string, hand: string, rest: THREE.Quaternion, 
   return r.quat(hand).angleTo(want);
 }
 
-/** the paddle in the right hand (from chars.ts: rotation and offset in the hand's frame, the offset in bone units) */
+/** the racket in the right hand (from chars.ts: rotation and offset in the hand's frame, the offset in bone units) */
 export interface Grip {
   rot: THREE.Quaternion;
   off: THREE.Vector3;
-  /** the middle of the face up the paddle (m) */
+  /** the sweet spot up the racket (m: gear.ts RACKET.face) */
   face: number;
 }
 
@@ -437,8 +439,8 @@ export const GUARD = {
   inward: 0.1,
   /** where the paddle elbow goes from the shoulder (m: right, up, forward) */
   elbow: [0.14, -0.45, 0.32],
-  /** the free palm from a point `up` the paddle (m) from its grip end (m: left, up, forward): at the face's edge */
-  up: 0.13,
+  /** the free palm from a point `up` the racket (m) from where the hand holds it (m: left, up, forward): on the throat */
+  up: 0.24,
   palm: [0.09, -0.02, -0.03],
 };
 /** the drive's finish: the paddle wrist from the chest (m: left, up, forward, in the chest's heading), the paddle's
@@ -478,7 +480,7 @@ export const REST = {
   back: 0.012,
   hip: 0.07,
   spine: 0.02,
-  guard: { ...GUARD, wrist: [0.12, -0.26, 0.18], tilt: 0.95, elbow: [0.12, -0.45, 0.05], up: 0.16, palm: [0.1, -0.03, -0.02], normal: [1, 0, 0.35] as [number, number, number] },
+  guard: { ...GUARD, wrist: [0.12, -0.26, 0.18], tilt: 0.95, elbow: [0.12, -0.45, 0.05], up: 0.26, palm: [0.1, -0.03, -0.02], normal: [1, 0, 0.35] as [number, number, number] },
 };
 
 function restArms(r: Rig, k: Kin, g = REST) {
@@ -486,33 +488,157 @@ function restArms(r: Rig, k: Kin, g = REST) {
 }
 
 /**
- * The server, before the wind-up: the ball held in the free hand in front of the body at the waist (the arm bent,
- * the palm up), the paddle down by the right side, its head low and its face to the net, ready to go back.
+ * The tennis serve, overhand (contrato: SERVE_WINDUP 1.05 s from the start of the wind-up to the contact, the contact
+ * at SERVE_HEIGHT 2.75 m, about 0.35 m inside the baseline and 0.25 m to the server's right). The clip is built on the
+ * overhead's motion capture (smash_mocap: side on, a knee bend, a jump into the hit, the trunk uncoiling through it, the
+ * landing), retimed by `remap` (serve time → capture time) so its contact falls `contact` s in: the clip plays at its own
+ * pace from the serveStart event. On top of it, `load` m more of a knee bend at the trophy (peak `loadT` s), and the arms
+ * on key poses (model space of the 1.7 m model: x to its left, y up, z forward; the wrist, the racket's head, its face
+ * and where the elbow goes from the shoulder):
+ *  · 0: side on behind the baseline, the racket in front pointing at the court, the ball in the left hand at its throat;
+ *  · down together, up together: the racket drops past the right leg and swings back and up, the tossing arm goes up
+ *    straight and lets the ball go at `release` s (head height, in front and a little to the right: the toss climbs
+ *    over the contact and falls onto the racket; view.ts draws it);
+ *  · the trophy: the racket up behind the head, the elbow at the shoulder, the left arm pointing at the ball, the knees
+ *    bent;
+ *  · the racket drop behind the back, then up edge first to the contact, the arm straight, high in front;
+ *  · the follow-through down across the body to the left side, the left arm tucked in, landing in the court.
  */
-/**
- * The serve: the free hand lets the ball go this long before the contact (s). It falls from the hand, bounces once
- * and is met on its way up at the contact height (view.ts draws that flight; match.ts, SERVE_WINDUP: the wind-up is
- * 0.87 s).
- */
-export const SERVE_DROP = 0.8;
-export const SERVE_SET = {
-  drop: 0.025,
-  back: 0.025,
-  hip: 0.17,
-  spine: 0.06,
-  /** the ball's palm and the paddle wrist from the chest bone (m: right, up, forward) */
-  palm: [0.0, -0.3, 0.27],
-  wrist: [0.24, -0.35, 0.08],
+export const SERVE_CLIP = {
+  contact: 1.05,
+  duration: 2.0,
+  remap: [
+    [0, 0.7],
+    [0.4, 1.0],
+    [0.66, 1.15],
+    [0.86, 1.38],
+    [1.05, 1.56],
+    [1.25, 1.72],
+    [2.0, 2.5],
+  ] as [number, number][],
+  load: 0.075,
+  loadT: 0.68,
+  /**
+   * the legs: the capture's stance at `stance` s (side on, both feet down: a platform stance) under the turning hips,
+   * the whole serve (the capture steps into its overhead with a kick of the left leg just where the serve's trophy is);
+   * the jump is the character's (chars.ts SERVE_JUMP), the feet free in the air
+   */
+  stance: 0.9,
+  /**
+   * into the ball: the trunk leans `fwd` rad towards the court and tips `tilt` rad to the left (the hitting shoulder
+   * up, over the other), peaking at `leanT` s over `leanW` s (the overhead's capture arches back at its contact: a serve
+   * reaches up and forward through the ball)
+   */
+  fwd: 0.42,
+  tilt: 0.3,
+  leanT: 1.05,
+  leanW: 0.17,
 };
+/** the serve's toss: the ball leaves the free hand this far into the serve's clip (s) */
+export const SERVE_TOSS = { release: 0.38 };
+type ArmKey = { t: number; wrist: [number, number, number]; axis: [number, number, number]; normal: [number, number, number]; pole: [number, number, number] };
+/** the racket arm through the serve (see SERVE_CLIP): the wrist, the racket's axis and face, the elbow from the shoulder */
+const SERVE_ARM: ArmKey[] = [
+  { t: 0, wrist: [-0.3, 1.0, 0.05], axis: [0.35, 0.25, 1], normal: [-1, 0, 0.2], pole: [-0.2, -0.4, -0.05] },
+  { t: 0.16, wrist: [-0.3, 0.82, 0.12], axis: [-0.15, -0.9, 0.4], normal: [-1, 0, 0], pole: [-0.2, -0.45, 0.05] },
+  { t: 0.34, wrist: [-0.36, 0.95, -0.3], axis: [-0.1, -0.35, -1], normal: [-1, 0, 0], pole: [-0.25, -0.4, -0.05] },
+  { t: 0.52, wrist: [-0.4, 1.32, -0.35], axis: [-0.15, 0.7, -0.7], normal: [-1, 0, 0], pole: [-0.4, -0.15, -0.15] },
+  { t: 0.68, wrist: [-0.36, 1.5, -0.22], axis: [0.0, 1, -0.2], normal: [-1, 0, 0.1], pole: [-0.42, 0.0, -0.1] },
+  { t: 0.88, wrist: [-0.22, 1.6, -0.12], axis: [0.15, -0.95, -0.3], normal: [0, 0, -1], pole: [-0.3, 0.35, 0.12] },
+  { t: 0.98, wrist: [-0.2, 1.9, 0.12], axis: [-0.05, 0.6, -0.8], normal: [-1, 0, 0], pole: [-0.25, 0.45, 0.1] },
+  { t: 1.05, wrist: [-0.18, 2.04, 0.24], axis: [-0.12, 0.85, 0.5], normal: [0, -0.4, 1], pole: [-0.35, 0.15, 0] },
+  { t: 1.2, wrist: [0.12, 1.32, 0.45], axis: [0.55, -0.5, 0.65], normal: [-0.3, 0, 1], pole: [-0.2, -0.1, 0.3] },
+  { t: 1.45, wrist: [0.3, 0.95, 0.15], axis: [0.25, -0.85, -0.45], normal: [0, 0, 1], pole: [-0.1, -0.4, 0.2] },
+  { t: 2.0, wrist: [-0.22, 1.0, 0.2], axis: [0.2, 0.5, 0.85], normal: [-1, 0, 0.2], pole: [-0.2, -0.4, 0] },
+];
+/** the tossing arm through the serve: the palm (model space), the elbow from the shoulder */
+const SERVE_FREE: { t: number; palm: [number, number, number] | null; pole: [number, number, number] }[] = [
+  // (null: on the racket's throat, holding the ball against it)
+  { t: 0, palm: null, pole: [0.3, -0.4, 0.05] },
+  { t: 0.08, palm: null, pole: [0.3, -0.4, 0.05] },
+  { t: 0.2, palm: [-0.05, 0.98, 0.32], pole: [0.3, -0.35, 0.05] },
+  { t: SERVE_TOSS.release, palm: [-0.08, 1.74, 0.36], pole: [0.35, -0.1, 0.1] },
+  { t: 0.7, palm: [-0.06, 1.86, 0.32], pole: [0.35, -0.05, 0.1] },
+  { t: 0.92, palm: [0.12, 1.3, 0.28], pole: [0.3, -0.35, 0.1] },
+  { t: 1.08, palm: [0.2, 1.08, 0.14], pole: [0.3, -0.45, 0] },
+  { t: 1.45, palm: [0.22, 0.98, 0.12], pole: [0.3, -0.45, 0] },
+  { t: 2.0, palm: [0.12, 1.0, 0.28], pole: [0.3, -0.45, 0] },
+];
+/** serve time → the overhead capture's time (SERVE_CLIP.remap: piecewise linear) */
+function serveRemap(t: number): number {
+  const K = SERVE_CLIP.remap;
+  let i = 0;
+  while (i < K.length - 2 && t > K[i + 1][0]) i++;
+  const [a0, b0] = K[i];
+  const [a1, b1] = K[i + 1];
+  return b0 + ((b1 - b0) * clamp((t - a0) / (a1 - a0), 0, 1));
+}
+/** Catmull-Rom through the keys' values at t (eased ends: the keys hold their place at the first and the last) */
+function along<T extends { t: number }>(keys: T[], t: number, get: (k: T) => number[]): THREE.Vector3 {
+  let i = 0;
+  while (i < keys.length - 2 && t > keys[i + 1].t) i++;
+  const k1 = keys[i];
+  const k2 = keys[i + 1];
+  const k0 = keys[Math.max(0, i - 1)];
+  const k3 = keys[Math.min(keys.length - 1, i + 2)];
+  const f = clamp((t - k1.t) / (k2.t - k1.t), 0, 1);
+  const f2 = f * f;
+  const f3 = f2 * f;
+  const o = v3();
+  const p0 = get(k0);
+  const p1 = get(k1);
+  const p2 = get(k2);
+  const p3 = get(k3);
+  const cr = (a: number, b: number, c: number, d: number) => 0.5 * (2 * b + (-a + c) * f + (2 * a - 5 * b + 4 * c - d) * f2 + (-a + 3 * b - 3 * c + d) * f3);
+  o.set(cr(p0[0], p1[0], p2[0], p3[0]), cr(p0[1], p1[1], p2[1], p3[1]), cr(p0[2], p1[2], p2[2], p3[2]));
+  return o;
+}
 
-function serveSetArms(r: Rig, k: Kin, g = SERVE_SET) {
-  const c = chestAt(r);
-  const shL = r.pos('LeftArm');
-  const palm = c.clone().add(v3(-g.palm[0], g.palm[1], g.palm[2]));
-  freeHand(r, k, palm, shL.clone().add(v3(0.25, -0.45, 0.05)), palm.clone().add(v3(-0.1, 0.02, 0.3)), 0.5);
-  const wrist = c.clone().add(v3(-g.wrist[0], g.wrist[1], g.wrist[2]));
-  const sh = r.pos('RightArm');
-  holdPaddle(r, k, { wrist }, v3(-0.12, -0.9, 0.38), v3(0, 0, 1), sh.clone().add(v3(-0.25, -0.35, -0.1)));
+const LEGS = ['LeftUpLeg', 'LeftLeg', 'LeftFoot', 'LeftToeBase', 'RightUpLeg', 'RightLeg', 'RightFoot', 'RightToeBase'];
+/** The serve at time t (see SERVE_CLIP) posed on the rig: the capture's trunk, its stance, the load, the two arms. */
+function servePose(r: Rig, k: Kin, smash: THREE.AnimationClip, t: number) {
+  const S = SERVE_CLIP;
+  // the legs (and the hips' height) of the stance, under the hips' turn of the moment
+  r.pose(smash, S.stance);
+  const legs = LEGS.map((n) => r.B[n]?.quaternion.clone());
+  const hipsP = r.B.Hips.position.clone();
+  r.pose(smash, serveRemap(t));
+  LEGS.forEach((n, i) => legs[i] && r.B[n].quaternion.copy(legs[i]!));
+  r.B.Hips.position.copy(hipsP);
+  r.obj.updateMatrixWorld(true);
+  const load = S.load * Math.exp(-(((t - S.loadT) / 0.16) ** 2));
+  if (load > 1e-3) crouch(r, k, load, 0, 0, 0, 0);
+  // into the ball: the trunk forward and the hitting shoulder up (about the model's axes, spread over the spine)
+  const lean = Math.exp(-(((t - S.leanT) / S.leanW) ** 2));
+  if (lean > 1e-3) {
+    const q = new THREE.Quaternion().setFromAxisAngle(X, S.fwd * lean).multiply(new THREE.Quaternion().setFromAxisAngle(v3(0, 0, 1), S.tilt * lean));
+    const half = new THREE.Quaternion().slerp(q, 0.5);
+    r.turn(r.B.Spine02, half);
+    r.turn(r.B.Spine01, half);
+    // (the head kept looking up at the ball: the neck takes back some of the lean)
+    r.turn(r.B.neck, new THREE.Quaternion().setFromAxisAngle(X, -0.5 * S.fwd * lean));
+  }
+  // the racket arm
+  const wrist = along(SERVE_ARM, t, (q) => q.wrist);
+  const axis = along(SERVE_ARM, t, (q) => q.axis).normalize();
+  const normal = along(SERVE_ARM, t, (q) => q.normal).normalize();
+  const pole = along(SERVE_ARM, t, (q) => q.pole).add(r.pos('RightArm'));
+  holdPaddle(r, k, { wrist }, axis, normal, pole);
+  // the tossing arm (on the racket's throat at first)
+  let i = 0;
+  while (i < SERVE_FREE.length - 2 && t > SERVE_FREE[i + 1].t) i++;
+  const a = SERVE_FREE[i];
+  const b = SERVE_FREE[i + 1];
+  const u = smooth(a.t, b.t, t);
+  const P = paddleNow(r, k);
+  const throat = P.grip.clone().addScaledVector(P.axis, 0.26).add(v3(0.03, 0.02, -0.01));
+  const pa = a.palm ? v3(...a.palm) : throat;
+  const pb = b.palm ? v3(...b.palm) : throat;
+  const palm = pa.lerp(pb, u);
+  const pl = v3(...a.pole).lerp(v3(...b.pole), u).add(r.pos('LeftArm'));
+  // (the fingers up round the ball as it goes up, and pointing at it in the trophy)
+  const up = t > 0.2 && t < 0.95 ? palm.clone().add(v3(0, 1, 0.1)) : undefined;
+  freeHand(r, k, palm, pl, up, 0.55);
 }
 
 const ARM_R = ['RightArm', 'RightForeArm', 'RightHand'];
@@ -627,25 +753,23 @@ const FREE: Record<string, FreeKey[]> = {
 };
 
 /**
- * The paddle's face at the contact of each swing (s into the clip, rad tipped up from facing straight ahead): the
+ * The racket's face at the contact of each swing (s into the clip, rad tipped up from facing straight ahead): the
  * clips met the ball with the face 68° off where the ball goes (80° in the drive: nearly edge-on). Around the contact
- * the paddle is turned about itself (the forearm and the wrist) to face forward: open for a dink, a little for drives
- * and volleys, closed for a smash and more for a bajada. (Not the lunges: at full stretch the paddle in line with the arm reaches furthest,
- * and turned it missed the ball by 10–30 cm. Nor the serve: its paddle points ahead at the contact, the head under
- * the wrist as the rules want, and no turn about itself brings its face round.)
+ * the racket is turned about itself (the forearm and the wrist) to face forward: square for the topspin drives (the
+ * low-to-high path gives the spin), a little open for the volleys, open for a dink and for the slices (high to low:
+ * the backspin), closed a touch for the smash and the serve (down into the court). (Not the lunges: at full stretch the
+ * racket in line with the arm reaches furthest, and turned it missed the ball by 10–30 cm.)
  */
 const FACE: Record<string, { k: number; tilt: number }> = {
-  drive: { k: 0.46, tilt: 0.1 },
-  volley: { k: 0.46, tilt: 0.12 },
-  backhand: { k: 0.95, tilt: 0.12 },
+  drive: { k: 0.46, tilt: 0.02 },
+  volley: { k: 0.46, tilt: 0.15 },
+  backhand: { k: 0.95, tilt: 0.02 },
   dink: { k: 1.58, tilt: 0.55 },
   smash: { k: 0.9, tilt: -0.2 },
-  // (the bajadas: the face closed over a ball hit down)
-  bajada: { k: 0.9, tilt: -0.3 },
-  // (the serve from video only: its hand left the face edge-on to the ball, 82° off where it goes; low to high over
-  // the net)
-  serve: { k: 0.87, tilt: 0.15 },
-  bajada_l: { k: 0.95, tilt: -0.25 },
+  serve: { k: SERVE_CLIP.contact, tilt: -0.12 },
+  slice: { k: 0.46, tilt: 0.5 },
+  slice_l: { k: 0.95, tilt: 0.5 },
+  volley_l: { k: 0.95, tilt: 0.2 },
 };
 /** how much of the turn, and over how long round the contact it comes in (s: all of it within `near`) */
 const FACE_K = 0.9;
@@ -825,9 +949,7 @@ export function refineClips(template: THREE.Object3D, clips: Record<string, THRE
   lap('run');
   // the free arm through each swing (see FREE)
   // (not the swings from motion capture: their free arm is a real player's, see `mocap`)
-  // (the bajadas on the overhead's and the backhand's clips: their free arm)
-  const free: Record<string, FreeKey[]> = { ...FREE, bajada: FREE.smash, bajada_l: FREE.backhand };
-  for (const [n, keys] of Object.entries(free)) {
+  for (const [n, keys] of Object.entries(FREE)) {
     const c = clips[n];
     if (!c || n in mocap) continue;
     const times = timesOf(c.duration, 20);
@@ -900,61 +1022,33 @@ export function refineClips(template: THREE.Object3D, clips: Record<string, THRE
     );
   }
   lap('drive+volley');
-  const serve = clips.serve;
-  if (serve) {
-    // the server waiting: the serve's first pose, the ball held in front, the paddle down by the side (the clip's
-    // own life is the waiting stance's: see IDLE in chars.ts)
-    const set = () => {
-      crouch(r, kin, SERVE_SET.drop, SERVE_SET.back, SERVE_SET.hip, SERVE_SET.spine, 0);
-      serveSetArms(r, kin);
-    };
-    clips.serveset = r.bake(
-      'serveset',
-      [0, 1],
-      [0, 1].map(() => {
-        r.pose(serve, 0);
-        set();
-        return r.grab();
-      }),
-    );
-    // the padel serve from there: the free hand lets the ball go as the paddle starts back (SERVE_DROP before the
-    // contact: it bounces once and is met on the way up, below the waist), then the free arm stays in front of the
-    // body and comes in after the contact (the clip flung it out to the side, the ball held at shoulder height)
-    const K = 0.87;
-    const drop = Math.max(0.02, K - SERVE_DROP);
-    const times = timesOf(serve.duration);
-    const P = SERVE_SET.palm;
-    const keys: FreeKey[] = [
-      { t: 0, p: [-P[0], P[1], P[2]], pole: [0.25, -0.45, 0.05] },
-      { t: drop, p: [-P[0] + 0.02, P[1] + 0.01, P[2] - 0.02], pole: [0.25, -0.45, 0.05] },
-      { t: K - 0.1, p: [0.16, -0.2, 0.3], pole: [0.3, -0.4, 0] },
-      { t: K + 0.25, p: [0.18, -0.24, 0.2], pole: [0.3, -0.45, -0.05] },
-      { t: K + 0.7, p: [0.16, -0.32, 0.18], pole: [0.3, -0.45, 0] },
-    ];
+  const smash = clips.serve;
+  if (smash) {
+    // the tennis serve (SERVE_CLIP), built on the overhead's capture (CLIP_FILES.serve is smash_mocap)
+    const times = timesOf(SERVE_CLIP.duration, 30);
     clips.serve = r.bake(
       'serve',
       times,
       times.map((t) => {
-        r.pose(serve, t);
-        const w = 1 - smooth(0.05, 0.5, t);
-        const c = 1 - smooth(0.3, K, t);
-        crouch(r, kin, SERVE_SET.drop * c, SERVE_SET.back * c, SERVE_SET.hip * c, SERVE_SET.spine * c, 0);
-        const clipR2 = armNow(r, ARM_R);
-        if (w > 0) {
-          serveSetArms(r, kin);
-          armMix(r, ARM_R, clipR2, armNow(r, ARM_R), w);
-        }
-        freeAlong(r, kin, keys, t);
+        servePose(r, kin, smash, t);
+        return r.grab();
+      }),
+    );
+    // the server waiting for his wind-up: the serve's first pose, held (its life is the waiting stance's: IDLE in chars.ts)
+    clips.serveset = r.bake(
+      'serveset',
+      [0, 1],
+      [0, 1].map(() => {
+        servePose(r, kin, smash, 0);
         return r.grab();
       }),
     );
   }
   lap('serve');
-  // last, the paddle's face at each swing's contact (see FACE)
-  // (the serve only from video: ?video=off plays the Meshy one as before)
-  for (const n of Object.keys(FACE)) if (clips[n] && (n !== 'serve' || n in mocap)) clips[n] = faceForward(r, kin, clips[n], n, mocap[n]);
+  // last, the racket's face at each swing's contact (see FACE)
+  for (const n of Object.keys(FACE)) if (clips[n]) clips[n] = faceForward(r, kin, clips[n], n, mocap[n]);
   lap('face');
 }
 
 /** for the tools: the rig's measures */
-export const _test = { Rig, hingesOf, limb, orientHand, paddleNow, guardArms, crouch };
+export const _test = { Rig, hingesOf, limb, orientHand, paddleNow, guardArms, crouch, servePose, serveRemap };

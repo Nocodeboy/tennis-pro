@@ -1,8 +1,9 @@
-// The stadium round the centre court (a padel cage, 20 × 10 m, and its surround): a bowl of stands on all four sides (a rounded rectangle, every row an offset of
-// the one below it), a lower tier of eleven rows close to the court, a cross aisle and the hospitality boxes behind
-// glass, an upper tier of ten steeper rows under a roof canopy, the floodlights in a ring along the canopy's edge and
-// two video boards hanging from it at the ends. The gameplay camera hangs high over the near end's lower tier (those
-// rows are always under the bottom of its frame).
+// The stadium round the centre court (a tennis court, 23.77 × 10.97 m, and its run-off up to the boards: court.ts
+// BOARDS): a bowl of stands on all four sides (a rounded rectangle, every row an offset of the one below it), its front
+// wall the boards with their LED ribbon, a lower tier of eleven rows close to the court, a cross aisle and the
+// hospitality boxes behind glass, an upper tier of ten steeper rows under a roof canopy, the floodlights in a ring along
+// the canopy's edge and two video boards hanging from it at the ends. The gameplay camera hangs high over the near
+// end's lower tier, in front of the near video board (those rows are always under the bottom of its frame).
 //
 // Built for a phone: the concrete, the seats, the roof, the steel and the props are one mesh with one material
 // (vertex colours, and roughness, metalness and how far the court's light reaches in a vertex attribute), so the
@@ -10,14 +11,16 @@
 // crowd (crowd.ts).
 
 import * as THREE from 'three';
+import { BOARDS } from '../sim/court';
 import { EmissiveBuilder, LED, LED_ASPECT } from './led';
 
 /**
- * the bowl's inner edge (the front wall of the lower tier): half sizes and the corner radius. Round the cage (±5 ×
- * ±10 m): the LED boards, the umpire's chair and the benches along the sides, the boards and the cameras behind the
- * far end; about 2.5 m clear behind them
+ * the bowl's inner edge (the front wall of the lower tier, the boards with their LED ribbon): half sizes and the corner
+ * radius. The run-off of a tour court inside it (court.ts BOARDS: 6.40 m behind the baselines, 3.66 m outside the
+ * doubles sidelines): the umpire's chair and the players' chairs along one side, the cameras and the photographers in
+ * the corners (a small radius: they stand there)
  */
-export const BOWL = { ax: 9.9, az: 14.8, rc: 4.5 };
+export const BOWL = { ax: BOARDS.x, az: BOARDS.z, rc: 2.5 };
 
 /** the lower tier: rows (depth, rise), the front wall's height */
 const LO = { rows: 11, depth: 0.85, rise: 0.42, y0: 1.1 };
@@ -242,6 +245,8 @@ export interface Spot {
   v: number;
   /** 0 a spectator, 1 the club seats, 2 staff sitting, 3 staff standing */
   kind?: number;
+  /** the staff's dress: an official (the umpire, the line judges), a crew (cameras, photographers), a ball kid */
+  dress?: 'official' | 'crew' | 'kid';
 }
 export interface Stadium {
   /** each spectator's seat, the low ones first */

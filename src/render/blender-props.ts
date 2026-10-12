@@ -1,6 +1,7 @@
 // The court's furniture modelled in Blender (art/blender/props.py): the umpire's high chair, the players' benches with
-// their towel, bottles and bag, the TV cameras on their tripods, the photographers' stools and the padel net posts
-// with their winder. Each comes as one compact block of assets/props/props.bin (where each is: blender-props-data.ts):
+// their towel, bottles and bag, the TV cameras on their tripods and the stools (the photographers' and, on the tennis
+// court, the line judges'). The padel net posts with their winder are still in the file, unused: the tennis posts are
+// drawn in venue.ts. Each comes as one compact block of assets/props/props.bin (where each is: blender-props-data.ts):
 // per vertex its position (mm), its normal, its material and the ambient occlusion baked in Blender. Fetched next to
 // the page like the animations and decoded once; every copy goes into the venue's furniture mesh (one draw call for
 // all of it, as before) with its colour already darkened by the baked occlusion.
