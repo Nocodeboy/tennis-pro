@@ -189,6 +189,46 @@ export function shotByClearance(from: Vec3, tx: number, tz: number, clear: numbe
   return done(b);
 }
 
+/**
+ * Height of the ball where its flight from `from` with velocity `v` crosses the plane z = `zp` (null: it never does,
+ * or it is down before it gets there).
+ */
+export function heightAtPlane(from: Vec3, v: Vec3, k: number, g: number, zp: number): number | null {
+  const s: Seg = { t0: 0, x: from.x, y: from.y, z: from.z, vx: v.x, vy: v.y, vz: v.z, k, g, spin: 0 };
+  if (v.z === 0 || Math.sign(zp - from.z) !== Math.sign(v.z)) return null;
+  const u = 1 + (k * (from.z - zp)) / v.z; // e^(−k·dt) where it crosses
+  if (u <= 0) return null;
+  const y = posAt(s, -Math.log(u) / k).y;
+  return y < R ? null : y;
+}
+
+/**
+ * The lob over a player (the studio's pickleball 0.11, docs/notas-04-simulacion.md): the height over the net tape of
+ * the arc from `from` that lands at (tx, tz) and passes the plane z = `zp` `h` m above the floor, with `spin`. The
+ * higher it must go there, the longer it hangs (minT … maxT caps it); null if the plane is not between the contact and
+ * the landing. A height over the tape, so the lob is played as any other shot (ShotSpec.clear, Match.launch).
+ */
+export function clearOver(from: Vec3, tx: number, tz: number, zp: number, h: number, spin: number, minT = 0.8, maxT = 3.6): number | null {
+  if (Math.sign(zp) === Math.sign(from.z) || Math.abs(zp) >= Math.abs(tz) - 0.2) return null;
+  const g = gravityFor(spin);
+  const at = (T: number) => {
+    const l = launchFor(from, tx, tz, T, g);
+    return { l, y: heightAtPlane(from, l.v, l.k, g, zp) ?? 0 };
+  };
+  let a = minT;
+  let b = maxT;
+  if (at(a).y >= h) b = a;
+  else if (at(b).y < h) a = b;
+  else
+    for (let i = 0; i < 24; i++) {
+      const m = (a + b) / 2;
+      if (at(m).y >= h) b = m;
+      else a = m;
+    }
+  const { l } = at(b);
+  return clearanceFor(from, l.v, l.k, g);
+}
+
 /** Fastest sensible flight time over a horizontal distance (≈ 19 m/s average, about 25 off the paddle at most). */
 export function minFlight(d: number): number {
   return Math.max(0.3, d / 19);

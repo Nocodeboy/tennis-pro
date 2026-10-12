@@ -66,7 +66,7 @@ export const LAG = { touch: 0.04, other: 0.025 };
  * 40–120 px in 40–120 ms (about 1,000–1,800 px/s at its peak). Gesture libraries call a swipe from about 300 px/s
  * (Hammer.js: 0.3 px/ms over 10 px), too low here: a quick aim across the screen reaches that.
  */
-export const FLICK = { speed: 720, window: 0.08, peak: 0.035, lift: 0.04, travel: 18, cone: 55, wideCone: 72, downCone: 45, full: 1700 };
+export const FLICK = { speed: 720, window: 0.08, peak: 0.035, lift: 0.04, gap: 0.03, travel: 18, cone: 55, wideCone: 72, downCone: 45, full: 1700 };
 /**
  * The power of a release from the speed of the finger as it lifts (px/s on a 390 px phone; a flick's peak, FLICK): up
  * to `still` it is a placed ball (`placed`), up to `plain` it rises to 0.5 (a plain release, the finger still moving),
@@ -397,7 +397,9 @@ export class Input {
     }
     // (a stroke shorter than FLICK.peak: its peak over its own length)
     if (onMove && si < li && tr[li].t - tr[si].t < FLICK.peak) speed = Math.max(speed, peakOf(Math.max(1 / 120, tr[li].t - tr[si].t)));
-    const s0 = tr[si];
+    // (a finger held still sends no moves: the slow stretch before the stroke is then one long gap, and the stroke
+    // started where the finger was before it, not at the first sample of the stroke)
+    const s0 = si > 0 && tr[si].t - tr[si - 1].t > FLICK.gap ? tr[si - 1] : tr[si];
     const s1 = tr[li];
     const mx = s1.x - s0.x;
     const my = s1.y - s0.y;

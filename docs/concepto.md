@@ -130,3 +130,35 @@ Germán: el pádel también es propio del estudio; probar un modelo masculino de
   - en la cámara de juego apenas se nota.
 - **Coste:** 589 KB y unos 11 MB de textura por persona; 4.803 vértices frente a 12.452.
 - **Siguiente paso propuesto:** probar un candidato con camiseta y vaqueros pintados como pantalón corto (09, 11, 16 o 20) y engordar algo brazos y piernas en `persona.py` antes de rehacer a todos.
+
+## 0.4 (12 oct): auditoría de jugabilidad y simulación
+
+Germán: «una pasada de audit al juego para mejorar su jugabilidad y experiencia de simulación» (los modelos y las animaciones los investiga aparte). Dos revisores independientes (`auditoria-04-simulacion.md`, `auditoria-04-jugabilidad.md`, sondas en `tools/audit/`) y dos rondas de arreglos (`notas-04-simulacion.md`, `notas-04-interfaz.md`).
+
+| Medida | 0.3 | 0.4 |
+|---|---|---|
+| Latigazo de 40–60 px | soltar normal | ataque (0,71) |
+| Latigazo para el por 3 | 106 px o más | unos 75–80 px en 50 ms |
+| Ataque apuntado | adonde acaba el latigazo | adonde apuntabas antes |
+| Atributo +20 (puntos ganados; 48 % sin cambios) | pot 48, vel 48, rem 47, par 51, tq 50 | pot 54, con 60, vel 54, ref 65, rem 59, par 52, tq 56 |
+| Puntos que acaban en el cristal sin botar | 33,5 % | 10,7 % |
+| Pico del globo | 3,8 m | 5,5–5,8 m |
+| Globo bueno que obliga a bajar | 3 % | 40–42 % |
+| Golpes con las dos parejas en la red | 19–22 % | 8,7 % |
+| Restos de globo | 35 % | 15 % |
+| Bola que atraviesa a un jugador | 0,61 por punto | 0,05 (y si llega al cuerpo, bloqueo de reflejo) |
+| Bandeja a 1,5 m del cristal | 1,18 m de alto | 0,46 m |
+| Bueno contra los campeones | 25 % | 33–38 % |
+| Jugadores cortados en vertical | 24 % de los fotogramas | 1–3 % |
+
+- **Cámara e interfaz:**
+  - en vertical, la pista sube para que tu jugador y el aro queden por encima del pulgar, con una copia pequeña del aro junto a la etiqueta del golpe;
+  - en horizontal, la cámara se acerca;
+  - un abanico enseña los remates posibles con la bola alta y su nombre sale tras golpear;
+  - las pistas van en cola, cada una al menos 2,5 s;
+  - el cartel dice de quién es el punto, el joystick es discreto y hay punto nuevo «le dio en el cuerpo».
+- **Pendiente:**
+  - la pareja de la red gana el 60–63 % (en el pro, aproximadamente el 65–75 %);
+  - con el bot humano, las dos parejas en la red siguen siendo el 15 % de los golpes;
+  - algún desequilibrio entre atributos (reflejos pesa más);
+  - probar en el móvil la curva de potencia y el hueco bajo la pista en vertical.

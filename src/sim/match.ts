@@ -14,7 +14,7 @@
 
 import { bounce, groundTime, minFlight, netTime, nextEvent, posAt, seg, shotByClearance, velAt, wallBounce, wallTime, type Seg, type Vec3, type WallHit } from './ball';
 import { AT_NET, DEPTH_Z, HL, NET_C, R, SERVICE, W, backSurface, inHalf, inServiceCourt, netHeight, serveOutBy, sideSurface, type Side, type Surface } from './court';
-import { BAJADA, POR, POWER } from './brain';
+import { BAJADA, POR, POWER, Q_FLOOR, blockShot } from './brain';
 import { Rng } from './rng';
 import type { MatchEvent, Plan, Player, PointReason, Rules, ServeFault, ShotKind, ShotSpec, Timing } from './types';
 import type { Attributes } from './attributes';
@@ -85,7 +85,7 @@ export interface Controller {
  * víbora is met at 2.3–2.6 m in real padel, not at the top of the jump. A ball come back off the back glass is never
  * met above `fromBehind` m: it comes from behind the player, over his head.
  */
-export const OVERHEAD = { ideal: 2.5, k: 0.8, fromBehind: 2.2, keep: 1.3 };
+export const OVERHEAD = { ideal: 2.5, k: 0.8, fromBehind: 2.2, keep: 1.3, keepTo: 6.8, deep: 0.5 };
 /**
  * The ball and the players' bodies (FIP: a live ball that touches a player is the point of the other team).
  *  · `r`, `lo`, `hi`: the body, a cylinder of radius r (m) from lo to hi (m) around the player's axis (`rLegs` below
@@ -97,11 +97,15 @@ export const OVERHEAD = { ideal: 2.5, k: 0.8, fromBehind: 2.2, keep: 1.3 };
  *  · A CPU player cannot plan a contact before his reaction, except a reflex block of a ball right at the body (feet
  *    within `reflex` m of where he is) from `reflexAt` × his reaction (and he can step aside from then on): the hard
  *    ball at the body is then blocked (or he is beaten by it, brain.ts WHIFF), not let through into him.
+ *  · A ball that would touch a player (human or CPU) `block` s or more after the other side's contact is met with a
+ *    reflex block instead (Match.reflexBlock: timing 'auto', intent 'block'), of quality `blockQ` [at `block` s, per s
+ *    more, at most]: only the truly unplayable ones (very fast, very close, no time) are body points.
  *  · The rule (Match.bodyHit): the ball touching a receiving player is the hitter's point (PointReason 'body'), except
  *    at his own contact (within `contact` s of it: the paddle is there), a ball he reached for and missed (it went past
- *    the paddle) and, after the bounce, the human's player (his feet are his thumb's; nobody steps him aside).
+ *    the paddle), a ball on its way to the glass he is waiting to play off it, and, after the bounce, the human's player
+ *    (his feet are his thumb's; nobody steps him aside).
  */
-export const BODY = { r: 0.2, legs: 0.7, rLegs: 0.14, lo: 0.12, hi: 1.75, clear: 0.42, plan: 1.5, near: 0.32, step: 0.6, look: 0.6, before: 0.3, contact: 0.12, reflexAt: 0.5, reflex: 0.6 };
+export const BODY = { r: 0.2, legs: 0.7, rLegs: 0.14, lo: 0.12, hi: 1.75, clear: 0.42, plan: 1.5, near: 0.32, step: 0.6, look: 0.6, before: 0.3, contact: 0.12, reflexAt: 0.5, reflex: 0.6, block: 0.14, blockQ: [0.45, 1.0, 0.7] as [number, number, number] };
 
 export interface Mover {
   /** 0 … 1: how readily they move up to the net */
@@ -336,6 +340,19 @@ export const CPU_LUNGE = { time: 0.25, min: 0 };
  * without this they went for the earliest volley at full stretch and missed one in eleven balls.
  */
 export const PLAN_SPARE = { want: 0.2, cost: 4 };
+/**
+ * Going back for a lob costs (the studio's pickleball 0.11): chasing a lob that has gone over him, a player backpedals,
+ * or turns and runs and turns back, both slower than running forwards or across, so the part of his speed that takes
+ * him away from the net is at most `k` × his top speed (the human's too). The planners (the CPU's contacts, the circle,
+ * the doubles conventions) count it (runLen). Only while the other side's lob is in the air. Before 0.4 a player at
+ * the net ran back as fast as forwards and played nearly every lob in the air.
+ */
+export const BACK = { k: 0.72 };
+/** The run (m at top speed) a move of (dx, dz) is worth for a player on `side` who goes back at `k` of his speed. */
+export function runLen(dx: number, dz: number, side: number, k = BACK.k): number {
+  const d = Math.hypot(dx, dz);
+  return k >= 1 ? d : Math.max(d, Math.max(0, dz * side) / k);
+}
 function lungeAt(lunge: number, dt: number): number {
   if (CPU_LUNGE.time <= 0) return lunge;
   return lunge * Math.max(0, Math.min(1, CPU_LUNGE.min + ((1 - CPU_LUNGE.min) * dt) / CPU_LUNGE.time));
@@ -758,7 +775,8 @@ export class Match {
       // the ball into a player's body (BODY), before anything else on this stretch
       const bh = this.bodyHit(Math.max(this.t, r.seg.t0), Math.min(te, t1));
       if (bh) {
-        this.onBody(bh.p, bh.t);
+        // with any time for it, the paddle gets in the way (a reflex block); only an unplayable one is a body point
+        if (!this.reflexBlock(bh.p, bh.t)) this.onBody(bh.p, bh.t);
         continue;
       }
       if (te > t1 || kind === null) return;
@@ -772,6 +790,27 @@ export class Match {
   /** the other team */
   private other(team: 0 | 1): 0 | 1 {
     return team === 0 ? 1 : 0;
+  }
+
+  /**
+   * A ball coming into the body of `p` (human or CPU) with time for a reflex (BODY.block s or more since the other
+   * side's contact): the paddle gets in the way, a block of the quality the time allows (BODY.blockQ: a poor one is a
+   * soft ball that sits up), as the automatic shot (timing 'auto', intent 'block'). false: no time, or the return of
+   * serve before its bounce (it must bounce): the ball touches him.
+   */
+  private reflexBlock(p: Player, t: number): boolean {
+    const r = this.rally!;
+    const lh = r.last?.lastHit;
+    if (!lh || t - lh.t < BODY.block || (r.shots === 1 && r.bounces === 0)) return false;
+    const bp = posAt(r.seg, t);
+    const plan: Plan = { t, bx: bp.x, by: bp.y, bz: bp.z, fx: p.x, fz: p.z, volley: r.bounces === 0, overhead: bp.y > 1.75, hand: 1, reach: true, oops: false };
+    const q = Math.max(Q_FLOOR, Math.min(BODY.blockQ[2], BODY.blockQ[0] + (t - lh.t - BODY.block) * BODY.blockQ[1]));
+    const spec: ShotSpec = { ...blockShot(this, p, plan), q, timing: 'auto', late: 0, intent: 'block', power: 0.3 };
+    p.plan = null;
+    p.lastHit = { t, kind: spec.kind, hand: 1, overhead: plan.overhead, timing: 'auto' };
+    this.t = t;
+    this.launch(p, bp, spec, plan.volley, 0);
+    return true;
   }
 
   /** The ball touches `p` (a receiving player): the point is the hitter's (FIP), and the ball drops off him. */
@@ -1206,7 +1245,8 @@ export class Match {
     // they are
     else if (k === 'lob') p.depth = atNet ? 2 : oppNet && spec.q > 0.6 && rng.chance(0.35 + 0.55 * mv.netRush) ? 2 : 0;
     // a chiquita (or a dejada) from the back: in behind it
-    else if (k === 'dink' || k === 'drop') p.depth = atNet || rng.chance(0.35 + 0.6 * mv.netRush) ? 2 : 0;
+    // (a good one: a poor chiquita is volleyed back at their feet)
+    else if (k === 'dink' || k === 'drop') p.depth = atNet || (spec.q > 0.75 && rng.chance(0.25 + 0.5 * mv.netRush)) ? 2 : 0;
     // overheads and volleys keep the net (a bandeja from deep is played to get back there)
     else if (k === 'smash' || k === 'bandeja' || k === 'vibora' || k === 'speedup') p.depth = atNet || za < SERVICE + 0.5 ? 2 : 0;
     // a strong bajada now and then is an approach; otherwise they stay back
@@ -1314,7 +1354,7 @@ export class Match {
     let c = Math.max(0, into) * 0.9;
     if (plan.hand === -1) c += 0.15;
     const lg = manual ? 0 : this.controllers[p.id].mover.lunge ?? 0;
-    const dist = Math.hypot(plan.fx - p.x, plan.fz - p.z);
+    const dist = runLen(plan.fx - p.x, plan.fz - p.z, p.side, this.backK(p));
     const run = manual ? Math.max(0, dist - 0.3) / p.speed : runTime(Math.max(0, dist - 0.3 - lg), p.speed);
     const spare = plan.t - this.t - (run + p.reaction);
     c += Math.max(0, 0.5 - spare) * 1.2;
@@ -1449,7 +1489,7 @@ export class Match {
     const tg = this.targets[pid];
     const p = this.players[pid];
     if (!tg || !p) return null;
-    const d = Math.max(0, Math.hypot(tg.fx - p.x, tg.fz - p.z) - 0.3);
+    const d = Math.max(0, runLen(tg.fx - p.x, tg.fz - p.z, p.side, this.backK(p)) - 0.3);
     return { slack: tg.t - this.t - d / p.speed, reach: this.reachAt(tg.t) };
   }
   /**
@@ -1519,7 +1559,7 @@ export class Match {
   private canMake(p: Player, pl: Plan): boolean {
     const dist = Math.hypot(pl.fx - p.x, pl.fz - p.z);
     const reach = this.reachAt(pl.t);
-    return dist <= reach || Math.max(0, dist - reach) / p.speed <= pl.t - this.t;
+    return dist <= reach || Math.max(0, runLen(pl.fx - p.x, pl.fz - p.z, p.side, this.backK(p)) - reach) / p.speed <= pl.t - this.t;
   }
 
   /**
@@ -1590,6 +1630,12 @@ export class Match {
       const res = this.planContact(p, true);
       if (res && res.plan.reach) p.plan = res.plan;
     }
+  }
+
+  /** How fast `p` goes back now, × his speed (BACK): chasing the other side's lob, BACK.k; otherwise 1. */
+  backK(p: Player): number {
+    const r = this.rally;
+    return this.phase === 'rally' && r?.last && r.last.team !== p.team && r.last.lastHit?.kind === 'lob' ? BACK.k : 1;
   }
 
   /** The ball's coming path up to `end`, every 1/60 s, where it is low enough to hit a body (BODY): t, x, z. */
@@ -1677,8 +1723,10 @@ export class Match {
         if (p.team === r.last.team) continue;
         if (p.human && r.bounces > 0) continue;
         if (p.plan && Math.abs(p.plan.t - t) < BODY.contact) continue;
-        // (a ball he reached for and missed went past the paddle, not into him)
+        // (a ball he reached for and missed went past the paddle, not into him; one he lets go by to play it off the
+        // glass he lets past him, the paddle out of its way)
         if (this.reached[p.id] === r.shots) continue;
+        if (r.bounces > 0 && p.plan?.wall && r.walls === 0) continue;
         if (Math.hypot(q.x - p.x, q.z - p.z) < (q.y < BODY.legs ? BODY.rLegs : BODY.r)) return { t, p };
       }
     }
@@ -1754,6 +1802,7 @@ export class Match {
     }
     const top = ctl.reachH ?? 2.9;
     const bajada = ctl.bajada ?? 0;
+    const bk = this.backK(p);
     // (CPU: the ball's coming path, low enough to hit a body, for BODY)
     const path = cpu ? this.lowPath(end) : null;
     let li = 0;
@@ -1790,8 +1839,10 @@ export class Match {
         const lg = fromHere || suggest ? 0 : lungeAt(mv.lunge ?? 0, t - start);
         // (CPU: the feet model, FEET, braking into the contact; the suggested spot of a manual player: the thumb's
         // quicker start, HUMAN_FEET, whose ease into top speed costs about 0.12 s on a long run)
-        const run = Math.max(0, dist - 0.3 - lg);
-        let need = cpu ? Math.max(0, runTime(run, p.speed) + plantTime(run, p.speed) - FEET.optimism) : run / p.speed + (dist - lg > 0.6 ? 0.12 : 0);
+        // (going back for a lob is slower: BACK)
+        const len = bk < 1 ? runLen(fx - ox, fz - oz, p.side, bk) : dist;
+        const run = Math.max(0, len - 0.3 - lg);
+        let need = cpu ? Math.max(0, runTime(run, p.speed) + plantTime(run, p.speed) - FEET.optimism) : run / p.speed + (len - lg > 0.6 ? 0.12 : 0);
         if (rvx || rvz) need += Math.max(0, -(rvx * (fx - ox) + rvz * (fz - oz)) / Math.max(dist, 1e-3)) / FEET.brakeMax;
         const avail = reflex ? 0 : t - start;
         if (reflex) need = 0;
@@ -1820,9 +1871,11 @@ export class Match {
           // from here: prefer the comfortable side of the body and the nearest point
           if (fromHere) cost = Math.abs(bp.y - 0.95) * 0.8 + (bp.y < 0.3 ? 1 : 0) + dist * 0.6 + (hand === -1 ? 0.1 : 0) + (t - this.t) * 0.6;
           if (overhead) cost -= 0.2;
-          // a lob over a pair at the net: met over the head on the way back, in front of the service line (a bandeja, a
-          // víbora), it keeps the net; let past, it sends the pair back to the glass (OVERHEAD.keep)
-          if (overhead && volley && Math.abs(fz) >= AT_NET && Math.abs(fz) < SERVICE + 0.5) cost -= OVERHEAD.keep;
+          // a lob over a pair at the net: met over the head on the way back, up to `keepTo` m from the net (a bandeja, a
+          // víbora), it keeps the net; met further back, turned and on the run, it is a scramble (`deep` per metre): let
+          // past, it sends the pair back to the glass (OVERHEAD)
+          if (overhead && volley && Math.abs(fz) >= AT_NET && Math.abs(fz) < OVERHEAD.keepTo) cost -= OVERHEAD.keep;
+          if (overhead && volley && bk < 1 && Math.abs(fz) > OVERHEAD.keepTo) cost += (Math.abs(fz) - OVERHEAD.keepTo) * OVERHEAD.deep;
           // CPU: standing on a spot the ball crosses first means being hit by it (BODY)
           if (cpu && this.crosses(fx, fz, t, path, ox, oz, start, need)) cost += BODY.plan;
           // over the head: no higher than OVERHEAD.ideal when the ball allows (a bandeja at 2.3–2.6 m, not at the top
@@ -1866,6 +1919,12 @@ export class Match {
         // bandeja, a víbora): then they hold the net together
         const own = this.owner >= 0 && this.owner !== p.id ? this.players[this.owner].plan : null;
         p.depth = own && own.volley && Math.abs(own.fz) < SERVICE ? 2 : 0;
+      } else if (!coming && r.last?.lastHit?.kind === 'lob' && r.bounces === 0 && p.depth === 2 && !nextToHuman) {
+        // their own lob, on its way: they move up behind it only if it gets past the pair at the net; one that will be
+        // met over the head in front (a bandeja, OVERHEAD.keepTo) they wait for at the back
+        const o = this.owner >= 0 ? this.players[this.owner] : null;
+        const op = o ? o.plan ?? this.targets[o.id] ?? null : null;
+        if (op && op.volley && op.overhead && Math.abs(op.fz) < OVERHEAD.keepTo) p.depth = 0;
       } else if (nextToHuman) p.depth = q.depth;
     }
     const c = Math.max(-1.6, Math.min(1.6, g.x * 0.4));
@@ -2000,6 +2059,9 @@ export class Match {
             wz *= cap / w;
           }
         }
+        // (chasing a lob, going back is slower: BACK)
+        const bkh = this.backK(p);
+        if (bkh < 1 && wz * p.side > bkh * p.speed) wz = p.side * bkh * p.speed;
         footStep(p, wx, wz, h, p.speed, HUMAN_FEET, upCap, upMul);
         p.x += p.vx * h;
         p.z += p.vz * h;
@@ -2042,7 +2104,7 @@ export class Match {
         const pl = p.plan;
         const left = pl.t - this.t;
         const d0 = Math.hypot(pl.fx - p.x, pl.fz - p.z);
-        const run = Math.max(0, d0 - 0.3 - (ctl.mover.lunge ?? 0));
+        const run = Math.max(0, runLen(pl.fx - p.x, pl.fz - p.z, p.side, this.backK(p)) - 0.3 - (ctl.mover.lunge ?? 0));
         const need = runTime(run, p.speed) + plantTime(run, p.speed);
         // with time in hand: come round a little behind the ball and step in to it at the end
         tx = pl.fx;
@@ -2087,6 +2149,9 @@ export class Match {
         wx = d > 0 ? (dx / d) * sp : 0;
         wz = d > 0 ? (dz / d) * sp : 0;
       }
+      // (chasing a lob, going back is slower: BACK)
+      const bkc = this.backK(p);
+      if (bkc < 1 && wz * p.side > bkc * p.speed) wz = p.side * bkc * p.speed;
       footStep(p, wx, wz, h, p.speed);
       p.x += p.vx * h;
       p.z += p.vz * h;

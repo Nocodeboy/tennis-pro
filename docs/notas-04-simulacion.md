@@ -199,3 +199,101 @@ Golpes por punto: de 10,3 a 12,0 según la casilla. Cómo acaban los puntos: 41 
 - **Errores «out» (3–5 %):** son pifias de marco por encima de la malla lateral, que antes eran errores al cristal.
 - **`gest.py`:** no lo he vuelto a pasar en la página (hace falta `node build.mjs`, y el otro agente compila `dist/`). La batería ampliada está en el script y la tabla de arriba sale de `tools/audit/gestos.ts`, con el Input y el HumanController reales.
 - **Probar en un móvil:** la curva de potencia está calibrada con trazos de velocidad constante. Un latigazo real, con el perfil de campana, da en el pico un 20–40 % más que su media, así que quizá haya que subir `FLICK.full`.
+
+## Segunda pasada (12 oct, tarde): globo, red contra red, escalera y gestos en la página
+
+Las tres lagunas de la primera pasada. El «antes» es `6d2c567`. Sonda nueva: `tools/audit/globos.ts` (`MODE=bot` para el humano).
+
+### Globo, golpe de transición
+
+Se ha traído lo que resolvió el pickleball 0.11.
+
+- **Altura sobre el rival, no sobre la red** (`clearOver` en `ball.ts`, `lobClear` y `LOB` en `brain.ts`). El globo pasa 1,5 m por detrás de cada rival que está en la red (`LOB.behind`, su posición leída 0,3 s adelante) y por encima de su alcance (`reachH`, la carta de rem).
+  - **Margen de la CPU:** 0,25 m más hasta 0,5 según su prudencia y hasta 0,4 de azar.
+  - **Globo defensivo:** 1 m.
+  - **Humano:** 0,6 m (`HumanController.aim`, así que la vista previa del arco coincide).
+  - **Límites:** de 3,0 a 5,6 m sobre la cinta.
+- **Hacia atrás se corre más despacio al perseguir un globo** (`BACK.k` 0,72, `runLen`, `Match.backK`). Lo cuentan el planificador, el círculo, `takeCost`, `canMake` y los pies de la CPU y del humano.
+- **Zona de la bandeja:** la bola por encima de la cabeza se juega de aire, para mantener la red, hasta 6,8 m de la red (`OVERHEAD.keepTo`). Más atrás, de espaldas y a la carrera, cuesta 0,5 por metro (`OVERHEAD.deep`). Así el globo bueno obliga a bajar y el corto o bajo se remata.
+- **La CPU globea cuando la bola lo permite:** el peso del globo se multiplica por 1 − 1,6 × dificultad (`LOB.ease`) y por cuántos rivales hay en la red. El globo de volea al bajar ya no existe: perseguido por un globo y de aire, devuelve con una volea firme al fondo.
+- **La pareja que globea** solo sube tras su globo si pasa a la pareja de la red. Si se lo van a jugar de aire delante (`Match.cover`), espera atrás. Tras una chiquita solo sube si es buena (q > 0,75).
+
+| Globo sobre una pareja en la red (CPU, `globos.ts 20`) | Antes | Ahora |
+|---|---|---|
+| Globos (% de los golpes) | 20 % | **14 %** (bot: 12 %) |
+| Bueno (q ≥ 0,85): obliga a bajar (bota o remate desde el fondo) | 32 % | **40 %** (bot: 42 %) |
+| Bueno: jugado de aire cerca de la red | 68 % | 59 % |
+| Flojo (q < 0,85): jugado de aire (rematado o con bandeja) | 76 % | 73 % |
+| Pico del globo (bueno · flojo) | 6,1 · 5,8 m | 5,5 · 5,2 m |
+| Dónde bota el bueno | 7,6 m | 8,0 m |
+
+### Red contra red
+
+`PADEL.netLob` 0,9 (por la facilidad de la bola) y voleas más duras a los pies y por el centro (`PADEL.netPace` 0,8), más la espera tras el globo de arriba. La volea baja castiga menos (`LOW_VOLLEY.per` 0,3).
+
+| `partidos.ts cpu 40` | Antes | Ahora |
+|---|---|---|
+| N/N al golpear | 15,2 % | **8,7 %** |
+| Golpes por punto · segundos | 10,7 · 11,9 | 12,4 · 14,1 |
+| La pareja de la red gana | 63,0 % | 60,0 % (bot: 61,3 %) |
+| Pared directa · red | 10,7 · 43,4 % | 16,6 · 46,3 % (fuertes: 11,7 · 55,4 %) |
+| Bola al cuerpo (`body`) | 4,0 % | 1,0 % (bot: 5,5 %, casi todo voleas al cuerpo antes del bote) |
+| Bola que atraviesa a un jugador | 0,05 por punto | 0,11 |
+
+Con el bot (humano medio y Martín), N/N es del 14,8 %: el pulgar simulado juega su propio intercambio de red.
+
+La bola que va al cristal y que el jugador espera para jugarla de pared ya no le cuenta como «cuerpo» (la deja pasar). Por eso el «atraviesa» sube algo, aunque sigue muy por debajo del 0,61 de la auditoría.
+
+### Escalera
+
+Solo cartas: Agustín ref 86 → 83; Arturo con 88 → 86 y ref 90 → 86.
+
+`bot-doubles.ts 12`, % de partidos (puntos):
+
+| | Paquito+Fede | Fede+Alejandro | Alejandro+Agustín | Agustín+Arturo |
+|---|---|---|---|---|
+| novato | 100 (73) | 83 (59) | 42 (44) | 0 (35) |
+| medio | 100 (80) | 92 (61) | **50 (50)** | 25 (44) |
+| bueno | 100 (79) | 92 (66) | 58 (51) | **33 (45)** |
+
+Con 16 partidos por casilla, el bueno gana a los campeones el 38 %. Atributos +20 (`atributos.ts 40`, igual = 49,9 %): pot 53,1 · con 63,5 · vel 53,7 · ref 63,2 · rem 57,3 · par 54,7 · tq 56,9.
+
+### Gestos en la página real
+
+`node build.mjs` y `tools/audit/ux/gest.py 390 844 0.012`. Chrome no manda `pointermove` mientras el dedo está quieto. Por eso el inicio del trazo era la primera muestra del latigazo: en la página daba `ay` de −8 a −15 px en los latigazos desde parado, y el de 20 px en 25 ms salía como toque. Arreglo: si antes del trazo hay un hueco de más de `FLICK.gap` (30 ms), el trazo empieza donde estaba el dedo antes del hueco. Ahora la página y la sonda de Node dan lo mismo:
+
+| Gesto (página real) | Lectura |
+|---|---|
+| Latigazo de 40 / 50 / 60 px en otros tantos ms | ataque 0,71–0,72, `ax = ay = 0` (al cuerpo) |
+| 70 px en 50 ms / 80 px en 50 ms / 90 px en 50 ms | 0,88 / **0,96 (por 3)** / 1 |
+| 30 px en 40 ms · 20 px en 25 ms | ataque 0,61 · 0,63 |
+| Torcido 15 / 25 / 30 / 40 / 50 / 60 / 70° | ataque (remate hasta 30°, víbora desde 34°) |
+| Apunto, paro y latigazo · apunto sin pausa y latigazo | ataque apuntado en (40, −45) · igual (0,72 / 0,80) |
+| Latigazo abajo / abajo en diagonal | `down` 0,71 / 0,72 |
+| Toque · temblor de 10 · 16 px | toque |
+| Temblor de 22 px | soltar 0,51 |
+| Toque quieto de 0,35 · 0,6 s | `quiet` (bloqueo si el aviso era BLOQUEO) |
+| Colocado / normal / apuntar rápido / corregir | 0,30 / 0,48 / 0,57 / 0,53 |
+
+Fuzz (`fuzz.ts 48`): 676 puntos, 0 fallos y 0 atascados.
+
+### Bloqueo de reflejo ante la bola al cuerpo (`Match.reflexBlock`, `BODY.block`, `BODY.blockQ`)
+
+- **Cuándo:** la bola que va a tocar a un jugador (humano o CPU) 0,14 s o más después del golpe del otro lado ya no es punto.
+- **Qué hace el jugador:** la pala se mete en medio y sale un bloqueo de reflejo, con la calidad que da el tiempo: 0,45 a 0,14 s y +1 por segundo, como mucho 0,70. Lleva `timing` `'auto'` e `intent` `'block'`.
+- **Cuándo sigue siendo punto (`body`):** solo la bola imposible, sin tiempo, o el resto antes de botar.
+
+| | Antes | Ahora |
+|---|---|---|
+| Puntos `body` (CPU / bot medio) | 1,0 / 5,5 % | **0 / 0 %** en 40 + 48 partidos |
+| Bloqueos de reflejo | — | 0,4 % de los golpes (0,05 por punto); ninguno acaba el punto directamente |
+| Golpes por punto (CPU / bot) | 12,4 / 13,0 | 12,5 / 13,5 |
+| Escalera (bot-doubles 12) | bueno contra campeones 33 %, medio contra pareja 3 50 % | 33 % (46 % de los puntos), 42 % (48 %); novato contra las parejas 1 y 2: 100 / 92 % |
+
+Fuzz 48: 674 puntos, 0 fallos y 0 atascados.
+
+### Sigue pendiente
+
+- **El globo bueno** obliga a bajar el 40–42 % de las veces, en el límite bajo del objetivo. Los mandos son `LOB.behind`, `LOB.over` y `OVERHEAD.keepTo`.
+- **La pareja de la red** gana el 60–61 % (el objetivo era 65–75 %). Sigue perdiendo por sus voleas a la red.
+- **Escalera:** el bueno contra los campeones queda en el 33–38 % según el número de partidos, en el borde del 35–50 %.

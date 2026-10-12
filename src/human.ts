@@ -1,6 +1,6 @@
 // The human's side: turns the drag into a target and a shot type, and the release time into contact quality.
 
-import { ATTACK, BLOCK, HUMAN_ATTRS, HUMAN_MOVER, Q_AIMED, Q_AUTO, Q_FLOOR_HUMAN, Q_PERFECT, SHANK, attackRisk, attackTarget, attrQ, autoShot, ballCue, blockShot, cuedBlock, difficulty, humanSkill, isBajada, kindForAim, lobShape, popOf, powerShank, shankOf, specialShot } from './sim/brain';
+import { ATTACK, BLOCK, HUMAN_ATTRS, HUMAN_MOVER, Q_AIMED, Q_AUTO, Q_FLOOR_HUMAN, Q_PERFECT, SHANK, attackRisk, attackTarget, attrQ, autoShot, ballCue, blockShot, cuedBlock, difficulty, humanSkill, isBajada, kindForAim, LOB, lobClear, lobShape, popOf, powerShank, shankOf, specialShot } from './sim/brain';
 import type { Attributes } from './sim/attributes';
 import { HL, NET_C, SERVICE, W, inHalf, inServiceCourt } from './sim/court';
 import { IDEAL_RELEASE, Match, PERFECT_WINDOW, SERVE_HEIGHT, type Controller } from './sim/match';
@@ -217,8 +217,10 @@ export class HumanController implements Controller {
       }
     }
     const k = kindForAim(m, p, pl, d, lob, false, 0, opts);
+    // the globo: over the pair at the net by a margin (brain.ts, lobClear; the shape's height when nobody is up there)
+    const clear = ls && k.kind === 'lob' ? lobClear(m, p, this.contactPoint(m, p, plan), tx, tz, LOB.human, ls.clear) : ls ? ls.clear : k.clear;
     // (a target past the back glass that is no lob, a drive: it would go straight into the glass, a fault)
-    return { x: tx, z: tz, kind: k.kind, clear: ls ? ls.clear : k.clear, pace: k.pace, ok: inHalf(tx, tz, -p.side as 1 | -1) };
+    return { x: tx, z: tz, kind: k.kind, clear, pace: k.pace, ok: inHalf(tx, tz, -p.side as 1 | -1) };
   }
 
   /**
