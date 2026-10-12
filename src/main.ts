@@ -441,6 +441,8 @@ function settings(scroll = -1) {
     ${onOff(t('set.haptics'), 'haptics', save.haptics)}
     <h3>${t('set.groupGeneral')}</h3>
     ${row(t('set.lang'), 'lang', [['es', 'Español', lang === 'es'], ['en', 'English', lang === 'en']])}
+    <h3>${t('set.groupCredits')}</h3>
+    ${t('set.credits')}
     </div>`,
   );
   const panel = el.querySelector('.panel') as HTMLElement;

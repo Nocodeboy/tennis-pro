@@ -147,11 +147,13 @@ def bisagras_fuente(src, mapa, inicio, fin, pose_t=1, paso=4):
 
 
 def retarget(src, tgt, nombre, inicio=2, fin=None, fps_fuente=120, fps=30, en_el_sitio=False,
-             mapa=MAPA_CMU, pose_t=1, bisagras_destino=None, frente=None):
+             mapa=MAPA_CMU, pose_t=1, bisagras_destino=None, frente=None, giro_z=None):
     """bisagras_destino: {"LeftForeArm": eje en el mundo, ...} del personaje en reposo (ver
     padel_clip.bisagras_destino). Sin ella solo se alinea la dirección de cada hueso.
     frente: un fotograma de la fuente en el que el actor mira «al frente» (a la red): todo el clip se gira
-    alrededor de la vertical para que ahí mire como en la pose en T (en una toma larga el actor se va girando)."""
+    alrededor de la vertical para que ahí mire como en la pose en T (en una toma larga el actor se va girando).
+    giro_z: en su lugar, el giro alrededor de la vertical (rad) que lleva la dirección de la red en la fuente al frente
+    (un vídeo grabado de lado: la red está a un lado de la imagen)."""
     scn = bpy.context.scene
     src_action = src.animation_data.action
     if fin is None:
@@ -240,7 +242,10 @@ def retarget(src, tgt, nombre, inicio=2, fin=None, fps_fuente=120, fps=30, en_el
         return n
     orden = sorted(tgt.data.bones, key=profundidad)  # padres antes que hijos
     giro = Quaternion()
-    if frente is not None:
+    if giro_z is not None:
+        giro = Quaternion((0, 0, 1), giro_z)
+        print(f"frente: giro fijo de {math.degrees(giro_z):.0f}°")
+    elif frente is not None:
         scn.frame_set(int(frente))
         giro = Quaternion((0, 0, 1), -(yaw_at() - yaw_t))
         print(f"frente: el actor estaba girado {math.degrees(yaw_at() - yaw_t):.0f}°")

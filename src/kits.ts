@@ -26,10 +26,13 @@ const BUILDS: Record<string, Build> = {
 };
 
 /**
- * The players' own bodies (Rocketbox people on the player's skeleton, render/chars.ts Person; assets/chars/<name>.json),
- * loaded with the AI-made one. A test for now: Arturo (reina) in Male_Adult_01, docs/notas-04-rocketbox.md.
+ * The players' own bodies on the player's skeleton (render/chars.ts Person; assets/chars/<name>.json), loaded with the
+ * AI-made one. ia_jugador_*: a picture made with Qwen-Image and a mesh with TRELLIS 2 (MimicPC), mounted with
+ * art/blender/trellis_persona.py (docs/notas-05-trellis.md): you (a), your partner Martín (b), Galván (c) and Arturo
+ * (d). Their skin, face and hair are their own (the kit's skin and hair do not apply). rb_male01 (Rocketbox,
+ * docs/notas-04-rocketbox.md) stays in assets/ but is not loaded.
  */
-export const PEOPLE = ['rb_male01'];
+export const PEOPLE = ['ia_jugador_a', 'ia_jugador_b', 'ia_jugador_d', 'ia_jugador_c'];
 
 export interface KitInfo {
   kit: Kit;
@@ -50,10 +53,11 @@ export const HERO: KitInfo = {
       shirt: 0xb8302a, panel: 0x1f2531, trim: WHITE, logo: WHITE, style: 'band', print: 'pinstripe',
       shorts: 0x23272f, shortsTrim: 0xb8302a,
       socks: WHITE, shoe: SHOE, shoeAccent: 0xb8302a, sole: 0xe9e9e9,
-      hair: 0x2a1c14,
+      hair: 0x2a1c14, skin: [1.12, 1.08, 1.05],
     },
     paddleLook: { shape: 'elongated', face: 'carbon', graphic: 0xc8372d, graphic2: 0xf2f2f2, grip: 0x1c1c1e },
     body: BUILDS.hero,
+    model: 'ia_jugador_a',
   },
   css: '#b8302a',
   ink: '#ffffff',
@@ -100,10 +104,11 @@ export const RIVAL_KITS: Record<string, KitInfo> = {
         shirt: 0x17181b, panel: 0x34363c, trim: 0xe8702a, logo: 0xe8702a, style: 'sash', print: 'chevrons',
         shorts: 0x17181b, shortsTrim: 0xe8702a, shortsDouble: true,
         socks: 0x1a1a1c, shoe: 0x1d1e21, shoeAccent: 0xe8702a, sole: 0xeeeeee,
-        hair: 0x141110, skin: [0.86, 0.78, 0.72], wristL: 0x17181b, wristR: 0x17181b,
+        hair: 0x141110, skin: [1, 1, 1], wristL: 0x17181b, wristR: 0x17181b,
       },
       paddleLook: { shape: 'elongated', face: 'carbon', graphic: 0xe8702a, graphic2: 0xf2f2f2, grip: 0x1c1c1e },
       body: BUILDS.bruno,
+      model: 'ia_jugador_c',
     },
     css: '#1b1c20',
     ink: '#e8702a',
@@ -132,11 +137,11 @@ export const RIVAL_KITS: Record<string, KitInfo> = {
         shirt: 0xd6a531, panel: 0x1b2a49, trim: 0xffffff, logo: 0x1b2a49, style: 'yoke',
         shorts: 0x1b2a49, shortsTrim: 0xd6a531,
         socks: WHITE, shoe: SHOE, shoeAccent: 0xd6a531, sole: 0xf0f0f0,
-        hair: 0x8e6a3e, skin: [1.0, 0.97, 0.95],
+        hair: 0x8e6a3e, skin: [1, 1, 1],
       },
       paddleLook: { shape: 'elongated', face: 'carbon', graphic: 0xd6a531, graphic2: 0xffffff, grip: 0xf0f0f0 },
       body: BUILDS.reina,
-      model: 'rb_male01',
+      model: 'ia_jugador_d',
     },
     css: '#d6a531',
     ink: '#0f1a2e',
@@ -151,10 +156,11 @@ export const PARTNER_KIT: KitInfo = {
       shirt: WHITE, panel: 0xb8302a, trim: 0x1f2531, logo: 0xb8302a, style: 'band',
       shorts: 0x23272f, shortsTrim: WHITE,
       socks: WHITE, shoe: SHOE, shoeAccent: 0xb8302a, sole: 0xe9e9e9,
-      hair: 0x3a2418, skin: [1.03, 1.0, 0.98], wristL: 0xb8302a,
+      hair: 0x3a2418, skin: [1, 1, 1], wristL: 0xb8302a,
     },
     paddleLook: { shape: 'standard', face: 'light', graphic: 0xc8372d, graphic2: 0x1f2531, grip: 0xf0f0f0 },
     body: BUILDS.marta,
+    model: 'ia_jugador_b',
   },
   css: '#eef0f3',
   ink: '#1f2531',

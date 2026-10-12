@@ -210,3 +210,22 @@ Germán: «mejorar este juego y conseguir el mejor simulador de pádel calidad A
 - **Punto de oro:** la pareja del humano no elige quién resta.
 - **Cambio de lado** y descanso entre sets: no se modelan.
 - **Probar en el móvil** el físico tras un peloteo largo y la columna de sets con nombres largos.
+
+## 0.6 (12 oct): jugadores hechos con IA y golpes desde vídeo
+
+- **Jugadores con cuerpo propio** (`notas-05-trellis.md`): tú, Martín, Galván y Arturo, con cara, pelo y cuerpo hechos con IA en MimicPC (imagen con Qwen-Image 2512, malla con TRELLIS 2), montados en el esqueleto del jugador; la equipación se pinta encima. Sin créditos de Magnific.
+
+Germán: «Es importante que hagamos lo de los vídeos». Detalle en `notas-golpes-video.md`.
+
+- **Fuente:** clips de pádel del canal KNSU de YouTube (CC BY): un jugador, de lado, un golpe por clip. Se bajan en el portátil con `Vídeos\padel-clips\descargar_clips_padel.bat` (yt-dlp y Deno oficiales; sin Node).
+- **En el juego:**
+  - el saque y el revés pasan a ser de una persona real (antes, Meshy);
+  - el remate también (antes, el de un tenista de Rokoko), y con él la bandeja, la víbora y los remates por 3 y por 4, que se construyen sobre su clip;
+  - la bajada es una bajada real, cuerpo y recorrido de la pala;
+  - `?video=off` vuelve a los de antes.
+- **Medido:**
+  - los remates golpean más delante (el remate, 27 cm delante de la cadera, antes 11) y con la cara de la pala más de frente (35°, antes 73°);
+  - la cara de la pala en la bajada queda peor (75°, antes 54°).
+- **Sonido:** los clips de KNSU están mudos; de estos vídeos no salen golpes reales. Lo que queda es grabarlos con el móvil en pista.
+- **Créditos:** en Ajustes → Créditos (KNSU, CMU, Rokoko, la IA y el sonido).
+

@@ -1,4 +1,4 @@
-"""Clips de captura de movimiento para los jugadores del pádel, en el formato del juego (viene del pickleball 0.12).
+"""Clips de captura de movimiento para los jugadores del pádel, en el formato del juego (viene del pickleball 0.13).
 
 El juego guarda el jugador en assets/chars/hero.json ({gltf, bin, tex}) y cada animación en
 assets/anims/<clip>.json ({name, duration, tracks: [{n: "Hueso.quaternion", t: [...], v: [...]}]}),
@@ -13,8 +13,12 @@ Este módulo:
 
 Uso:
   python3 art/blender/padel_clip.py <carpeta_del_build> validar
-  python3 art/blender/padel_clip.py <carpeta_del_build> ciclo <bvh> <salida.json> [nombre]
+  python3 art/blender/padel_clip.py <carpeta_del_build> ciclo <bvh> <salida.json> [nombre] [frente]
   python3 art/blender/padel_clip.py <carpeta_del_build> tramo <bvh|fbx> <salida.json> <nombre> <desde> <hasta> <fps> [frente]
+  python3 art/blender/padel_clip.py <carpeta_del_build> video <puntos.json> <salida.json> <nombre> [desde hasta] [frente]
+      (puntos.json de tools/video_pose.py; desde/hasta y frente en fotogramas del vídeo, desde 0)
+  python3 art/blender/padel_clip.py <carpeta_del_build> comparar <clip_bueno.json> <clip.json>
+      (error de dirección por hueso entre dos clips del jugador, con el mejor giro alrededor de la vertical)
 """
 import base64
 import json
@@ -342,12 +346,23 @@ def main():
         a = sys.argv
         tramo(build, esq, arm, a[3], a[4], a[5], int(a[6]), int(a[7]), float(a[8]), int(a[9]) if len(a) > 9 else None)
         return
+    if mode == "video":
+        a = sys.argv
+        desde = int(a[6]) if len(a) > 6 else None
+        hasta = int(a[7]) if len(a) > 7 else None
+        frente = int(a[8]) if len(a) > 8 else None
+        video(build, esq, arm, a[3], a[4], a[5], desde, hasta, frente)
+        return
+    if mode == "comparar":
+        comparar(esq, arm, sys.argv[3], sys.argv[4])
+        return
     if mode == "ciclo":
         bvh, out = sys.argv[3], sys.argv[4]
         name = sys.argv[5] if len(sys.argv) > 5 else "run_v2"
+        frente = int(sys.argv[6]) if len(sys.argv) > 6 else None
         src = import_bvh(bvh)
         bis = bisagras_destino(esq, build)
-        act = retarget(src, arm, name, bisagras_destino=bis)
+        act = retarget(src, arm, name, bisagras_destino=bis, frente=frente)
         scn = bpy.context.scene
         scn.frame_set(1)
         h0 = src.matrix_world @ src.pose.bones["Hips"].head
@@ -356,7 +371,7 @@ def main():
         dur = (src.animation_data.action.frame_range[1] - 2) / 120
         print(f"VELOCIDAD de la fuente ≈ {((h1 - h0) * 0.0534).length / dur:.2f} m/s (escala aproximada)")
         bpy.data.objects.remove(src)
-        frames, i0, j0, err = make_cycle(esq, act)
+        frames, i0, j0, err = make_cycle(esq, act, min_len=int(os.environ.get("CICLO_MIN", 14)), max_len=int(os.environ.get("CICLO_MAX", 34)))
         order = [t["n"].rsplit(".", 1)[0] for t in json.load(open(os.path.join(build, "assets/anims/run_v2.json")))["tracks"]
                  if t["n"].endswith(".quaternion")]
         clip = write_clip(name, frames, 30, out, order_like=order)
@@ -390,6 +405,96 @@ def tramo(build, esq, arm, path, out, name, f0, f1, fps_src, frente=None):
     print(f"TRAMO {name}: fotogramas {f0}-{f1} a {fps_src:g} fps -> {len(frames)} claves, {clip['duration']:.2f} s")
 
 
+def video(build, esq, arm, path, out, name, desde=None, hasta=None, frente=None):
+    """un gesto grabado con el móvil (los puntos de tools/video_pose.py), en el sitio, como los clips del juego"""
+    from video_fuente import construir, enderezar, profundidad, puntos, suelo
+    datos = json.load(open(path))
+    fps = float(datos["fps"])
+    n = len(datos["frames"])
+    desde = 0 if desde is None else desde
+    hasta = n - 1 if hasta is None else min(hasta, n - 1)
+    P = puntos(datos)
+    if os.environ.get("PROFUNDIDAD"):
+        # (probado con vídeos sintéticos: arregla la rodilla en la derecha y la empeora en la estirada; no compensa
+        # de momento, ver docs/notas-13.md)
+        P = profundidad(datos, P)
+    tilt = 0.0
+    if os.environ.get("VERTICAL"):
+        # (solo si el móvil estaba inclinado: endereza con la postura del principio, que tiene que ser de pie y recta)
+        P, tilt = enderezar(P, fps, desde)
+    P = suelo(P)
+    print(f"VIDEO {os.path.basename(path)}: {n} fotogramas a {fps:.2f} fps; vertical corregida {tilt:.1f}°")
+    src = construir(P, fps, arm)
+    bis = bisagras_destino(esq, build)
+    # (RED: dónde está la red en la imagen, para un vídeo grabado de lado: derecha, izquierda, camara o fondo; el clip
+    # se gira para que esa dirección sea el frente del jugador. Sin RED, el frente es hacia donde mira en `frente`)
+    red = os.environ.get("RED")
+    giro_z = {"derecha": -math.pi / 2, "izquierda": math.pi / 2, "camara": 0.0, "fondo": math.pi}[red] if red else None
+    act = retarget(src, arm, name, inicio=desde + 1, fin=hasta + 1, fps_fuente=fps, mapa=MAPA_MIXAMO, pose_t=None,
+                   bisagras_destino=bis, frente=(frente if frente is not None else desde) + 1, giro_z=giro_z)
+    scn = bpy.context.scene
+    rest = esq.local_rest[esq.idx["Hips"]].to_translation()
+    frames = []
+    for f in range(1, int(act["fotogramas"]) + 1):
+        scn.frame_set(f)
+        fr = esq.to_gltf_local()
+        t = fr["Hips"].to_translation()
+        r = fr["Hips"].to_quaternion()
+        fr["Hips"] = Matrix.Translation(Vector((rest.x, t.y, rest.z))) @ r.to_matrix().to_4x4()
+        frames.append(fr)
+    order = [t["n"].rsplit(".", 1)[0] for t in json.load(open(os.path.join(build, "assets/anims/run_v2.json")))["tracks"]
+             if t["n"].endswith(".quaternion")]
+    clip = write_clip(name, frames, 30, out, order_like=order)
+    print(f"VIDEO {name}: fotogramas {desde}-{hasta} -> {len(frames)} claves, {clip['duration']:.2f} s")
+
+
+HUESOS_CMP = [("LeftArm", "LeftForeArm"), ("LeftForeArm", "LeftHand"), ("RightArm", "RightForeArm"),
+              ("RightForeArm", "RightHand"), ("LeftUpLeg", "LeftLeg"), ("LeftLeg", "LeftFoot"),
+              ("RightUpLeg", "RightLeg"), ("RightLeg", "RightFoot"), ("Spine02", "neck"), ("neck", "Head")]
+
+
+def _direcciones(esq, arm, frames, times):
+    out = []
+    for t in times:
+        esq.from_gltf_local(local_from_values(esq, frames[t]))
+        bpy.context.view_layer.update()
+        d = {}
+        for a, b in HUESOS_CMP:
+            pa = arm.matrix_world @ arm.pose.bones[a].head
+            pb = arm.matrix_world @ arm.pose.bones[b].head
+            d[a + ">" + b] = (pb - pa).normalized()
+        out.append(d)
+    return out
+
+
+def comparar(esq, arm, bueno, otro):
+    """error de dirección de cada hueso (grados), fotograma a fotograma, con el mejor giro alrededor de la vertical"""
+    _, fa = read_clip(bueno)
+    _, fb = read_clip(otro)
+    ta, tb = sorted(fa), sorted(fb)
+    n = min(len(ta), len(tb))
+    da = _direcciones(esq, arm, fa, ta[:n])
+    db = _direcciones(esq, arm, fb, tb[:n])
+    best = None
+    for yaw in range(-180, 180, 2):
+        R = Matrix.Rotation(math.radians(yaw), 3, "Z")
+        e = 0.0
+        for x, y in zip(da, db):
+            for k in x:
+                e += (R @ y[k]).angle(x[k])
+        if best is None or e < best[0]:
+            best = (e, yaw)
+    R = Matrix.Rotation(math.radians(best[1]), 3, "Z")
+    print(f"COMPARAR {os.path.basename(otro)} con {os.path.basename(bueno)}: {n} fotogramas, giro {best[1]}°")
+    todos = []
+    for k in da[0]:
+        errs = sorted(math.degrees((R @ y[k]).angle(x[k])) for x, y in zip(da, db))
+        todos += errs
+        print(f"  {k:24s} mediana {errs[len(errs) // 2]:5.1f}°  p90 {errs[int(len(errs) * 0.9)]:5.1f}°")
+    todos.sort()
+    print(f"  {'todos':24s} mediana {todos[len(todos) // 2]:5.1f}°  p90 {todos[int(len(todos) * 0.9)]:5.1f}°")
+
+
 def ver(esq, arm, path, out, cada=0.1, marca=None):
     """una hoja con el clip puesto en el jugador, de frente y de lado, cada `cada` s (para mirarlo antes de
     meterlo en el juego); `marca`: un tiempo que se enmarca (el contacto)"""
@@ -419,7 +524,7 @@ def ver(esq, arm, path, out, cada=0.1, marca=None):
         want.append(min(times, key=lambda x: abs(x - t)))
         t += cada
     tiles = []
-    tmp = "/tmp/padel-ver.png"
+    tmp = f"/tmp/padel-ver-{os.getpid()}.png"
     for t in want:
         esq.from_gltf_local(local_from_values(esq, frames[t]))
         bpy.context.view_layer.update()

@@ -6,7 +6,7 @@ import { build } from 'esbuild';
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 
 const prod = !process.argv.includes('--dev');
-const VERSION = '0.5.0';
+const VERSION = '0.6.0';
 const css = readFileSync('src/style.css', 'utf8');
 const fonts =
   '<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@0,600;0,700;0,800;1,700;1,800&family=Barlow:wght@500;600;700&display=swap">';
