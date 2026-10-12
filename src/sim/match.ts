@@ -398,6 +398,11 @@ function lungeAt(lunge: number, dt: number): number {
  * they rally further back; on grass it stays low and they stand closer to the baseline.
  */
 export const BACK_Z: Record<CourtSurface, number> = { hard: 0, clay: 0.9, grass: -0.4 };
+/**
+ * The contact height a player looks for after the bounce (planContact): within `band` m of `mid` it costs `in` per
+ * metre off the middle; further off, `out` per metre more.
+ */
+export const COMFORT = { mid: 1.05, band: 0.3, in: 0.3, out: 1.3 };
 /** the playing area: the court and its run-off, short of the boards of the stands */
 export const AREA_X = BOARDS.x - 0.7;
 export const AREA_Z = BOARDS.z - 0.9;
@@ -1882,6 +1887,8 @@ export class Match {
       if (!bounced && playOut === false && !firstIn) continue;
       posAt(leg.s, t, bp);
       if (bp.z * p.side < 0.35) continue; // still (or again) on the other side of the net
+      // nobody plays a ball past the run-off (it is at the boards of the stands by then)
+      if (Math.abs(bp.z) > AREA_Z + 0.2 || Math.abs(bp.x) > AREA_X + 0.8) continue;
       if (bp.y < 0.14 || bp.y > top) continue;
       const overhead = bp.y > 1.75;
       for (const hand of [1, -1] as const) {
@@ -1922,8 +1929,10 @@ export class Match {
         const ffz = fromHere ? p.z : reflex ? oz : fz;
         const plan: Plan = { t, bx: bp.x, by: bp.y, bz: bp.z, fx: ffx, fz: ffz, volley, overhead, hand, reach: need <= avail, oops: false, stretch: fromHere ? dist / LUNGE : 0, out: volley && !firstIn, ...(cpu ? { spare: avail - need } : {}) };
         if (need <= avail) {
-          // a groundstroke at the waist (a little higher on the backhand of a two-hander) is the comfortable one
-          let cost = Math.abs(bp.y - 1.0) * 1.1 + (bp.y < 0.35 ? 1.4 : 0) + (hand === -1 ? 0.15 : 0) + (t - this.t) * 0.25;
+          // a groundstroke between the knee and the shoulder is a comfortable one (COMFORT): a high clay ball is hit at
+          // the shoulder or on the rise, not waited for until it drops to the waist
+          const off = Math.abs(bp.y - COMFORT.mid);
+          let cost = Math.max(0, off - COMFORT.band) * COMFORT.out + off * COMFORT.in + (bp.y < 0.35 ? 1.4 : 0) + (hand === -1 ? 0.15 : 0) + (t - this.t) * 0.25;
           // up at the net, take it out of the air (it robs the other side of time) and as high as it comes
           if (volley && Math.abs(fz) < AT_NET) cost -= 0.4 + Math.max(0, bp.y - 0.95) * 1.2;
           // at the back, a ball that has dropped below the knee after its peak is a dig: take it earlier

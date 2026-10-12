@@ -61,8 +61,8 @@ const WON = new Set<PointReason>(['winner', 'miss', 'letGo', 'body']);
 const REPLAY_AT = 3.5;
 const REPLAY_AGAIN = 6;
 const REPLAY_EVERY = 6;
-/** a fast ball (m/s, about 110 km/h): a winner this fast is worth seeing again (a tennis drive is 25–35 m/s) */
-const FAST = 30;
+/** a fast ball (m/s, 137 km/h): a winner this fast is worth seeing again (a rally drive: 30 m/s median, 37 at p90) */
+const FAST = 38;
 /** the title card, then the straps follow the camera: a team is introduced while it is this centred and this close */
 const CARD_END = 1.0;
 const STRAP_IN = { x: 0.7, y: 0.8, d: 13.5 };

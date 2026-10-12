@@ -86,13 +86,15 @@ const GROUND = new Set<ShotKind>(['drive', 'slice', 'return']);
 /** the point was won by the last shot (not an error) */
 const WON = new Set<PointReason>(['winner', 'miss', 'letGo', 'body']);
 /**
- * Tennis speeds (m/s; to be measured on the tennis sim, docs/tenis/notas-01-interfaz.md): `fast` a hard hit (its launch
- * speed, about 110 km/h: a firm groundstroke), `vin` a ball that came at the player fast (its speed at the contact).
- * An error is forced when the ball came fast, gave him little time (`avail` s from the other side's contact) or had
+ * Tennis speeds (m/s), measured with the bots (tools/bot.ts SHOTS=1; docs/tenis/notas-01-simulacion.md): a rally drive
+ * leaves the racket at 108 km/h (30 m/s) on the median and 131–135 km/h (36–37 m/s) at the 90th percentile, and comes
+ * to the other player at about 20 m/s after the bounce. `fast` a hard hit (its launch speed, 130 km/h: the hardest tenth
+ * of the groundstrokes), `vin` a ball that came at the player fast (its speed at the contact). An error is forced when
+ * the ball came fast, gave him little time (`avail` s from the other side's contact; a rally ball gives 1.3 s) or had
  * him at full stretch; otherwise it is unforced (the stat tennis TV shows).
  */
-export const SPEED = { fast: 30, vin: 20 };
-export const FORCED = { avail: 0.6, stretch: 0.6, vin: 22, speed: 33 };
+export const SPEED = { fast: 36, vin: 24 };
+export const FORCED = { avail: 0.75, stretch: 0.6, vin: 25, speed: 38 };
 
 const dec = (v: number, n = 1) => {
   const s = v.toFixed(n);
