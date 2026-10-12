@@ -4,17 +4,17 @@
 import { audio, vibrate } from './audio';
 import { Broadcast, type BroadcastSetup, type TeamInfo } from './broadcast';
 import { Explainer } from './explain';
-import { HumanController, servePulse, type SwingMode } from './human';
+import { AIM_D0, HumanController, servePulse, type SwingMode } from './human';
 import { t, lang, setLang } from './i18n';
 import { ICON } from './icons';
 import { Input } from './input';
 import { HERO, PARTNER_KIT, RIVAL_KITS, kitOf } from './kits';
 import { View, aimHue, cssHue, type Tier } from './render/view';
-import { AIController, HUMAN_REACTION, HUMAN_SPEED, PAIRS, PARTNER, RIVALS, specialOk, type Pair, type Rival } from './sim/brain';
+import { AIController, ATTACK, HUMAN_REACTION, HUMAN_SPEED, PAIRS, PARTNER, RIVALS, kindForAim, specialOk, type Pair, type Rival } from './sim/brain';
 import { ATTR_KEYS, HUMAN_ATTRS, overall, type Attributes } from './sim/attributes';
 import { IDEAL_RELEASE, LUNGE, Match, PERFECT_WINDOW, type Controller, type PlayerCfg } from './sim/match';
 import { Rng } from './sim/rng';
-import type { MatchEvent, Player, PointReason, Rules, ShotKind, Special } from './sim/types';
+import type { MatchEvent, Plan, Player, PointReason, Rules, ShotKind, Special } from './sim/types';
 import type { Kit } from './render/chars';
 import { EVENT, TOUR, brand, court, bugName, fullName, initials, pairInfo, pairSeed, playerInfo, roundName, seedTag, surname } from './tour';
 
@@ -23,6 +23,8 @@ declare const __VERSION__: string;
 // ------------------------------------------------------------------ save
 interface Save {
   sound: boolean;
+  /** the menus' music (assets/music, made with AI), apart from the sound */
+  music: boolean;
   /** the length of the match (one set): games to win it, a tie-break at games-games */
   games: 2 | 3 | 4 | 6;
   /** at 40-40: the golden point (the next point wins the game) or advantages */
@@ -51,7 +53,7 @@ interface Save {
   seen: string[];
 }
 const KEY = 'padel-proto-v1';
-const save: Save = { sound: true, games: 3, golden: true, tutorial: false, swing: 'assist', assist: 1, beatenPairs: 0, replays: true, recover: false, haptics: true, hud: 'min', skips: 0, played: 0, coach: true, seen: [] };
+const save: Save = { sound: true, music: true, games: 3, golden: true, tutorial: false, swing: 'assist', assist: 1, beatenPairs: 0, replays: true, recover: false, haptics: true, hud: 'min', skips: 0, played: 0, coach: true, seen: [] };
 try {
   Object.assign(save, JSON.parse(localStorage.getItem(KEY) || '{}'));
 } catch {
@@ -71,6 +73,10 @@ const rules = (): Rules => ({ games: save.games, golden: save.golden });
 if (save.lang) setLang(save.lang);
 else setLang(lang);
 audio.setSfx(save.sound);
+audio.setMusic(save.music);
+// the menus' theme (the studio's, from the pickleball: Magnific, Google Lyria 3 Pro; looped round its 36 bars after
+// the intro). In the matches the crowd is the sound, as on TV.
+audio.setMusicTracks({ menu: { url: 'assets/music/menu-loop.mp3', loopStart: 11.2725, loopEnd: 83.2725, vol: 0.55 } });
 
 // ------------------------------------------------------------------ DOM
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -286,8 +292,9 @@ function menu() {
   mode = 'menu';
   bc.reset();
   audio.crowdBase = 0.4; // a murmur from the stands behind the menus
+  audio.music('menu');
   hud.hidden = true;
-  hint.hidden = true;
+  clearHint();
   banner.innerHTML = '';
   if (!demo) startDemo();
   const nextPair = PAIRS[Math.min(save.beatenPairs, PAIRS.length - 1)];
@@ -426,6 +433,7 @@ function settings(scroll = -1) {
     ${onOff(t('set.replays'), 'replays', save.replays)}
     <h3>${t('set.groupSound')}</h3>
     ${onOff(t('set.sound'), 'sound', save.sound)}
+    ${onOff(t('set.music'), 'music', save.music)}
     ${onOff(t('set.haptics'), 'haptics', save.haptics)}
     <h3>${t('set.groupGeneral')}</h3>
     ${row(t('set.lang'), 'lang', [['es', 'Español', lang === 'es'], ['en', 'English', lang === 'en']])}
@@ -447,6 +455,9 @@ function settings(scroll = -1) {
     if (k === 'sound') {
       save.sound = v === '1';
       audio.setSfx(save.sound);
+    } else if (k === 'music') {
+      save.music = v === '1';
+      audio.setMusic(save.music);
     } else if (k === 'replays') {
       save.replays = v === '1';
       bc.replays = save.replays;
@@ -515,27 +526,83 @@ function onCard(el: HTMLElement, go: () => void) {
 }
 
 // ------------------------------------------------------------------ the match
-const tut = { served: false, hit: false, kinds: 0, attack: false, block: false, shownKinds: false, moveShown: false, until: 0, perfect: false };
+const tut = { served: false, hit: false, kinds: 0, attack: false, block: false, shownKinds: false, moveShown: false, perfect: false };
 /** points won «por 3» or «por 4» by each team (the end screen) */
 const por34: [number, number] = [0, 0];
+/**
+ * The hint line at the bottom (auditoría 04, M1): one hint at a time, each up at least HINT_MIN s before another one
+ * (or nothing) takes its place, so none is gone before it can be read. A hint asked for while the line is busy waits
+ * its turn (the most important one asked for; the newest of equals); a hint about the ball coming now (PRIO.ball) goes
+ * before a general one waiting, and is only asked for when the line is free (later it would be about another ball).
+ * `hintKey`: the hint on screen.
+ */
+const HINT_MIN = 2.5;
+const PRIO = { general: 1, ball: 2 } as const;
 let hintKey = '';
-/** The hint line at the bottom: a tutorial step (a touch icon), or a tip between points (`tip`: an info icon, a gold edge). */
-function setHint(k: string, sec = 0, tip = false) {
+/** the hint on screen: since when, and when it goes (0: when another one comes) */
+const hintOn = { at: 0, until: 0 };
+let hintNext: { k: string; sec: number; tip: boolean; prio: number } | null = null;
+/** Could a hint of this priority take the line now? (nothing on screen or it has had its time; none more important waiting) */
+function hintFree(prio: number = PRIO.general): boolean {
+  if (hintNext && hintNext.prio > prio) return false;
+  return !hintKey || performance.now() - hintOn.at >= HINT_MIN * 1000;
+}
+/** The hint line: a tutorial step (a touch icon), or a tip between points (`tip`: an info icon, a gold edge). */
+function showHint(k: string, sec: number, tip: boolean) {
   hintKey = k;
-  tut.until = sec ? performance.now() + sec * 1000 : 0;
+  hintOn.at = performance.now();
+  hintOn.until = sec ? hintOn.at + sec * 1000 : 0;
   hint.hidden = !k;
   hint.classList.toggle('tip', tip);
   if (k) hint.innerHTML = `<span class="${tip ? 'bulb' : 'hand'}">${tip ? ICON.info : ICON.tap}</span>${t(k)}`;
 }
 /**
- * A first-time hint (0.3: the power of the gesture, the bajada, the por 3 / por 4 chance): shown once ever, in any
- * match (not only the first one: players of 0.2 get them too), in its keyboard wording without a touch screen.
+ * A hint for `sec` s (0: until another one), now if the line is free, otherwise when it is. '' lets the hint on screen
+ * go once it has had its time.
  */
-function onceHint(k: string, sec: number): boolean {
-  if (save.seen.includes(k)) return false;
+function setHint(k: string, sec = 0, tip = false, prio: number = PRIO.general) {
+  if (!k) {
+    if (hintKey) hintOn.until = Math.min(hintOn.until || Infinity, performance.now());
+    return;
+  }
+  if (k === hintKey) return;
+  if (hintFree(prio)) {
+    hintNext = null;
+    showHint(k, sec, tip);
+  } else if (!hintNext || prio >= hintNext.prio) hintNext = { k, sec, tip, prio };
+}
+/** The player did what the hints starting with `k` ask: the one on screen goes (after its time), a waiting one never comes. */
+function doneHint(k: string) {
+  if (hintNext?.k.startsWith(k)) hintNext = null;
+  if (hintKey.startsWith(k)) setHint('');
+}
+/** The hint line cleared at once, and nothing waiting (a new match, the end of one). */
+function clearHint() {
+  hintNext = null;
+  showHint('', 0, false);
+}
+/** Every frame: the hint on screen goes when its time is up (never before HINT_MIN), the one waiting comes in. */
+function hintTick() {
+  const now = performance.now();
+  if (hintKey && hintOn.until && now >= Math.max(hintOn.until, hintOn.at + HINT_MIN * 1000)) {
+    showHint('', 0, false);
+  }
+  if (hintNext && hintFree(hintNext.prio)) {
+    const n = hintNext;
+    hintNext = null;
+    showHint(n.k, n.sec, n.tip);
+  }
+}
+/**
+ * A first-time hint (0.3: the power of the gesture, the bajada, the por 3 / por 4 chance): shown once ever, in any
+ * match (not only the first one: players of 0.2 get them too), in its keyboard wording without a touch screen. Only
+ * when the line is free for it (otherwise it waits for another ball: it is not spent).
+ */
+function onceHint(k: string, sec: number, prio: number = PRIO.general): boolean {
+  if (save.seen.includes(k) || !hintFree(prio) || hintNext) return false;
   save.seen.push(k);
   persist();
-  setHint(isTouch ? k : `${k}Keys`, sec);
+  setHint(isTouch ? k : `${k}Keys`, sec, false, prio);
   return true;
 }
 
@@ -573,6 +640,7 @@ function startDoubles(p: Pair) {
 /** A match: the human (player 0, near side) plus the CPU players given. */
 function begin(cfgs: PlayerCfg[], ctls: Controller[], kits: Kit[], board: [string, string], who: string[], tv: BroadcastSetup) {
   mode = 'play';
+  audio.music('none');
   paused = false;
   clearScreens();
   demo = null;
@@ -598,7 +666,7 @@ function begin(cfgs: PlayerCfg[], ctls: Controller[], kits: Kit[], board: [strin
   tut.served = tut.hit = tut.attack = tut.block = tut.shownKinds = tut.moveShown = tut.perfect = false;
   por34[0] = por34[1] = 0;
   input.clearStick();
-  setHint('');
+  clearHint();
 }
 
 /** the broadcast score bug (teams, score, serve; it animates the side that scored) */
@@ -657,9 +725,11 @@ let bannerTimer = 0;
  * The point's result: a tag under the score bug (away from the play), gone before the next serve. `why`: the line
  * under it that says why, with a number from the point (src/explain.ts), in the same pill.
  */
-function showBanner(main: string, cls: string, sub = '', why = '') {
+function showBanner(main: string, cls: string, sub = '', why = '', who = '') {
   const w = why ? `<span class="why">${why.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]!)}</span>` : '';
-  banner.innerHTML = `<div class="b1 ${cls}${w ? ' has-why' : ''}">${main}${w}</div>${sub ? `<div class="b2">${sub}</div>` : ''}`;
+  // (`who`: whose point it is, a small line over the reason: the colour alone does not say it, auditoría 04 B1)
+  const h = who ? `<span class="who">${who}</span>` : '';
+  banner.innerHTML = `<div class="b1 ${cls}${w ? ' has-why' : ''}">${h}${main}${w}</div>${sub ? `<div class="b2">${sub}</div>` : ''}`;
   clearTimeout(bannerTimer);
   bannerTimer = window.setTimeout(() => (banner.innerHTML = ''), why ? 3200 : 1600);
 }
@@ -674,15 +744,25 @@ function toast(msg: string, ms = 1100) {
   clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => toastEl.classList.remove('on'), ms);
 }
-/** A word over the hitter's head (never on the ball), small and quick. */
-function floater(text: string, cls: string, x: number, y: number) {
+/** the shots over the head: the human's always get their name after the hit */
+const OVERHEAD = new Set<ShotKind>(['smash', 'vibora', 'bandeja', 'bajada']);
+/**
+ * A word over the hitter's head (never on the ball), small and quick (`sub`: a smaller word under it; `long`: up a
+ * little longer, a shot's name to read).
+ */
+function floater(text: string, cls: string, x: number, y: number, sub = '', long = false) {
   const d = document.createElement('div');
-  d.className = `fl ${cls}`;
+  d.className = `fl ${cls}${long ? ' long' : ''}`;
   d.textContent = text;
+  if (sub) {
+    const s = document.createElement('small');
+    s.textContent = sub;
+    d.append(s);
+  }
   d.style.left = `${x}px`;
   d.style.top = `${y}px`;
   fxLayer.appendChild(d);
-  setTimeout(() => d.remove(), 800);
+  setTimeout(() => d.remove(), long ? 1200 : 800);
 }
 function doFlash(a = 0.35) {
   if (REDUCED) return;
@@ -750,13 +830,17 @@ function onEvent(m: Match, e: MatchEvent, live: boolean) {
         // over the head, not on the ball: PERFECT (gold), early or late (the manual swing), and in the full
         // indicators the kind of an aimed shot; the automatic shot is the quiet default, and the serve's label came
         // with the release
-        // (a remate going for «por 3» / «por 4» always says so, in gold: the gesture was read)
-        const lbl = e.special ? t('kind.' + e.special) : e.timing === 'good' ? (save.hud === 'full' ? t('kind.' + e.kind) : '') : e.timing === 'auto' ? '' : t('timing.' + e.timing);
+        // (a remate going for «por 3» / «por 4» always says so, in gold: the gesture was read; any shot over the head
+        // says which one came out, also with the minimal indicators, its timing under it: auditoría 04, M2)
+        const over = OVERHEAD.has(e.kind);
+        const timed = e.timing === 'perfect' || e.timing === 'early' || e.timing === 'late';
+        const lbl = e.special ? t('kind.' + e.special) : over ? t('kind.' + e.kind) : e.timing === 'good' ? (save.hud === 'full' ? t('kind.' + e.kind) : '') : e.timing === 'auto' ? '' : t('timing.' + e.timing);
         if (lbl && e.kind !== 'serve') {
           // beside the head, away from the paddle side (where the ball leaves from)
           const sp = view.toScreen(p.x, 2.1, p.z);
           const paddle = view.toScreen(e.x, e.y, e.z).x >= sp.x ? 1 : -1;
-          floater(lbl, e.special ? 'perfect' : e.timing, sp.x - paddle * 30 * ui, sp.y);
+          const cls = e.special || (over && e.timing === 'perfect') ? 'perfect' : over ? 'shot' : e.timing;
+          floater(lbl, cls, sp.x - paddle * 30 * ui, sp.y, (e.special || over) && timed ? t('timing.' + e.timing) : '', !!e.special || over);
         }
         if (e.special) {
           view.shake = 0.35;
@@ -773,11 +857,11 @@ function onEvent(m: Match, e: MatchEvent, live: boolean) {
         else if (big) freeze(0.045);
         if (e.kind === 'serve') {
           tut.served = true;
-          if (hintKey === 'tut.serve') setHint('');
+          doneHint('tut.serve');
         } else if (e.timing !== 'auto') {
           tut.hit = true;
           tut.kinds++;
-          if (hintKey.startsWith('tut.hit')) setHint('');
+          doneHint('tut.hit');
           if (!save.tutorial && tut.kinds === 2 && !tut.shownKinds) {
             tut.shownKinds = true;
             setHint('tut.kinds', 6);
@@ -828,6 +912,8 @@ function onEvent(m: Match, e: MatchEvent, live: boolean) {
       let main: string;
       // from the player's side: our winner, their clean winner, a ball we did not reach or let go
       if (e.reason === 'winner' || e.reason === 'miss' || e.reason === 'letGo') main = mine ? t('reason.winner') : e.reason === 'winner' ? t('reason.winnerThem') : t('reason.' + e.reason);
+      // (the ball hit a player of the receiving team: you, or someone else)
+      else if (e.reason === 'body') main = t(e.touched !== undefined && m.players[e.touched]?.human ? 'reason.bodyMe' : 'reason.body');
       else main = t('reason.' + e.reason);
       // (0.8 explained every point in a second line and gave tips; Germán, 10 oct: «no tiene mucho sentido». The
       // explainer still runs: its lines are kept for the captures and the bots, window.__pb.why)
@@ -836,7 +922,8 @@ function onEvent(m: Match, e: MatchEvent, live: boolean) {
       // reasons), and a remate going for por 3 / por 4 that ended in an error says so under the reason
       const call = explainer.callout(e);
       if (call?.shout) main = t(call.shout);
-      showBanner(main, mine ? 'good' : 'bad', call?.failed ? t(`shout.${call.failed}Miss`) : '');
+      const them = bc.teams?.[1]?.names.join(' / ') ?? '';
+      showBanner(main, mine ? 'good' : 'bad', call?.failed ? t(`shout.${call.failed}Miss`) : '', '', mine ? t('point.us') : them ? t('point.them', { name: them }) : t('point.themShort'));
       if (e.reason === 'exit' || e.reason === 'back') {
         por34[e.winner]++;
         if (mine) doFlash(0.22);
@@ -859,7 +946,7 @@ function onEvent(m: Match, e: MatchEvent, live: boolean) {
     case 'over': {
       const won = e.winner === 0;
       // (the victory strap has the bottom of the screen)
-      setHint('');
+      clearHint();
       audio.play(won ? 'win' : 'lose');
       // the end screen comes after the victory shot (bc.onEnd)
       bc.onEvent(m, e);
@@ -893,8 +980,9 @@ function wouldWinSet(m: Match, k: 0 | 1): boolean {
 function endScreen(m: Match, won: boolean) {
   if (match !== m || mode !== 'play') return;
   mode = 'end';
+  audio.music('menu');
   hud.hidden = true;
-  setHint('');
+  clearHint();
   clearBanner();
   const n = PAIRS.length;
   const i = PAIRS.indexOf(pair);
@@ -961,6 +1049,15 @@ const ringTarget = document.createElement('div');
 ringTarget.className = 'ring target';
 const chip = document.createElement('div');
 chip.className = 'chip';
+// the shot's name, and before it (while the timing ring is on) a small copy of the ring: the big one is on the ball,
+// which comes down the screen to your player, under the right thumb (auditoría 04, A3); this one is where you look
+chip.innerHTML = '<span class="mr"><i></i></span><span class="cl"></span>';
+const chipRing = chip.firstElementChild as HTMLElement;
+const chipText = chip.lastElementChild as HTMLElement;
+/** over the head, while you aim: what each flick would play (auditoría 04, M2), under the shot's name */
+const fan = document.createElement('div');
+fan.className = 'fan';
+fan.setAttribute('aria-hidden', 'true');
 /** «¡Atácala!»: beside the player when the coming ball sits up (never on the ball) */
 const cueChip = document.createElement('div');
 cueChip.className = 'chip';
@@ -969,8 +1066,8 @@ const stickBase = document.createElement('div');
 stickBase.className = 'stick-base';
 const stickKnob = document.createElement('div');
 stickKnob.className = 'stick-knob';
-stickBase.hidden = stickKnob.hidden = chip.hidden = cueChip.hidden = true;
-fxLayer.append(ringOuter, ringTarget, chip, cueChip, stickBase, stickKnob);
+stickBase.hidden = stickKnob.hidden = chip.hidden = cueChip.hidden = fan.hidden = true;
+fxLayer.append(ringOuter, ringTarget, chip, fan, cueChip, stickBase, stickKnob);
 const isTouch = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
 /** the timing ring: its size far from the contact and at the ideal release (px on a 390 px phone) */
 const RING_MAX = 64;
@@ -1003,8 +1100,12 @@ function overTeam(m: Match, team: 0 | 1, x: number, y: number, r: number): boole
   return false;
 }
 
+/** a box on screen: left, top, right, bottom (px) */
+type Box = [number, number, number, number];
+/** how much two boxes share (px²) */
+const overlap = (a: Box, b: Box) => Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0])) * Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
 /** where the opponents stand on screen (the chip keeps off them) */
-function rivalsOnScreen(m: Match, team: 0 | 1): [number, number, number, number][] {
+function rivalsOnScreen(m: Match, team: 0 | 1): Box[] {
   return m.players
     .filter((p) => p.team !== team)
     .map((p) => {
@@ -1015,25 +1116,82 @@ function rivalsOnScreen(m: Match, team: 0 | 1): [number, number, number, number]
     });
 }
 const chipW = new Map<string, number>();
-/** The shot's name beside the landing mark (never on it), on the side away from the opponents and the edges. */
-function placeChip(m: Match, team: 0 | 1, x: number, y: number, text: string, color: string) {
-  if (chip.textContent !== text) chip.textContent = text;
+/**
+ * The shot's name beside the landing mark (never on it), on the side away from the opponents and the edges (`timed`:
+ * with the small timing ring before it). Returns where it went (left, top, width).
+ */
+function placeChip(m: Match, team: 0 | 1, x: number, y: number, text: string, color: string, timed: boolean, avoid: Box[]): [number, number, number] {
+  if (chipText.textContent !== text) chipText.textContent = text;
   chip.style.color = color;
-  let w = chipW.get(text);
+  chip.classList.toggle('timed', timed);
+  const wk = timed ? `${text}\u0001` : text;
+  let w = chipW.get(wk);
   if (w === undefined) {
     w = chip.offsetWidth;
-    chipW.set(text, w);
+    chipW.set(wk, w);
   }
   const h = 20 * ui;
   const gap = 14 * ui;
   const top = y - h / 2;
-  const boxes = rivalsOnScreen(m, team);
+  const boxes = [...rivalsOnScreen(m, team), ...avoid];
   const W = window.innerWidth;
   const bad = (x0: number) => x0 < 4 || x0 + w! > W - 4 || boxes.some((b) => x0 < b[2] && x0 + w! > b[0] && top < b[3] && top + h > b[1]);
   let x0 = x + gap;
   if (bad(x0) && !bad(x - gap - w)) x0 = x - gap - w;
   x0 = Math.max(4, Math.min(W - w - 4, x0));
   chip.style.transform = `translate(${x0.toFixed(1)}px, ${top.toFixed(1)}px)`;
+  return [x0, top, w];
+}
+
+/**
+ * The small timing ring in the shot's name: the same closing (k: 1 far from the contact … 0 at the ideal release) and
+ * the same colours as the big one.
+ */
+function drawChipRing(k: number, cls: string) {
+  chipRing.style.setProperty('--r', Math.max(0, Math.min(1, k)).toFixed(3));
+  const c = `mr${cls}`;
+  if (chipRing.className !== c) chipRing.className = c;
+}
+
+/**
+ * Over the head (auditoría 04, M2): what each gesture plays on this ball, as the swing will read it (brain.ts,
+ * kindForAim, the same rules): a flick straight up, at full power, bent to a side, down towards you. Only the ones that
+ * differ from the plain release (the shot's name already says that one), each once.
+ */
+function overheadOptions(m: Match, me: Player, plan: Plan): [string, string][] {
+  const name = (k: { kind: ShotKind; special?: Special }) => t('kind.' + (k.special ?? k.kind));
+  const base = name(kindForAim(m, me, plan, AIM_D0, false, false, 0, { power: 0.5 }));
+  const touch = isTouch;
+  const opts: [string, string][] = [
+    [touch ? '↑' : 'F', name(kindForAim(m, me, plan, AIM_D0, false, true, 0, { power: 0.75 }))],
+    [touch ? '⇈' : t('fan.hold'), name(kindForAim(m, me, plan, AIM_D0, false, true, 0, { power: 1 }))],
+    ...(touch ? [['↖↗', name(kindForAim(m, me, plan, AIM_D0, false, true, ATTACK.bend, { power: 0.75 }))] as [string, string]] : []),
+    [touch ? '↓' : '⇧F', name(kindForAim(m, me, plan, AIM_D0, false, false, 0, { down: true, power: 0.75 }))],
+  ];
+  const seen = new Set([base]);
+  return opts.filter(([, n]) => !seen.has(n) && !!seen.add(n));
+}
+let fanKey = '';
+/**
+ * The options by the shot's name (`chip`: its box; aligned on its left edge, or its right one when the name sits left
+ * of its mark): under it, or over it when that covers less of the opponents and the timing ring (`avoid`).
+ */
+function placeFan(opts: [string, string][], chipBox: Box, alignRight: boolean, avoid: Box[]) {
+  const key = opts.map((o) => o.join(' ')).join('|');
+  fan.hidden = false;
+  if (key !== fanKey) {
+    fanKey = key;
+    fan.innerHTML = opts.map(([g, n]) => `<span><b>${g}</b>${n}</span>`).join('');
+  }
+  const w = fan.offsetWidth;
+  const h = fan.offsetHeight;
+  const x0 = Math.max(4, Math.min(window.innerWidth - w - 4, alignRight ? chipBox[2] - w : chipBox[0]));
+  const gap = 3 * ui;
+  const cost = (y: number) => (y < 4 ? 1e9 : avoid.reduce((a, b) => a + overlap([x0, y, x0 + w, y + h], b), 0));
+  const below = chipBox[3] + gap;
+  const above = chipBox[1] - gap - h;
+  const y = cost(above) < cost(below) ? above : below;
+  fan.style.transform = `translate(${x0.toFixed(1)}px, ${y.toFixed(1)}px)`;
 }
 
 /** the timing ring's last drawn time-to-contact, so it closes smoothly (never grows back or leaps) */
@@ -1045,26 +1203,10 @@ function overlays(m: Match, dt = 1 / 60) {
   ballCue(m, me, dt);
   let ringOn = false;
   let ringThin = false;
-  // aiming: the landing mark and the arc are drawn on the court (view.aim); the shot's name beside the mark
-  if (input.active && (m.phase === 'serve' ? m.server() === me : m.phase === 'rally')) {
-    const plan = hp?.plan ?? null;
-    // (an attack key held, F or the right button: its power grows with the hold, and over a high ball near the net
-    // the preview is the remate por 3, or with Shift the por 4)
-    const rally = m.phase === 'rally';
-    const keyed = rally && (input.attackHeld || input.downHeld);
-    const pw = keyed ? input.powerNow() : 0.5;
-    const a = human.aim(m, me, plan, input.dx, input.dy, input.attackHeld && rally, 0, { power: pw, down: rally && input.downHeld });
-    view.aim = { x: a.x, z: a.z, kind: a.kind, ok: a.ok, from: human.contactPoint(m, me, plan), clear: a.clear, pace: a.pace };
-    const sp = view.toScreen(a.x, 0, a.z);
-    chip.hidden = false;
-    placeChip(m, me.team, sp.x, sp.y, !a.ok ? t('aim.out') : a.special ? t('kind.' + a.special) : t('kind.' + a.kind), cssHue(aimHue(a.kind, a.ok)));
-    // the power of the held key, a bar under the shot's name (a finger's is the speed of its flick: known at the lift)
-    chip.classList.toggle('pw', keyed);
-    if (keyed) chip.style.setProperty('--pw', Math.min(1, pw).toFixed(2));
-  } else {
-    view.aim = null;
-    chip.hidden = true;
-  }
+  /** the timing ring's state this frame (k: 1 open … 0 closed, its colour class), for its copy in the shot's name */
+  let timing: { k: number; cls: string } | null = null;
+  /** where the ball's timing ring is drawn (the shot's name and the options keep off it) */
+  const avoid: Box[] = [];
   // the timing ring: closes on the ball as it comes, gold in the perfect window, red too late or an illegal volley
   // (assisted: not for a ball going out, which is left alone unless you hold the aim). Minimal indicators: only
   // while you aim (the release is what it times), always with the manual swing.
@@ -1101,6 +1243,8 @@ function overlays(m: Match, dt = 1 / 60) {
         // (fades in as the ball comes, rather than popping up at full size)
         drawRing(sp.x, sp.y, size, cls, Math.min(1, (1.35 - shown) / 0.35) * (teach ? 0.4 : 1) * (ringThin ? (gold ? 0.85 : 0.55) : 1));
         ringOn = true;
+        timing = { k, cls };
+        avoid.push([sp.x - size / 2, sp.y - size / 2, sp.x + size / 2, sp.y + size / 2]);
       }
       if (!save.tutorial && !tut.hit && (hintKey === '' || hintKey.startsWith('tut.move')) && m.rally && m.rally.shots >= 1) {
         // assisted: shown once for a while (the player may never need to press)
@@ -1111,34 +1255,72 @@ function overlays(m: Match, dt = 1 / 60) {
       }
     }
   }
-  // the serve's pulse around the ball in the hand (smallest, and gold, at the best moment; minimal: while you aim)
-  if (m.phase === 'serve' && m.server() === me && !m.windup && (full || input.active)) {
+  // the serve's pulse around the ball in the hand (smallest, and gold, at the best moment; minimal: while you aim, and
+  // faint before that until the first serve of the first match: its hint speaks of it, auditoría 04 B2)
+  const teachServe = !full && !input.active && !save.tutorial && !tut.served;
+  if (m.phase === 'serve' && m.server() === me && !m.windup && (full || input.active || teachServe)) {
     const c = human.contactPoint(m, me, null);
     const sp = view.toScreen(c.x, c.y + 0.25, c.z);
     const s = servePulse(m.t);
-    drawRing(sp.x, sp.y, (RING_MIN + s * (RING_MAX - RING_MIN)) * ui, s < 0.26 ? ' gold' : '');
+    const cls = s < 0.26 ? ' gold' : '';
+    drawRing(sp.x, sp.y, (RING_MIN + s * (RING_MAX - RING_MIN)) * ui, cls, teachServe ? 0.45 : 1);
     ringOn = true;
+    timing = { k: s, cls };
   }
+  // aiming: the landing mark and the arc are drawn on the court (view.aim); the shot's name beside the mark, with the
+  // small copy of the timing ring; over the head, under it, what each flick would play
+  let fanOn = false;
+  if (input.active && (m.phase === 'serve' ? m.server() === me : m.phase === 'rally')) {
+    const plan = hp?.plan ?? null;
+    // (an attack key held, F or the right button: its power grows with the hold, and over a high ball near the net
+    // the preview is the remate por 3, or with Shift the por 4)
+    const rally = m.phase === 'rally';
+    const keyed = rally && (input.attackHeld || input.downHeld);
+    const pw = keyed ? input.powerNow() : 0.5;
+    const a = human.aim(m, me, plan, input.dx, input.dy, input.attackHeld && rally, 0, { power: pw, down: rally && input.downHeld });
+    view.aim = { x: a.x, z: a.z, kind: a.kind, ok: a.ok, from: human.contactPoint(m, me, plan), clear: a.clear, pace: a.pace };
+    const sp = view.toScreen(a.x, 0, a.z);
+    chip.hidden = false;
+    const [cx, cy, cw] = placeChip(m, me.team, sp.x, sp.y, !a.ok ? t('aim.out') : a.special ? t('kind.' + a.special) : t('kind.' + a.kind), cssHue(aimHue(a.kind, a.ok)), !!timing, avoid);
+    if (timing) drawChipRing(timing.k, timing.cls);
+    // the power of the held key, a bar under the shot's name (a finger's is the speed of its flick: known at the lift)
+    chip.classList.toggle('pw', keyed);
+    if (keyed) chip.style.setProperty('--pw', Math.min(1, pw).toFixed(2));
+    if (rally && plan && plan.overhead && plan.reach && !keyed && m.rally && m.rally.shots > 1) {
+      const opts = overheadOptions(m, me, plan);
+      if (opts.length) {
+        fanOn = true;
+        placeFan(opts, [cx, cy, cx + cw, cy + 20 * ui], cx + cw / 2 < sp.x, [...rivalsOnScreen(m, me.team), ...avoid, [sp.x - 8, sp.y - 8, sp.x + 8, sp.y + 8]]);
+      }
+    }
+  } else {
+    view.aim = null;
+    chip.hidden = true;
+  }
+  fan.hidden = !fanOn;
   ringOuter.hidden = ringTarget.hidden = !ringOn;
   if (ringThin) ringTarget.hidden = true;
   // the stick under the left thumb: a thin ring and a small knob that shows the push (drawn small: the thumb
-  // covers it anyway)
+  // covers it anyway; fainter still over your partner or yourself, auditoría 04 B3)
   if (input.stickBase) {
     stickBase.hidden = stickKnob.hidden = false;
     const r = STICK_DRAW * ui;
     const bx = input.stickBase.x;
     const by = input.stickBase.y;
+    const dim = overTeam(m, me.team, bx, by, r);
+    stickBase.classList.toggle('dim', dim);
+    stickKnob.classList.toggle('dim', dim);
     stickBase.style.transform = `translate(${bx}px, ${by}px) translate(-50%, -50%)`;
     stickKnob.style.transform = `translate(${(bx + input.stickX * r).toFixed(1)}px, ${(by + input.stickY * r).toFixed(1)}px) translate(-50%, -50%)`;
   } else stickBase.hidden = stickKnob.hidden = true;
   // tutorial: move, swing
   const incoming = m.phase === 'rally' && m.rally?.last && m.rally.last.team !== me.team;
-  if (!save.tutorial && incoming && !input.moved && !tut.moveShown && hintKey === '') {
+  if (!save.tutorial && incoming && !input.moved && !tut.moveShown && hintKey === '' && !hintNext) {
     tut.moveShown = true;
     setHint(isTouch ? 'tut.move' : 'tut.moveKeys');
   }
-  if (hintKey.startsWith('tut.move') && input.moved && tut.until === 0) tut.until = performance.now() + 1500;
-  if (tut.until && performance.now() > tut.until) setHint('');
+  // (once the stick is used, the move hint goes a moment later: hintTick keeps it up its HINT_MIN anyway)
+  if (hintKey.startsWith('tut.move') && input.moved && !hintOn.until) hintOn.until = performance.now() + 1500;
 }
 
 /** what the coming ball asks for (brain.ts, ballCue): attack it, block it, a bajada off the back glass, or nothing */
@@ -1203,19 +1385,21 @@ function ballCue(m: Match, me: Player, dt: number) {
   // the tutorial: the first ball to attack, the first attack to block (they take over from the general hints and from
   // each other: they are about the ball coming now)
   const general = hintKey === '' || hintKey === 'tut.kinds' || hintKey === 'tut.hit' || hintKey === 'tut.power' || hintKey.startsWith('tut.attack') || hintKey.startsWith('tut.block');
-  if (!save.tutorial && attack && !tut.attack && tut.hit && general) {
+  // (only when the line can take it now: a hint about this ball is no use later; it waits for another ball)
+  const now = general && hintFree(PRIO.ball) && !hintNext;
+  if (!save.tutorial && attack && !tut.attack && tut.hit && now) {
     tut.attack = true;
-    setHint(isTouch ? 'tut.attack' : 'tut.attackKeys', 5);
+    setHint(isTouch ? 'tut.attack' : 'tut.attackKeys', 5, false, PRIO.ball);
   }
-  if (!save.tutorial && cueNow.kind === 'block' && !tut.block && tut.hit && general) {
+  if (!save.tutorial && cueNow.kind === 'block' && !tut.block && tut.hit && now) {
     tut.block = true;
-    setHint(isTouch ? 'tut.block' : 'tut.blockKeys', 5);
+    setHint(isTouch ? 'tut.block' : 'tut.blockKeys', 5, false, PRIO.ball);
   }
   // 0.3, once ever (any match): the first bajada, and the first high ball at the net that can go «por 3» (after the
   // attack's own hint, which comes first in a first match)
   if (general && !hintKey.startsWith('tut.attack')) {
-    if (bajada) onceHint('tut.bajada', 5);
-    else if (attack && (save.tutorial || tut.attack) && por3Chance(m, me)) onceHint('tut.por3', 6);
+    if (bajada) onceHint('tut.bajada', 5, PRIO.ball);
+    else if (attack && (save.tutorial || tut.attack) && por3Chance(m, me)) onceHint('tut.por3', 6, PRIO.ball);
   }
 }
 
@@ -1279,9 +1463,15 @@ function tick(raw: number, time: number) {
     view.leavesOut = save.swing === 'assist' && !input.active;
     overlays(match, dt);
     touchCues(match);
+    hintTick();
   } else {
+    // (a hint hidden while the TV has the screen keeps its time for when it is back)
+    if (live && hintKey) {
+      hintOn.at += raw * 1000;
+      if (hintOn.until) hintOn.until += raw * 1000;
+    }
     ringOuter.hidden = ringTarget.hidden = true;
-    chip.hidden = cueChip.hidden = true;
+    chip.hidden = cueChip.hidden = fan.hidden = true;
     stickBase.hidden = stickKnob.hidden = true;
     view.aim = null;
     view.cue = null;

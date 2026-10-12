@@ -87,6 +87,8 @@ export interface Thumbs {
   bajada: number;
 }
 
+/** s from the finger's last move to the lift reaching the page (the pointerup repeats the last position) */
+const LIFT_DT = 0.012;
 /** px/s: how fast a finger drags the aim (a placing drag, well under a flick) */
 const DRAG_V = Number(process.env.DRAG_V ?? 520);
 
@@ -159,8 +161,12 @@ export class ThumbBot {
     this.input.stickY = wz * this.ctl.viewSide;
   }
 
+  /** The finger lifts: as in the browser, the pointerup's own sample (the last position, a moment later) comes first. */
   private lift() {
-    if (this.input.pressing) this.input.aimUp(this.m?.t ?? 0);
+    if (!this.input.pressing) return;
+    const t = (this.m?.t ?? 0) + LIFT_DT;
+    this.input.aimMove(this.input.dx, this.input.dy, t);
+    this.input.aimUp(t);
   }
 
   private goTo(p: Player, x: number, z: number, tol: number) {

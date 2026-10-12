@@ -9,7 +9,7 @@
 //    a little wobble where a ball hits it (vertex shader);
 //  · the steel: posts, rails, the glass' fittings and the doors in one opaque mesh that casts the cage's shadows.
 // A wall between the camera and the court (the near back wall from the gameplay camera, a side wall from a TV angle
-// in the stands) fades: the glass and the mesh to a hint, the steel to a sparse dither, so nothing hides the players.
+// in the stands) fades: the glass to a hint, the mesh to a trace and the steel away, so nothing hides the players.
 
 import * as THREE from 'three';
 import { HL, W, WALL } from '../sim/court';
@@ -236,7 +236,8 @@ function meshMaterial(wob: { value: THREE.Vector4 }, wobAmp: { value: number }, 
           cov = min( cov, vec2( cw ) / fw );
           vec2 far = smoothstep( vec2( 0.3 ), vec2( 1.0 ), fw );
           cov = mix( cov, vec2( 0.14 ), far );
-          diffuseColor.a *= ( 1.0 - ( 1.0 - cov.x ) * ( 1.0 - cov.y ) ) * mix( 1.0, 0.18, vFade );
+          // (a wall in front of the camera keeps only a trace: its wires crossed the near players in dark bands)
+          diffuseColor.a *= ( 1.0 - ( 1.0 - cov.x ) * ( 1.0 - cov.y ) ) * mix( 1.0, 0.05, vFade );
         }`,
       );
   };
@@ -258,10 +259,11 @@ function steelMaterial(): THREE.MeshStandardMaterial {
       '#include <clipping_planes_fragment>',
       `#include <clipping_planes_fragment>
       {
-        // (a 4 × 4 ordered dither: a wall in front of the camera keeps a ghost of its frame, about a pixel in four)
+        // (a 4 × 4 ordered dither: a wall half in front of the camera keeps a ghost of its frame; one right in front of
+        // it, none: its rails crossed the near players as dotted lines)
         const float B[ 16 ] = float[ 16 ]( 0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0 );
         ivec2 q = ivec2( mod( floor( gl_FragCoord.xy ), 4.0 ) );
-        if ( vFade * 0.72 > ( B[ q.x + 4 * q.y ] + 0.5 ) / 16.0 ) discard;
+        if ( vFade > ( B[ q.x + 4 * q.y ] + 0.5 ) / 16.0 ) discard;
       }`,
     );
   };

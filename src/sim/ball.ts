@@ -189,6 +189,46 @@ export function shotByClearance(from: Vec3, tx: number, tz: number, clear: numbe
   return done(b);
 }
 
+/**
+ * Height of the ball where its flight from `from` with velocity `v` crosses the plane z = `zp` (null: it never does,
+ * or it is down before it gets there).
+ */
+export function heightAtPlane(from: Vec3, v: Vec3, k: number, g: number, zp: number): number | null {
+  const s: Seg = { t0: 0, x: from.x, y: from.y, z: from.z, vx: v.x, vy: v.y, vz: v.z, k, g, spin: 0 };
+  if (v.z === 0 || Math.sign(zp - from.z) !== Math.sign(v.z)) return null;
+  const u = 1 + (k * (from.z - zp)) / v.z; // e^(−k·dt) where it crosses
+  if (u <= 0) return null;
+  const y = posAt(s, -Math.log(u) / k).y;
+  return y < R ? null : y;
+}
+
+/**
+ * The lob over a player (the studio's pickleball 0.11, docs/notas-04-simulacion.md): the height over the net tape of
+ * the arc from `from` that lands at (tx, tz) and passes the plane z = `zp` `h` m above the floor, with `spin`. The
+ * higher it must go there, the longer it hangs (minT … maxT caps it); null if the plane is not between the contact and
+ * the landing. A height over the tape, so the lob is played as any other shot (ShotSpec.clear, Match.launch).
+ */
+export function clearOver(from: Vec3, tx: number, tz: number, zp: number, h: number, spin: number, minT = 0.8, maxT = 3.6): number | null {
+  if (Math.sign(zp) === Math.sign(from.z) || Math.abs(zp) >= Math.abs(tz) - 0.2) return null;
+  const g = gravityFor(spin);
+  const at = (T: number) => {
+    const l = launchFor(from, tx, tz, T, g);
+    return { l, y: heightAtPlane(from, l.v, l.k, g, zp) ?? 0 };
+  };
+  let a = minT;
+  let b = maxT;
+  if (at(a).y >= h) b = a;
+  else if (at(b).y < h) a = b;
+  else
+    for (let i = 0; i < 24; i++) {
+      const m = (a + b) / 2;
+      if (at(m).y >= h) b = m;
+      else a = m;
+    }
+  const { l } = at(b);
+  return clearanceFor(from, l.v, l.k, g);
+}
+
 /** Fastest sensible flight time over a horizontal distance (≈ 19 m/s average, about 25 off the paddle at most). */
 export function minFlight(d: number): number {
   return Math.max(0.3, d / 19);
@@ -211,7 +251,8 @@ export function bounce(s: Seg, t: number): Seg {
   const v = velAt(s, t);
   const vh = Math.hypot(v.x, v.z);
   const vn = Math.max(0, -v.y);
-  const ey = BOUNCE_Y - 0.005 * Math.max(0, vn - 6);
+  // (a sliced ball skids: it comes up a little lower, SLICE)
+  const ey = (BOUNCE_Y - 0.005 * Math.max(0, vn - 6)) * (s.spin <= SLICE.from ? 1 + SLICE.low * s.spin : 1);
   const wr = s.spin * SPIN_SURF;
   const jRoll = (ALPHA * (vh - wr)) / (1 + ALPHA);
   const jMax = MU * (1 + ey) * vn;
@@ -219,9 +260,18 @@ export function bounce(s: Seg, t: number): Seg {
   const vh2 = Math.max(0, vh - j);
   const kh = vh > 1e-6 ? vh2 / vh : 0;
   const nv = { x: v.x * kh, y: vn * ey, z: v.z * kh };
-  const spin = Math.max(-1, Math.min(1, (wr + j / ALPHA) / SPIN_SURF));
+  let spin = Math.max(-1, Math.min(1, (wr + j / ALPHA) / SPIN_SURF));
+  // a sliced ball keeps part of its slice through the skid (the rigid-ball friction would turn it into topspin): off
+  // the back glass it then drops («se queda», wallBounce), a bandeja or a víbora does not kick up like a drive
+  if (s.spin <= SLICE.from) spin = Math.min(spin, SLICE.keep * s.spin);
   return { t0: t, x: p.x, y: R, z: p.z, vx: nv.x, vy: nv.y, vz: nv.z, spin, k: dragOf(nv), g: gravityFor(spin * 0.3) };
 }
+/**
+ * A sliced ball on the floor (bounce), one cut at least `from` (a bandeja, a víbora, a dejada; not the serve's touch of
+ * slice): `keep` of its backspin is left after the skid (at least), and it comes up `low` × the slice lower (a bandeja,
+ * −0.55: 7 % lower).
+ */
+export const SLICE = { from: -0.3, keep: 0.6, low: 0.12 };
 
 export const NET_TOP = NET_C;
 

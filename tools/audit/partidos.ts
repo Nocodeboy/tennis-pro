@@ -6,7 +6,7 @@
 // Escribe un resumen; SEEDS=1 lista semillas de ejemplo de cada rareza.
 const g = globalThis as unknown as { window?: unknown };
 g.window ??= { addEventListener() {} };
-import { AIController, HUMAN_REACTION, HUMAN_SPEED, PAIRS, PARTNER, type Rival } from '../../src/sim/brain';
+import { AIController, HUMAN_REACTION, HUMAN_SPEED, LOB, PADEL, PAIRS, PARTNER, type Rival } from '../../src/sim/brain';
 import { posAt } from '../../src/sim/ball';
 import { AT_NET, DEPTH_Z, R } from '../../src/sim/court';
 import { AREA_X, AREA_Z, Match } from '../../src/sim/match';
@@ -18,6 +18,9 @@ const MODE = process.argv[2] ?? 'cpu';
 const N = Number(process.argv[3] ?? (MODE === 'cpu' ? 40 : 16));
 const LEVEL = process.env.LEVEL ?? 'medio';
 const SHOW = !!process.env.SEEDS;
+// PADEL='{"netLob":0.8}' LOB='{…}': other values (brain.ts)
+if (process.env.PADEL) Object.assign(PADEL, JSON.parse(process.env.PADEL));
+if (process.env.LOB) Object.assign(LOB, JSON.parse(process.env.LOB));
 
 const pc = (a: number, b: number) => (b ? `${((a / b) * 100).toFixed(1)}%` : '–');
 const med = (a: number[]) => (a.length ? [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)] : NaN);

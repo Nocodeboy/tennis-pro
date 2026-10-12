@@ -82,7 +82,7 @@ const SEE = SUGGEST.see;
 const SOFT = new Set<ShotKind>(['dink', 'drop', 'auto']);
 const ATTACK = new Set<ShotKind>(['speedup', 'smash', 'vibora', 'bandeja', 'bajada']);
 /** the point was won by the last shot (not an error) */
-const WON = new Set<PointReason>(['winner', 'miss', 'letGo']);
+const WON = new Set<PointReason>(['winner', 'miss', 'letGo', 'body']);
 /** the deciding shots the banner calls by name when they win the point */
 const SHOUT = new Set<ShotKind>(['bajada', 'vibora', 'smash']);
 
@@ -335,7 +335,12 @@ export class Explainer {
       case 'winner':
       case 'miss':
       case 'letGo':
-        return L.team === my ? this.ourWinner(m, e, L, li) : this.theirWinner(m, e, L, li, my);
+        return L.team === my ? this.ourWinner(m, e, L, li) : this.theirWinner(m, e, L, li, my);      case 'body': {
+        // the ball hit a player of the receiving team: the hitter's point (FIP)
+        const pid = e.touched ?? -1;
+        const me = pid >= 0 && this.isMe(m, pid);
+        return this.line(me ? 'x.bodyMe' : pid >= 0 ? 'x.body' : 'x.bodyAny', { S: this.shot(m, L), name: pid >= 0 ? this.name(pid) : '' }, null, { reason: e.reason, kind: L.kind, speed: L.speed });
+      }
     }
     return null;
   }

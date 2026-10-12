@@ -12,6 +12,7 @@
 //  · the return of serve: low at the feet of the server coming in, or a lob over the net player.
 
 import { HUMAN_ATTRS, type Attributes } from './attributes';
+import { clearOver } from './ball';
 import { AT_NET, DEPTH_Z, HL, NET_C, SERVICE, W } from './court';
 import type { Controller, Match, Mover } from './match';
 import type { Plan, Player, ShotKind, ShotSpec, Special, Timing } from './types';
@@ -82,37 +83,43 @@ const tend = (v: number) => 0.55 + v / 180;
 /**
  * THE mapping from a card (attributes 0 … 99) and a style to a CPU player's game. Every number of the card moves
  * something; the anchors are the 0.1 rivals (Paquito ≈ 55, Arturo ≈ 90), so the ladder kept its shape:
- *  · vel → speed (4.0 m/s at 55, 5.0 at 85, +0.033 a point) and, with ref, the lunge (0.4 … 0.75 m);
- *  · ref → reaction (0.34 s at 56, −4.4 ms a point), the first read of a fast ball (read: 0.30 → 0.08 m), how often
- *    they volley a ball going out (misjudge), and with con the poise (how much an awkward ball gets to them);
- *  · con → contact quality q (0.70 at 55, +0.0055 a point) and its spread qVar (0.15 → 0.08);
- *  · pot → power of the firm shots (0.5 at 75, ±0.006 a point) and, with rem, the remate por 3 / por 4 (por);
- *  · rem → the overheads' quality (attrQ), the attack tendency (with pot) and the reach over the head (2.75 … 2.95 m);
- *  · par → bajadas (wall: how readily) and the quality of every ball played off the glass (attrQ);
- *  · tq → the soft game: the touch and lob tendencies and the quality of chiquitas, dejadas and globos (attrQ).
+ *  · vel → speed (4.0 m/s at 55, 5.0 at 85, +0.033 a point), most of the lunge (0.4 … 0.8 m) and the time to set
+ *    up a contact (CARD);
+ *  · ref → reaction (0.33 s at 56, −3.5 ms a point), the first read of a fast ball (read: 0.30 → 0.08 m), how often
+ *    they volley a ball going out (misjudge), and a little of the poise (how much an awkward ball gets to them);
+ *  · con → contact quality q (0.71 at 55, +0.0048 a point), its spread qVar (0.15 → 0.08), the risk they take (how
+ *    close to the lines they aim) and fewer frame errors (CARD.shank);
+ *  · pot → power of the firm shots (0.5 at 75, ±0.003 a point; their pace and weight, CARD) and, with rem, the remate
+ *    por 3 / por 4 (por);
+ *  · rem → the overheads' and high volleys' quality (attrQ, CARD), the attack tendency (with pot) and the reach over
+ *    the head (2.78 … 3.05 m);
+ *  · par → bajadas (wall: how readily) and every ball played off the glass or defended from the back (attrQ, CARD);
+ *  · tq → the soft game: the touch and lob tendencies and the quality of chiquitas, dejadas, globos and low volleys
+ *    (attrQ, CARD).
  */
 export function skillFrom(a: Attributes, st: Style): Skill {
   const c = (v: number, lo = 0, hi = 1) => clamp(v, lo, hi);
-  const reflex = (a.con + a.ref) / 2;
+  const reflex = a.con * 0.7 + a.ref * 0.3;
   return {
     speed: lin(a.vel, 55, 85, 4.0, 5.0),
-    reaction: c(lin(a.ref, 56, 90, 0.34, 0.19), 0.15, 0.4),
-    q: c(lin(a.con, 55, 88, 0.7, 0.8815), 0.6, 0.92),
+    reaction: c(lin(a.ref, 56, 90, 0.325, 0.215), 0.15, 0.4),
+    q: c(lin(a.con, 55, 88, 0.715, 0.86), 0.6, 0.92),
     qVar: c(lin(a.con, 55, 90, 0.15, 0.08), 0.06, 0.18),
     touch: c(st.touch * tend(a.tq)),
     attack: c(st.attack * tend((a.pot + a.rem) / 2)),
     lob: c(st.lob * tend(a.tq)),
-    risk: c(st.risk * tend(a.pot)),
-    mover: { netRush: st.netRush, misjudge: c(lin(a.ref, 56, 90, 0.25, 0.03), 0.02, 0.3), lunge: c(lin((a.vel + a.ref) / 2, 55.5, 89, 0.4, 0.75), 0.3, 0.85) },
+    // (how close to the lines they aim is their style: a powerful player who aimed closer too only made more errors)
+    risk: c(st.risk),
+    mover: { netRush: st.netRush, misjudge: c(lin(a.ref, 56, 90, 0.25, 0.03), 0.02, 0.3), lunge: c(lin(a.vel * 0.7 + a.ref * 0.3, 55.5, 89, 0.4, 0.8), 0.3, 0.9) },
     serveDelay: st.serveDelay,
     poise: c(lin(reflex, 56, 89, 1, 0.5), 0.45, 1),
-    read: c(lin(a.ref, 56, 90, 0.3, 0.08), 0.04, 0.35),
+    read: c(lin(a.ref, 56, 90, 0.27, 0.11), 0.04, 0.35),
     attrs: a,
-    power: c(0.5 + (a.pot - 75) * 0.006, 0.25, 0.75),
+    power: c(0.5 + (a.pot - 75) * 0.003, 0.35, 0.65),
     por: c(((a.pot + a.rem) / 2 - 72) / 22) * (st.por ?? 1),
     wall: c((a.par - 45) / 45),
     vibora: st.vibora ?? 0.55,
-    reachH: 2.75 + a.rem * 0.002,
+    reachH: 2.45 + a.rem * 0.0065,
   };
 }
 
@@ -127,26 +134,64 @@ export function humanSkill(a: Attributes = HUMAN_ATTRS): { speed: number; powerC
     speed: 5.0 + (a.vel - 76) * 0.02,
     powerCap: clamp(0.75 + a.pot * 0.0034, 0.85, 1.1),
     q: (a.con - 72) * 0.002,
-    reachH: 2.75 + a.rem * 0.002,
+    reachH: 2.45 + a.rem * 0.0065,
     wall: clamp((a.par - 45) / 45, 0, 1),
   };
 }
 
 /**
- * How a shot's own attribute moves its contact quality, against the player's control (con): `k` per point. Overheads
- * ride on rem, a bajada and any ball played off the glass on par, the soft game on tq, volleys at the net on ref (with
- * con). Paquito's walls (par 72) are better than his control (56); Alejandro's remates (92) better than his (82).
+ * How a shot's own attribute moves its contact quality, against the player's control (con): `k` per point (about two
+ * thirds of con's own slope, so the shot's attribute weighs more than con on it). Each attribute has its share of the
+ * game: overheads and high volleys at the net ride on rem; a bajada, any ball off the glass and the defence from the
+ * back after the bounce on par; the soft game (chiquitas, dejadas, globos) and the low volley at the net on tq; the
+ * volleys at the net in between on ref (with con); the rest (drives, returns, serves) on con. Paquito's walls (par 72)
+ * are better than his control (56); Alejandro's remates (92) better than his (82).
  */
-export const ATTR_Q = { k: 0.0025 };
+export const ATTR_Q = { k: 0.0042 };
 export function attrQ(a: Attributes | undefined, kind: ShotKind, plan: Plan | null): number {
   if (!a) return 0;
-  let v = a.con;
-  if (kind === 'smash' || kind === 'bandeja' || kind === 'vibora') v = a.rem;
-  else if (kind === 'bajada') v = a.par;
-  else if (kind === 'dink' || kind === 'drop' || kind === 'lob') v = plan?.volley && Math.abs(plan.fz) < AT_NET ? (a.tq + a.ref) / 2 : a.tq;
-  else if (plan?.wall) v = a.par;
-  else if (plan?.volley && Math.abs(plan.fz) < AT_NET) v = (a.con + a.ref) / 2;
-  return (v - a.con) * ATTR_Q.k;
+  return (domainOf(a, kind, plan) - a.con) * ATTR_Q.k;
+}
+/** the card's attribute behind this shot on this ball (see attrQ) */
+function domainOf(a: Attributes, kind: ShotKind, plan: Plan | null): number {
+  const net = !!plan?.volley && Math.abs(plan.fz) < AT_NET;
+  if (kind === 'smash' || kind === 'bandeja' || kind === 'vibora') return a.rem;
+  if (kind === 'bajada') return a.par;
+  if (kind === 'dink' || kind === 'drop' || kind === 'lob') return net ? (a.tq + a.ref) / 2 : plan?.wall ? (a.tq + a.par) / 2 : a.tq;
+  if (plan?.wall || (plan && !plan.volley && Math.abs(plan.fz) > SERVICE - 0.5 && kind !== 'serve' && kind !== 'return')) return a.par;
+  if (net && plan) return plan.by > NET_C + 0.3 ? a.rem : plan.by < NET_C ? a.tq : (a.con + a.ref) / 2;
+  return a.con;
+}
+/**
+ * The card on a CPU contact beyond its quality (AIController.hit), per point over 70 (less under it):
+ *  · pot: the firm shots fly sooner (pace × 1 − `pace`·Δ), with no more scatter: the other side is rushed;
+ *  · rem: overheads easier (`rem` off the awkwardness) and faster (`remPace`);
+ *  · par: a ball off the glass or defended from the back easier (`par`);
+ *  · tq: a chiquita or dejada lower over the tape (× 1 − `tqClear`·Δ: harder to attack), a globo a touch higher;
+ *  · vel: time to set up (the planner's spare time, Plan.spare): from `want` s in hand down to none, a contact goes
+ *    from `mid` × `setup` easier to (1 − `mid`) × `setup` more awkward; and chased back (RUN_BACK) the faster get there
+ *    in better shape;
+ *  · con: fewer frame errors (the shank margin, SHANK, × 1 − `shank`·Δ).
+ * And the incoming ball: `weight` (weightOf) per point of the hitter's card (at most ± `wMax`: between two strong pairs
+ * every ball is not a cannonball), `perfect` more for a shot released on the
+ * gold ring (the human's PERFECTO: his placed balls press the CPU).
+ */
+export const CARD = { pace: 0.005, rem: 0.01, remPace: 0.003, par: 0.011, tqClear: 0.006, want: 0.6, mid: 0.45, setup: 0.55, weight: { pot: 0.01, rem: 0.009, tq: 0.008, par: 0.009 }, wMax: 0.15, perfect: 0.05, shank: 0.012 };
+/**
+ * The weight of the coming ball (difficulty, for whoever plays it): the card behind it makes it harder to handle, per
+ * point over 70 × CARD.weight of that attribute (easier under 70): pot on the firm shots (a heavy ball), rem (and half
+ * pot) on an overhead, tq on a chiquita, a dejada or a globo, par (and half pot) on a bajada.
+ */
+function weightOf(m: Match): number {
+  const h = m.rally?.last;
+  const k = h?.lastHit?.kind;
+  const a = h ? m.controllers[h.id]?.card : undefined;
+  if (!h || !k || !a || k === 'serve') return 0;
+  const w = CARD.weight;
+  if (k === 'smash' || k === 'vibora' || k === 'bandeja') return (a.rem - 70) * w.rem + (a.pot - 70) * w.pot * 0.5;
+  if (k === 'dink' || k === 'drop' || k === 'lob' || k === 'auto') return (a.tq - 70) * w.tq;
+  if (k === 'bajada') return (a.par - 70) * w.par + (a.pot - 70) * w.pot * 0.5;
+  return (a.pot - 70) * w.pot;
 }
 
 /**
@@ -197,6 +242,10 @@ export class AIController implements Controller {
   readonly mover: Mover;
   constructor(readonly skill: Skill) {
     this.mover = skill.mover;
+  }
+  /** the card (Controller.card) */
+  get card(): Attributes | undefined {
+    return this.skill.attrs;
   }
   /** the highest ball they meet over the head (the card's rem) */
   get reachH(): number {
@@ -281,7 +330,17 @@ export class AIController implements Controller {
     // passed: a ball that went by and had to be chased back towards their own glass (a lob, a volley through them) is
     // played turning, on the run (RUN_BACK)
     // (a ball come back off the back glass gave them the time it took there: half of it)
-    if (c) hard += clamp((Math.abs(plan.fz) - c.z0 - RUN_BACK.from) * RUN_BACK.per, 0, RUN_BACK.max) * (0.6 + 0.4 * poise) * (plan.wall === 'back' ? 0.5 : 1);
+    // (the faster get back in better shape, CARD)
+    if (c) hard += clamp((Math.abs(plan.fz) - c.z0 - RUN_BACK.from) * RUN_BACK.per, 0, RUN_BACK.max) * (0.6 + 0.4 * poise) * (plan.wall === 'back' ? 0.5 : 1) * (4.6 / Math.max(3.5, s.speed));
+    // the card on this ball (CARD): time to set up (vel), an overhead (rem), a ball off the glass or from the back (par)
+    const a = s.attrs;
+    if (a) {
+      // (centred: a contact with the usual time in hand, CARD.mid of `want`, costs nothing; more time is easier)
+      hard += (clamp((CARD.want - (plan.spare ?? CARD.want)) / CARD.want, 0, 1) - CARD.mid) * CARD.setup;
+      if (plan.overhead || (plan.volley && plan.by > NET_C + 0.3)) hard -= (a.rem - 70) * CARD.rem;
+      if (plan.wall || (!plan.volley && Math.abs(plan.fz) > SERVICE - 0.5)) hard -= (a.par - 70) * CARD.par;
+      hard = Math.max(0, hard);
+    }
     let shot = chooseShot(m, p, plan, s, hard);
     let risk = attackRisk(shot.kind, plan) * poise;
     // A fast ball at the body or the feet, below the tape and with no time: the safe answer is a soft block (it takes
@@ -310,6 +369,14 @@ export class AIController implements Controller {
     }
     // how hard: their usual power on the firm shots (the card's pot), a notch more on an attack, placed on the soft ones
     if (shot.power === undefined) shot = { ...shot, power: cpuPower(s, shot.kind, plan) };
+    // the card's pace (pot, rem) and touch (tq), CARD
+    if (a) shot = cardShot(shot, a);
+    // the lob goes over the pair at the net by a margin (LOB): the bolder, the tighter; chased back, a higher one
+    if (shot.kind === 'lob' && (m.rally?.shots ?? 0) > 1) {
+      const chased = m.rally?.last?.lastHit?.kind === 'lob' && Math.abs(plan.fz) > SERVICE - 0.5;
+      const over = chased ? LOB.defOver : LOB.over + (1 - s.risk) * LOB.shy + m.rng.next() * LOB.vary;
+      shot = { ...shot, clear: lobClear(m, p, { x: plan.bx, y: plan.by, z: plan.bz }, shot.tx, shot.tz, over, shot.clear) };
+    }
     const spec = this.roll(m, shot, hard + risk, plan);
     // the rally weighs on them (less on the calm ones, and less against a pattern they have already read)
     spec.pop = popOf(m, poise * (1 - 0.5 * fam));
@@ -333,9 +400,22 @@ export class AIController implements Controller {
     const q = clamp(raw, Q_FLOOR, 1);
     const timing: Timing = q > 0.93 ? 'perfect' : q > 0.7 ? 'good' : 'early';
     const late = clamp(m.rng.gauss() * (1 - q) * 1.1, -1, 1);
-    const shank = shankOf(m, raw, Q_FLOOR);
+    // (the better the control, the fewer frame errors: CARD.shank)
+    const shank = shankOf(m, raw, Q_FLOOR, SHANK.margin * clamp(1 - ((s.attrs?.con ?? 70) - 70) * CARD.shank, 0.6, 1.3));
     return { ...base, q, timing, late, power: base.power ?? s.power ?? 0.5, ...(shank > 0 ? { shank } : {}) };
   }
+}
+
+/** A CPU shot with the card's pace and touch on it (CARD). */
+function cardShot(shot: Omit<ShotSpec, 'q' | 'timing'>, a: Attributes): Omit<ShotSpec, 'q' | 'timing'> {
+  const k = shot.kind;
+  if (shot.special) return shot;
+  if (k === 'dink' || k === 'drop') return { ...shot, clear: Math.max(0.06, shot.clear * (1 - (a.tq - 70) * CARD.tqClear)) };
+  if (k === 'lob') return { ...shot, clear: shot.clear * (1 + (a.tq - 70) * 0.004) };
+  if (k === 'serve' || k === 'bandeja') return { ...shot, pace: (shot.pace ?? 1) * (k === 'bandeja' ? 1 - (a.rem - 70) * CARD.remPace : 1) };
+  let pace = (shot.pace ?? 1) * (1 - (a.pot - 70) * CARD.pace);
+  if (k === 'smash' || k === 'vibora') pace *= 1 - (a.rem - 70) * CARD.remPace;
+  return { ...shot, pace };
 }
 
 /**
@@ -431,7 +511,8 @@ export function popOf(m: Match, k = 1): number {
  * little time to react (a volley at the body, a remate).
  */
 function rushed(m: Match, plan: Plan): number {
-  let d = clamp((ballSpeed(m) - 10) / 10, 0, 1.2) * 0.15;
+  // (a remate or a hard volley keeps rushing them up to 34 m/s: the card's pot pays here)
+  let d = clamp((ballSpeed(m) - 10) / 10, 0, 2.4) * 0.15;
   const r = m.rally;
   if (r && r.bounces === 0) d += clamp(r.seg.y - 1.0, 0, 1) * 0.12;
   const last = r?.last?.lastHit;
@@ -447,7 +528,7 @@ function rushed(m: Match, plan: Plan): number {
 }
 
 /** A volley met below `below` m is `per` per metre of it harder (the ball has to be lifted over the net). */
-export const LOW_VOLLEY = { below: 0.9, per: 0.6 };
+export const LOW_VOLLEY = { below: 0.9, per: 0.3 };
 
 /** How hard the incoming ball is to play well (0 = sitting up nicely). */
 export function difficulty(m: Match, p: Player, plan: Plan): number {
@@ -463,6 +544,9 @@ export function difficulty(m: Match, p: Player, plan: Plan): number {
   if (gz < 1.0) d += (1.0 - gz) * 0.1;
   // long rallies: a little of the pressure gets into the contact (most of it makes the ball sit up, see pressure)
   d += pressure(m) * PRESSURE.contact;
+  // the card of the one who hit it (CARD.weight), and a perfect shot (the human's gold ring) is a better ball
+  d += clamp(weightOf(m), -CARD.wMax, CARD.wMax);
+  if (m.rally?.last?.lastHit?.timing === 'perfect' && m.rally.last.team !== p.team) d += CARD.perfect;
   // reaching for it at full stretch
   const s = plan.stretch ?? 0;
   if (!p.human) d += s * s * 0.18;
@@ -520,8 +604,12 @@ export const PADEL = {
   shortVolley: 0.3,
   /** at the net against a pair at the net (the volley exchange): chance of a lob over them (× lob), of a hard volley at
    *  the body (× attack, more as the exchange goes on) */
-  netLob: 0.12,
-  netHard: 0.5,
+  netLob: 0.9,
+  netHard: 0.6,
+  /** … and of a soft volley at the feet (× touch), the rest firm volleys low at the feet or down the middle (pace
+   *  `netPace`, the one at the body; + 0.1 the firm one) */
+  netDink: 0.3,
+  netPace: 0.8,
   /** overheads: from up to `overNear` m from the net, the share of remates (attack) over bandejas/víboras, and the
    *  chance a remate is hit to go out of the court («por 3») by a strong player (attack × risk × por3) */
   overNear: 4.5,
@@ -543,8 +631,36 @@ export const PADEL = {
   backLob: 0.25,
   approach: 0.65,
   /** the return: a lob over the net player with chance lob × returnLob */
-  returnLob: 0.6,
+  returnLob: 0.3,
+  /** chased back by a lob, after the bounce: a lob back with chance lobBack + lob × 0.3 */
+  lobBack: 0.4,
 };
+/**
+ * How high the lobs go (m over the tape where they cross the net; the peak is about a metre more): a padel globo peaks
+ * at 5–7 m and hangs 2–2.5 s, enough for the pair at the net to have to turn and run back and for the lobbing pair to
+ * take the net. `globo` from the back against a pair at the net (+ up to 1.5), `high` chased back (the defensive one,
+ * + up to 1), `ret` the return's (lower and quicker, + 0.8), `net` a volley lob at the net (+ 0.6), `back` between two
+ * pairs at the back (+ 0.8).
+ */
+export const LOB = { globo: 4.0, high: 4.6, ret: 3.4, net: 3.2, back: 3.6, spin: 0.33, ease: 1.6, behind: 1.5, over: 0.25, shy: 0.5, vary: 0.4, defOver: 1.0, lead: 0.3, min: 3.0, max: 5.6, human: 0.6 };
+/**
+ * The height of a lob over a pair at the net (the studio's pickleball 0.11): not a fixed height over the tape but over
+ * the opponent: it passes `behind` m behind each one at the net (read `lead` s ahead if he moves) `over` m above his
+ * reach (plus up to `shy` for a cautious player, `vary` of luck; `defOver` for a defensive one, chased back; `human`
+ * for the human's), so he has to turn and run back (BACK) and play it from deep or after the bounce. Nobody at the net:
+ * the fixed heights above. Clamped to `min` … `max` m over the tape (a peak of about 4 … 6.6 m).
+ */
+export function lobClear(m: Match, p: Player, from: { x: number; y: number; z: number }, tx: number, tz: number, over: number, fallback: number): number {
+  let c: number | null = null;
+  for (const o of m.players) {
+    if (o.team === p.team || Math.abs(o.z) >= AT_NET + 0.4) continue;
+    const oz = o.z + o.vz * LOB.lead;
+    const zp = o.side * (Math.abs(oz) + LOB.behind);
+    const k = clearOver(from, tx, tz, zp, (m.controllers[o.id]?.reachH ?? 2.9) + over, LOB.spin);
+    if (k !== null && (c === null || k > c)) c = k;
+  }
+  return clamp(c ?? fallback, LOB.min, LOB.max);
+}
 
 /** The shot a sensible CPU player picks here (padel doubles, see the head of this file and PADEL). */
 export function chooseShot(m: Match, p: Player, plan: Plan, s: Skill, hard = 0): Omit<ShotSpec, 'q' | 'timing'> {
@@ -572,12 +688,12 @@ export function chooseShot(m: Match, p: Player, plan: Plan, s: Skill, hard = 0):
     const o = netOf(opp) ? opp : opps.find(netOf) ?? opp;
     return o.x * 0.7 + (rng.next() - 0.5) * 1.2;
   };
-  const lobDeep = () => HL - 0.9 - (1 - s.risk) * 0.8 - rng.next() * 0.8;
+  const lobDeep = () => HL - 1.1 - (1 - s.risk) * 0.6 - rng.next() * 0.8;
   // angled to the side wall where it is mesh (around the net): the side away from the nearer opponent
   const reja = () => {
     const near = opps.reduce((a, b) => (Math.abs(b.x - plan.bx) < Math.abs(a.x - plan.bx) ? b : a));
     const sg = -Math.sign(near.x) || (rng.chance(0.5) ? 1 : -1);
-    return sg * (W / 2 - 0.5 - (1 - s.risk) * 0.5 - rng.next() * 0.4);
+    return sg * (W / 2 - 0.8 - (1 - s.risk) * 0.5 - rng.next() * 0.4);
   };
   const out = (kind: ShotKind, x: number, d: number, clear: number, pace?: number) => ({ kind, ...target(side, x, d), clear, ...(pace !== undefined ? { pace } : {}) });
   // chased back by a lob: the sensible reply is defensive (a lob back, or a soft ball), not an attack
@@ -586,9 +702,10 @@ export function chooseShot(m: Match, p: Player, plan: Plan, s: Skill, hard = 0):
   if (r.shots === 1) {
     // the return: low at the feet of the server coming in (cross-court, the way it came), or a lob over the net player
     const srv = m.server();
-    if (rng.chance(s.lob * PADEL.returnLob)) return out('lob', overNet(), lobDeep(), 2.6 + rng.next() * 0.8);
-    const toServer = srv.x + (rng.next() - 0.5) * 1.6;
-    return out('return', rng.chance(0.75) ? toServer : open(), SERVICE - 1.6 + rng.next() * 1.6 + s.risk * 0.4, 0.3 + (1 - s.risk) * 0.2 + rng.next() * 0.2);
+    if (rng.chance(s.lob * PADEL.returnLob)) return out('lob', overNet(), lobDeep(), LOB.ret + rng.next() * 0.8);
+    // (low, cross-court at the feet of the server coming in: where he will be when it gets there, 3.5–5 m from the net)
+    const toServer = srv.x * 0.8 + (rng.next() - 0.5) * 1.4;
+    return out('return', rng.chance(0.8) ? toServer : open(), 3.6 + rng.next() * 1.4 + s.risk * 0.4, 0.15 + (1 - s.risk) * 0.1 + rng.next() * 0.1);
   }
 
   // ---- the bajada: a ball come back high off the back glass, hit down from the back (the par of the card)
@@ -620,7 +737,7 @@ export function chooseShot(m: Match, p: Player, plan: Plan, s: Skill, hard = 0):
     if (!deepOver && rng.chance(s.attack * PADEL.vibora * ((s.vibora ?? 0.55) / 0.55))) {
       // the víbora: sliced, angled into the side glass (it skids low off it)
       const sg = Math.sign(plan.bx) || (rng.chance(0.5) ? 1 : -1);
-      return out('vibora', sg * (W / 2 - 0.6 - rng.next() * 0.6), 6.0 + rng.next() * 2.2, 0.25, 0.9);
+      return out('vibora', sg * (W / 2 - 0.9 - rng.next() * 0.7), 6.0 + rng.next() * 2.0, 0.25, 0.9);
     }
     // the bandeja: deep to the corner or down the middle, not too fast, and stay at the net
     return out('bandeja', rng.chance(0.5) ? corner(-Math.sign(plan.bx || 1)) : (rng.next() - 0.5) * 2.4, deep(), 0.45 + (1 - s.risk) * 0.2, 1.1);
@@ -645,11 +762,14 @@ export function chooseShot(m: Match, p: Player, plan: Plan, s: Skill, hard = 0):
       return out('speedup', rng.chance(0.65) ? corner(rng.chance(0.5) ? 1 : -1) : open(), deep(), 0.3 + rng.next() * 0.2, 1.1);
     }
     if (oppNet) {
-      // the volley exchange: a lob over them, a hard volley at the body (more often the longer it goes), or a low
-      // volley at the feet of the one picked
-      if (up === 0 && rng.chance(s.lob * PADEL.netLob)) return out('lob', overNet(), lobDeep(), 2.2 + rng.next() * 0.5);
-      if (rng.chance(s.attack * PADEL.netHard * (1 + Math.min(1, r.shots * 0.05)))) return out('speedup', feet(), oz(opp) + 0.3 + rng.next() * 1.2, 0.15, 0.9);
-      return out('dink', feet(), Math.max(2.4, oz(opp) - 0.8) + rng.next() * 0.8, 0.14 + (1 - s.touch) * 0.12);
+      // Both pairs at the net does not last in padel: a lob over them (a volley lob), a hard volley at the body (more
+      // often the longer it goes), or a firm volley low at the feet or down the middle; the soft volley at the feet,
+      // pickleball's dink exchange, only now and then (PADEL.netDink)
+      if (up < 0.4 && rng.chance(s.lob * PADEL.netLob * clamp(1 - hard * LOB.ease, 0.15, 1))) return out('lob', overNet(), lobDeep(), LOB.net + rng.next() * 0.6);
+      if (rng.chance(s.attack * PADEL.netHard * (1 + Math.min(1, r.shots * 0.05)))) return out('speedup', feet(), oz(opp) + 0.3 + rng.next() * 1.2, 0.12, PADEL.netPace);
+      if (rng.chance(s.touch * PADEL.netDink)) return out('dink', feet(), Math.max(2.4, oz(opp) - 0.8) + rng.next() * 0.8, 0.14 + (1 - s.touch) * 0.12);
+      const mid = (opps[0].x + opps[1].x) / 2 + (rng.next() - 0.5) * 0.8;
+      return out('speedup', rng.chance(0.5) ? mid : feet(), Math.max(3.2, oz(opp) + 0.2) + rng.next() * 1.4, 0.14 + (1 - s.risk) * 0.06, PADEL.netPace + 0.1);
     }
     // one up, one back: at the feet of the one at the net, or deep at the one back
     const back = opps.find((o) => !netOf(o)) ?? opp;
@@ -660,20 +780,25 @@ export function chooseShot(m: Match, p: Player, plan: Plan, s: Skill, hard = 0):
 
   // ---- from the back
   if (lobbed) {
-    // chased back by a lob: a high lob back (time to recover), or a soft ball to their feet
-    if (rng.chance(0.55 + s.lob * 0.3)) return out('lob', overNet(), lobDeep(), 3.0 + rng.next() * 0.8);
+    // chased back by a lob: after the bounce, a high lob back (time to recover) or a soft ball to their feet; met out
+    // of the air on the way back (not over the head), a firm volley deep down the middle, never a lob
+    if (!plan.volley && rng.chance(PADEL.lobBack + s.lob * 0.3)) return out('lob', overNet(), lobDeep(), LOB.high + rng.next() * 1.0);
+    if (plan.volley) return out('speedup', (rng.next() - 0.5) * 1.6, deep(), 0.4 + rng.next() * 0.2, 1.15);
     return out('drop', feet(), 3.2 + rng.next() * 1.2, 0.35 + (1 - s.touch) * 0.25);
   }
   if (!oppBack) {
     // against a pair at the net (or going there): the globo to take the net, the chiquita at the feet, now and then a
     // passing drive; a high ball from mid-court is hit down at the feet
     if (up > 0.3 && me < SERVICE + 0.6 && rng.chance(s.attack * up * 0.6)) return out('drive', feet(), oz(opp) + 0.4 + rng.next() * 1.2, 0.1, 0.9);
-    const globoW = s.lob * PADEL.globo * (me > SERVICE + 0.8 ? 1 : 0.35);
+    // (the globo when the ball allows it: a comfortable one, LOB.ease, and the more of them at the net the better)
+    const ease = clamp(1 - hard * LOB.ease, 0.15, 1);
+    const atNet = opps.filter(netOf).length / 2;
+    const globoW = s.lob * PADEL.globo * (me > SERVICE + 0.8 ? 1 : 0.35) * ease * atNet;
     const chiqW = s.touch * PADEL.chiquita;
     const passW = s.attack * PADEL.pass;
     const driveW = 0.25;
     let u = rng.next() * (globoW + chiqW + passW + driveW);
-    if ((u -= globoW) < 0) return out('lob', overNet(), lobDeep(), 2.4 + rng.next() * 0.9 + (1 - s.risk) * 0.3);
+    if ((u -= globoW) < 0) return out('lob', overNet(), lobDeep(), LOB.globo + rng.next() * 1.2 + (1 - s.risk) * 0.3);
     if ((u -= chiqW) < 0) return out('dink', feet(), Math.max(2.3, oz(opp) - 0.9) + rng.next() * 0.8, 0.12 + (1 - s.touch) * 0.15 + rng.next() * 0.08);
     if ((u -= passW) < 0) {
       // the passing drive: low, down the line past the net player on the ball's side, or through the middle
@@ -686,7 +811,7 @@ export function chooseShot(m: Match, p: Player, plan: Plan, s: Skill, hard = 0):
   // both pairs back: steady and deep (hitting hard is pointless, the glass gives it back), the middle to make them
   // doubt; a short ball is the moment to come in behind an approach; a lob over them now and then
   if (me < SERVICE + 0.5 && rng.chance(PADEL.approach * (0.4 + 0.6 * s.mover.netRush))) return out('drive', rng.chance(0.5) ? corner(rng.chance(0.5) ? 1 : -1) : (rng.next() - 0.5) * 2, deep(), 0.3 + rng.next() * 0.2, 1.05);
-  if (rng.chance(s.lob * PADEL.backLob)) return out('lob', (rng.next() - 0.5) * 3, lobDeep(), 2.6 + rng.next() * 0.6);
+  if (rng.chance(s.lob * PADEL.backLob)) return out('lob', (rng.next() - 0.5) * 3, lobDeep(), LOB.back + rng.next() * 0.8);
   if (rng.chance(s.touch * 0.15)) return out('drop', (rng.next() - 0.5) * 5, 2.2 + rng.next() * 1.4, 0.3 + (1 - s.touch) * 0.25);
   return out('drive', rng.chance(0.5) ? (rng.next() - 0.5) * 2 : corner(rng.chance(0.5) ? 1 : -1), deep(), 0.35 + rng.next() * 0.3, 1.15);
 }
@@ -769,8 +894,8 @@ export const RIVAL_ATTRS: Record<string, Attributes> = {
   paco: { pot: 52, con: 56, vel: 55, ref: 56, rem: 50, par: 72, tq: 66 },
   lola: { pot: 58, con: 72, vel: 72, ref: 72, rem: 60, par: 82, tq: 84 },
   bruno: { pot: 93, con: 82, vel: 82, ref: 76, rem: 92, par: 70, tq: 62 },
-  nuria: { pot: 80, con: 82, vel: 86, ref: 86, rem: 86, par: 78, tq: 93 },
-  reina: { pot: 90, con: 88, vel: 88, ref: 90, rem: 92, par: 88, tq: 84 },
+  nuria: { pot: 80, con: 82, vel: 86, ref: 83, rem: 86, par: 78, tq: 93 },
+  reina: { pot: 90, con: 86, vel: 88, ref: 86, rem: 92, par: 88, tq: 84 },
 };
 export const RIVAL_STYLES: Record<string, Style> = {
   paco: { touch: 0.27, attack: 0.24, lob: 0.76, risk: 0.11, netRush: 0.3, serveDelay: 1.3, vibora: 0.3, por: 0 },
@@ -844,7 +969,7 @@ export function autoShot(m: Match, p: Player, plan: Plan): Omit<ShotSpec, 'q' | 
   if (plan.overhead && Math.abs(plan.fz) < PADEL.overNear + 2) return { kind: 'bandeja', ...target(p.side, x, HL - 1.8 - rng.next() * 1.2), clear: 0.55, pace: 1.1 };
   // (at the net, a firm volley to the middle of their half: deep enough to keep them back, short of the glass)
   if (meNet) return { kind: 'auto', ...target(p.side, x, 5.6 + rng.next() * 1.4), clear: 0.3 + rng.next() * 0.15, pace: 1.2 };
-  if (oppNet) return { kind: 'lob', ...target(p.side, x, HL - 1.8 - rng.next() * 1.0), clear: 2.8 + rng.next() * 0.4 };
+  if (oppNet) return { kind: 'lob', ...target(p.side, x, HL - 1.8 - rng.next() * 1.0), clear: LOB.globo + 0.2 + rng.next() * 0.6 };
   return { kind: 'auto', ...target(p.side, x, HL - 1.6 - rng.next() * 1.2), clear: 0.75 + rng.next() * 0.25 };
 }
 
@@ -872,9 +997,9 @@ export function kindForAim(m: Match, p: Player, plan: Plan, d: number, lob: bool
     if (power >= ATTACK.por3Power && specialOk('por3', plan)) return { kind: 'smash', clear: POR.clear3, pace: POR.pace3, special: 'por3' };
     return { kind: 'smash', clear: ATTACK.smashClear, pace: ATTACK.smashPace };
   }
-  if (r.shots === 1) return lob ? { kind: 'lob', clear: 2.8 } : { kind: 'return', clear: d < AIM_SOFT ? 0.2 : 0.35 };
+  if (r.shots === 1) return lob ? { kind: 'lob', clear: LOB.ret + 0.4 } : { kind: 'return', clear: d < AIM_SOFT ? 0.2 : 0.35 };
   if (plan.overhead && !lob) return { kind: 'bandeja', clear: 0.5, pace: 1.1 };
-  if (lob) return { kind: 'lob', clear: 2.8 };
+  if (lob) return { kind: 'lob', clear: LOB.globo + 0.5 };
   const meNet = Math.abs(plan.fz) < AT_NET;
   if (d < AIM_SOFT) return meNet ? { kind: 'dink', clear: 0.16 } : { kind: 'drop', clear: 0.3 };
   return meNet ? { kind: 'speedup', clear: 0.3, pace: 1.05 } : { kind: 'drive', clear: 0.35 };
@@ -884,14 +1009,15 @@ export const AIM_SOFT = 4.2;
 
 /**
  * The human's attack (a flick, F or the right button): a flat, fast volley, or over the head a remate (or a víbora when
- * the stroke bends `viboraBend` m or more towards a side wall). Where it goes:
+ * the stroke bends `viboraBend` m or more towards a side wall: a stroke `viboraDeg` or more off straight up; the
+ * thumb's natural arc, 15–30°, stays a straight remate). Where it goes:
  *  · not aimed (the drag before the stroke under `aimed` px): at the body of the opponent in front, low, landing
  *    `behind` m past his feet (no closer than `minDepth` from the net);
  *  · aimed: where the drag pointed, never short of the opponent;
  *  · the stroke's angle bends it across: `bend` m for a stroke 45° off straight up (world x, from the hitter's view).
  * A low ball is a gamble (attackRisk × `lowRisk`); an attack let go outside the golden window is `rough` rougher.
  */
-export const ATTACK = { aimed: 20, side: 0, behind: 0.6, minDepth: DEPTH_Z[2] + 1.2, bend: 1.6, clear: 0.12, pace: 0.85, smashClear: 0.08, smashPace: 0.72, viboraBend: 0.7, viboraClear: 0.25, viboraPace: 0.9, lowRisk: 3, rough: 0.04, por3Power: 0.9, hardBajada: 0.7, bajadaClear: 0.13, bajadaPace: 0.85 };
+export const ATTACK = { aimed: 20, side: 0, behind: 0.6, minDepth: DEPTH_Z[2] + 1.2, bend: 1.6, clear: 0.12, pace: 0.85, smashClear: 0.08, smashPace: 0.72, viboraDeg: 34, viboraBend: 1.6 * Math.tan((34 * Math.PI) / 180), viboraClear: 0.25, viboraPace: 0.9, lowRisk: 3, rough: 0.04, por3Power: 0.9, hardBajada: 0.7, bajadaClear: 0.13, bajadaPace: 0.85 };
 export function attackTarget(m: Match, p: Player, plan: Plan, aimed: { x: number; z: number } | null, bend: number): { tx: number; tz: number } {
   const opps = m.players.filter((o) => o.team !== p.team);
   const want = (aimed ? aimed.x : plan.bx) + bend;
@@ -951,12 +1077,13 @@ export function attackable(m: Match, p: Player, plan: Plan | null): boolean {
  * golden window).
  */
 export const UNDER_ATTACK = { pace: 15, near: AT_NET };
-export function underAttack(m: Match, p: Player): boolean {
+export function underAttack(m: Match, p: Player, plan: Plan | null = null): boolean {
   const r = m.rally;
   const lh = r?.last && r.last.team !== p.team ? r.last.lastHit : null;
   if (!lh) return false;
-  // (a remate that has come off the glass is no attack any more: it is a ball to play)
-  if ((r?.walls ?? 0) > 0) return false;
+  // (a remate that has come off the glass is no attack any more: it is a ball to play; nor is one whose coming contact
+  // is after the glass)
+  if ((r?.walls ?? 0) > 0 || plan?.wall) return false;
   if (lh.kind === 'smash' || lh.kind === 'vibora') return true;
   return (lh.kind === 'speedup' || lh.kind === 'drive' || lh.kind === 'bajada') && Math.abs(p.z) < UNDER_ATTACK.near && ballSpeed(m) > UNDER_ATTACK.pace;
 }
@@ -970,9 +1097,34 @@ export function ballCue(m: Match, p: Player, plan: Plan | null): 'attack' | 'blo
   if (m.phase !== 'rally' || !plan || plan.oops || plan.out) return null;
   const r = m.rally;
   if (!r?.last || r.last.team === p.team) return null;
-  if (underAttack(m, p)) return 'block';
-  if (isBajada(plan) && r.shots > 1) return 'bajada';
-  return attackable(m, p, plan) ? 'attack' : null;
+  const raw: Cue = underAttack(m, p, plan) ? 'block' : isBajada(plan) && r.shots > 1 ? 'bajada' : attackable(m, p, plan) ? 'attack' : null;
+  // one decision per ball (CUE): it may change while there is time to show it, then it stays
+  const key = `${m.stats.rallies}:${r.shots}`;
+  let mm = cues.get(m);
+  if (!mm) cues.set(m, (mm = new Map()));
+  const c = mm.get(p.id);
+  if (!c || c.key !== key) {
+    mm.set(p.id, { key, cue: raw, block: raw === 'block' });
+    return raw;
+  }
+  if (raw !== c.cue && plan.t - m.t > CUE.settle) {
+    c.cue = raw;
+    if (raw === 'block') c.block = true;
+  }
+  return c.cue;
+}
+type Cue = 'attack' | 'block' | 'bajada' | null;
+/**
+ * The cue is one decision per ball (ballCue): taken from the coming contact when the ball is struck (a contact after
+ * the glass is no block), it can still change while more than `settle` s are left before the contact (the circle moved
+ * to another contact), never later: the HUD does not flip from BLOCK to BAJADA a moment before the contact.
+ */
+export const CUE = { settle: 0.4 };
+const cues = new WeakMap<Match, Map<number, { key: string; cue: Cue; block: boolean }>>();
+/** The ball coming now at player `pid` was cued as a block at some point (a quiet press on it is still a block). */
+export function cuedBlock(m: Match, pid: number): boolean {
+  const c = cues.get(m)?.get(pid);
+  return !!c && c.block && c.key === `${m.stats.rallies}:${m.rally?.shots ?? -1}`;
 }
 
 /**
@@ -982,7 +1134,7 @@ export function ballCue(m: Match, p: Player, plan: Plan | null): 'attack' | 'blo
  */
 export function lobShape(f: number): { depth: number; clear: number } {
   const k = clamp(f, 0, 1);
-  return { depth: HL - 2.6 + k * 1.9, clear: 3.6 - k * 1.2 };
+  return { depth: HL - 2.6 + k * 1.9, clear: LOB.high + 0.4 - k * 1.6 };
 }
 
 /**

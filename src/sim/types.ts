@@ -80,6 +80,8 @@ export interface Plan {
   stretch?: number;
   /** a volley of a ball that would land out (better let it go) */
   out?: boolean;
+  /** CPU players: seconds in hand when the contact was planned (time to set up; brain.ts CARD) */
+  spare?: number;
   /**
    * the wall the ball last came off since it bounced ('back': the back glass, 'side': a side wall); absent: it has not
    * met one. A ball off the back glass met high at the back is a bajada (brain.ts, isBajada).
@@ -127,8 +129,10 @@ export interface Player {
  *  · winner: nobody had a go at it · miss: the receiver went for it and did not get there · letGo: he was there and
  *    let it go · exit: after bouncing in it left the court over the walls («por 3») · back: after bouncing in it went
  *    back over the net to the hitter's side («por 4»)
+ *  · body: the live ball touched a player of the receiving team (FIP: the other team's point; the volley at the body).
+ *    The point event says who (`touched`)
  */
-export type PointReason = 'net' | 'out' | 'wall' | 'doubleFault' | 'twoBounce' | 'winner' | 'miss' | 'letGo' | 'exit' | 'back';
+export type PointReason = 'net' | 'out' | 'wall' | 'doubleFault' | 'twoBounce' | 'winner' | 'miss' | 'letGo' | 'exit' | 'back' | 'body';
 /** a serve fault: out of the box, into the net, or into the fence after the bounce */
 export type ServeFault = 'serveOut' | 'serveNet' | 'serveFence';
 
@@ -157,7 +161,8 @@ export type MatchEvent =
   | { type: 'fault'; pid: number; fault: ServeFault; second: boolean }
   /** the serve touched the net and bounced in the box: it is played again (same serve) */
   | { type: 'let'; pid: number }
-  | { type: 'point'; winner: 0 | 1; reason: PointReason; fault: number | null; rally: number }
+  /** `touched`: reason 'body', the player the ball touched */
+  | { type: 'point'; winner: 0 | 1; reason: PointReason; fault: number | null; rally: number; touched?: number }
   /** a game won: the games of each team after it (`tiebreak`: the game was the tie-break) */
   | { type: 'game'; winner: 0 | 1; games: [number, number]; tiebreak: boolean }
   | { type: 'over'; winner: 0 | 1 };
