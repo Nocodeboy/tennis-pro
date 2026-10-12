@@ -85,6 +85,12 @@ export interface Plan {
    * met one. A ball off the back glass met high at the back is a bajada (brain.ts, isBajada).
    */
   wall?: 'back' | 'side';
+  /**
+   * CPU players: their call on a ball that allows a bajada, made when they set off for it (brain.ts, AIController.read):
+   * a bajada or not. The view shows that swing from the start and the hit keeps to it. Absent: not decided (the human
+   * decides at the release).
+   */
+  bajada?: boolean;
 }
 
 export interface Player {

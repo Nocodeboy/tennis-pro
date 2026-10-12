@@ -1162,6 +1162,8 @@ interface Contact {
   volley: boolean;
   /** the wall the ball came off before it (the plan's: 'back' for the back glass), when the plan says */
   wall?: 'back' | 'side' | null;
+  /** a CPU player's call on a ball that allows a bajada (Plan.bajada): known, the view does not guess */
+  bajada?: boolean;
 }
 
 /** a swing with a clip, or the procedural backhand (no clip) */
@@ -1439,7 +1441,7 @@ export class CharacterView {
    */
   onHit(x: number, y: number, z: number, t: number, hand: 1 | -1, shot?: ShotInfo) {
     const c = this.contact;
-    this.contact = { x, y, z, t, hand, overhead: c?.overhead ?? y > 1.75, serve: c?.serve ?? false, volley: c?.volley ?? false, wall: c?.wall };
+    this.contact = { x, y, z, t, hand, overhead: c?.overhead ?? y > 1.75, serve: c?.serve ?? false, volley: c?.volley ?? false, wall: c?.wall, bajada: c?.bajada };
     this.shot = { t, kind: shot?.kind ?? null, power: clamp(shot?.power ?? 0.5, 0, 1), special: shot?.special ?? null };
   }
   /** what the last hit was (see onHit) */
@@ -1485,7 +1487,8 @@ export class CharacterView {
     {
       const now = this.swing && Math.abs(this.swing.key - c.t) < 0.1 ? this.swing.kind : null;
       const k = c.hand === -1 ? 'bajada_l' : 'bajada';
-      if (has(k) && (this.bajadaGuess(c, p, m) || (now === k && c.y > BAJADA.y0 - 0.1 && c.y < BAJADA.y1 + 0.1))) return k;
+      // (a CPU player's own call when there is one: Plan.bajada)
+      if (has(k) && c.bajada !== false && (c.bajada === true || this.bajadaGuess(c, p, m) || (now === k && c.y > BAJADA.y0 - 0.1 && c.y < BAJADA.y1 + 0.1))) return k;
     }
     if (c.overhead || c.y > 1.75) return has('smash') ? 'smash' : 'drive';
     // a ball beyond the arm and the paddle: the lunge (a little hysteresis so a plan that wobbles does not flip it), to
@@ -1594,7 +1597,7 @@ export class CharacterView {
     } else if (plan && gate && (plan.reach || this.gapTo(plan.bx, plan.bz, plan.t, p, m) < 1.15)) {
       // (a CPU plan it may not get to in time: it runs anyway and may still reach it with a lunge, so it swings
       // when it will be close)
-      if (!this.contact || this.contact.t !== plan.t || this.contact.x !== plan.bx) this.contact = { x: plan.bx, y: plan.by, z: plan.bz, t: plan.t, hand: plan.hand, overhead: plan.overhead, serve: false, volley: plan.volley, wall: 'wall' in plan ? (plan.wall ?? null) : undefined };
+      if (!this.contact || this.contact.t !== plan.t || this.contact.x !== plan.bx) this.contact = { x: plan.bx, y: plan.by, z: plan.bz, t: plan.t, hand: plan.hand, overhead: plan.overhead, serve: false, volley: plan.volley, wall: 'wall' in plan ? (plan.wall ?? null) : undefined, bajada: plan.bajada };
     } else if (this.contact && this.contact.t > m.t + 1e-3 && (!p.lastHit || p.lastHit.t !== this.contact.t)) this.contact = null; // no swing after all
     if (this.contact && m.t - this.contact.t > 0.6) this.contact = null;
     const c = this.contact;

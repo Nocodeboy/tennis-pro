@@ -250,6 +250,9 @@ export class AIController implements Controller {
     this.seen.push(key);
     if (this.seen.length > 6) this.seen.shift();
     this.cur = { plan, fam, off: 0, lead: 9, z0: Math.abs(p.z) };
+    // a ball that will come back high off the back glass: the bajada (or the defence) is decided now, so the swing the
+    // view prepares is the shot that comes (an awkward one is defended: bajadaChance)
+    if (isBajada(plan) && (m.rally?.shots ?? 0) > 2) plan.bajada = m.rng.chance(bajadaChance(s, difficulty(m, p, plan) * (s.poise ?? 1)));
     const spin = Math.abs(m.rally?.seg.spin ?? 0);
     const tricky = clamp((ballSpeed(m) - 7) / 10, 0, 1.2) + spin * 0.4;
     const sd = (s.read ?? 0) * tricky * (1 - 0.6 * fam);
@@ -590,7 +593,7 @@ export function chooseShot(m: Match, p: Player, plan: Plan, s: Skill, hard = 0):
 
   // ---- the bajada: a ball come back high off the back glass, hit down from the back (the par of the card)
   // (only with the time to set it up: an awkward one, after running back, is defended with a lob)
-  if (isBajada(plan) && r.shots > 2 && rng.chance(PADEL.bajada * (0.6 + 0.4 * (s.wall ?? 0.5)) * clamp((BAJADA.hard - hard) / 0.2, 0, 1))) {
+  if (isBajada(plan) && r.shots > 2 && (plan.bajada ?? rng.chance(bajadaChance(s, hard)))) {
     // at a pair at the net: hard at the feet of one, or through the middle; at a pair back: firm to a corner, short of
     // the glass (hit down from shoulder height it carries)
     if (!oppBack) {
@@ -735,6 +738,10 @@ export function specialShot(m: Match, p: Player, plan: Plan, sp: Special, aim: {
  * CPU plays it only with the time to set it up (the ball's difficulty under `hard`, fully under hard − 0.2).
  */
 export const BAJADA = { minH: 1.35, minZ: SERVICE - 0.3, value: 0.3, hard: 0.45 };
+/** The CPU's chance of a bajada on a ball that allows one (isBajada), for a player this awkward on it (`hard`). */
+function bajadaChance(s: Skill, hard: number): number {
+  return PADEL.bajada * (0.6 + 0.4 * (s.wall ?? 0.5)) * clamp((BAJADA.hard - hard) / 0.2, 0, 1);
+}
 export function isBajada(plan: Plan | null): boolean {
   return !!plan && !plan.volley && plan.wall === 'back' && plan.by >= BAJADA.minH && Math.abs(plan.fz) >= BAJADA.minZ;
 }
