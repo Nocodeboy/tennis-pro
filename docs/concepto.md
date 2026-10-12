@@ -162,3 +162,28 @@ Germán: «una pasada de audit al juego para mejorar su jugabilidad y experienci
   - con el bot humano, las dos parejas en la red siguen siendo el 15 % de los golpes;
   - algún desequilibrio entre atributos (reflejos pesa más);
   - probar en el móvil la curva de potencia y el hueco bajo la pista en vertical.
+
+## 0.5 (12 oct): sonido
+
+Germán: «el sonido y el audio debemos mejorarlo»; le sonaban mal los golpes y el bote, las paredes, el público, faltaba música o voz, y «suena como raro en esta versión». Eligió la mezcla: unos créditos de Magnific en los sonidos clave y el resto sintetizado. Detalle en `notas-05-sonido.md`.
+
+- **Lo raro venía de la mezcla, no de la 0.4:**
+  - la bola era lo que menos se oía (un drive a −36,7 LUFS, una chiquita a −44,5), por debajo del rugido del público (−27), de la melodía de punto y de la campana;
+  - el público rugía en 12 de cada 16 puntos, con un siseo 10 dB por encima del peloteo;
+  - el cristal y los remates eran casi todo graves que un móvil no reproduce;
+  - un chirrido de zapatilla salía 27 veces por minuto.
+- **Golpes, cristal y bote grabados con IA** (ElevenLabs en Magnific, 70 créditos; quedan 157):
+  - 14 tomas, de las que se usan 9 (42 KB);
+  - familias suave y dura que se mezclan según la potencia del gesto, sin repetir toma y con algo de variación;
+  - el chasquido sintetizado, solo en el por 3 y el por 4. La malla sigue sintetizada, como traqueteo metálico.
+- **Mezcla:** reverberación ligera de pabellón y limitador. El partido sube de −36 a −29 LUFS y nada pasa de −3 dBFS.
+- **Público:**
+  - murmullo de 26 voces y «uy» de 36;
+  - aplauso en los ganadores; el rugido, solo para el por 3 y el por 4, los remates ganadores, los peloteos largos y el final;
+  - la zapatilla roza la arena del césped en vez de chirriar, y solo en las frenadas fuertes.
+- **Música:** el tema de menús del pickleball (del estudio, Google Lyria), solo en los menús. Ajustes → Música: Sí / No.
+- **Pendiente:**
+  - voz del juez (sin presupuesto: se queda la campana);
+  - más tomas (unas 6 duras, 4 suaves, malla, cinta y público real);
+  - las repeticiones no guardan la potencia ni los golpes en pared;
+  - **escucharlo en el móvil y con cascos.**

@@ -1,42 +1,89 @@
-// Sound effects are synthesised live with WebAudio (no licences, ~0 KB). From the studio engine (Wild Putt).
-// Music is played from audio files when available (see setMusicTracks).
+// The sound of the match (0.5). The ball's contacts are recorded sounds (AI-made, assets/sfx: the paddle hard and soft,
+// the glass, the turf; see FAMILIES), placed where they happen (pan by x, the far end quieter and duller) in a light
+// indoor arena (a generated impulse response). The rest is synthesised live with WebAudio: the mesh's rattle, the
+// sneakers, the net, the remate por 3 / por 4's crack on top of the paddle, and the crowd, whose murmur, «uy», roar and
+// applause are rendered once into buffers from many voices and hands (no recording of a crowd: no licences). Without
+// the files (a failed fetch, an old browser) every contact falls back to its synthesised version.
+// Music is made with AI (Magnific, Google Lyria 3 Pro) and played from files next to the page (assets/music, see
+// setMusicTracks): decoded into WebAudio buffers and looped between two points without a gap. Menus only: in a match
+// the crowd is the sound, as on TV.
+//
+// The mix (tools/audio measures it): everything in the arena (contacts, crowd, the umpire's chime) goes dry to the
+// master and through a send to the reverb; the menus' clicks and jingles stay dry; a limiter at the end. The levels
+// are set so a drive and a glass sit together, the soft touches 6–8 dB under them, the murmur 15 dB under.
 
 type Mode = 'menu' | 'game' | 'none';
+/** a piece of music: its file and where its loop starts and ends (s; without them the whole file loops) */
+export interface Track {
+  url: string;
+  loopStart?: number;
+  loopEnd?: number;
+  /** its level (0 … 1) */
+  vol?: number;
+}
+
+/** the recorded takes, by family (assets/sfx; tools/audio/prep-sfx.py trims them to the onset and evens them out) */
+const FAMILIES = {
+  hard: ['pala-fuerte-1', 'pala-fuerte-2'],
+  soft: ['pala-suave-1', 'pala-suave-2'],
+  glass: ['cristal-1', 'cristal-2', 'cristal-3'],
+  bounce: ['bote-1', 'bote-2'],
+} as const;
+type Family = keyof typeof FAMILIES;
+const SFX_DIR = 'assets/sfx/';
+/** a decoded take and where its sound starts (the decoder may add a few ms of silence before it) */
+interface Take {
+  buf: AudioBuffer;
+  start: number;
+}
+/** the levels of the mix (linear gains on the takes, which come evened out at about −16 LUFS over their first 120 ms) */
+const LVL = { hard: 0.62, soft: 0.3, glass: 0.6, bounce: 0.36, bed: 0.05, voices: 0.2, claps: 0.6, rev: 0.5 };
 
 export class Audio {
   ctx: AudioContext | null = null;
+  /** settles when the takes are decoded (or have failed: the synthesised sounds stand in) */
+  ready: Promise<void> = Promise.resolve();
   private master!: GainNode;
   private sfx!: GainNode;
+  /** the arena: everything that happens on the court and in the stands (dry), and the reverb's input */
+  private arena!: GainNode;
+  private verb!: GainNode;
+  private ui!: GainNode;
   private musicGain!: GainNode;
   private noise!: AudioBuffer;
-  private windGain!: GainNode;
-  private windFilter!: BiquadFilterNode;
-  private birdT = 0; // next ambient sound (bird, gull, fair tune…)
   sfxOn = true;
   musicOn = true;
-  private tracks: Partial<Record<Exclude<Mode, 'none'>, string>> = {};
-  private musicEl: HTMLAudioElement | null = null;
+  private tracks: Partial<Record<Exclude<Mode, 'none'>, Track>> = {};
+  private buffers: Partial<Record<Exclude<Mode, 'none'>, AudioBuffer | 'loading' | 'failed'>> = {};
+  private playing: { src: AudioBufferSourceNode; gain: GainNode } | null = null;
   private musicMode: Mode = 'none';
+  private ducked = false;
   private last: Record<string, number> = {};
-  // the crowd: a murmur bed that follows the play, and applause rendered once
-  private crowdGain!: GainNode;
-  private crowdF!: BiquadFilterNode;
-  private crowdF2!: BiquadFilterNode;
-  private clapBuf: AudioBuffer | null = null;
-  /** 0 … 1: how loud the crowd murmurs at rest (0 in the menus) */
+  private takes: Partial<Record<Family, Take[]>> = {};
+  private picked: Partial<Record<Family, number>> = {};
+  // the crowd: a murmur bed of many voices (two copies of one loop, apart in time, rate and pan), and its reactions
+  private bedGain!: GainNode;
+  private bedF!: BiquadFilterNode;
+  private bedOn = false;
+  private clapBufs: AudioBuffer[] = [];
+  private oohBufs: AudioBuffer[] = [];
+  private roarBufs: AudioBuffer[] = [];
+  /** 0 … 1: how loud the crowd murmurs at rest (0.4 behind the menus, 1 in a match) */
   crowdBase = 0;
-  /** 0 … 1: a long rally, the stands grow tense (a little louder, then hushed before the decisive ball) */
+  /** 0 … 1: a long rally, the stands grow tense (louder and brighter; hushed before a match point) */
   tension = 0;
   /** a replay is on: the bed is lower and the sounds of the replay are slowed down */
   replayMode = false;
+  /** (the time the replay mode went on: a replay that never says it ended lets the bed back up after 25 s) */
+  private replaySince = -1;
   private swell = 0;
   private hush = 0;
 
-  setMusicTracks(t: Partial<Record<Exclude<Mode, 'none'>, string>>) {
+  setMusicTracks(t: Partial<Record<Exclude<Mode, 'none'>, Track>>) {
     this.tracks = t;
   }
 
-  /** Must be called from a user gesture. */
+  /** Must be called from a user gesture (the first tap unlocks audio on mobile; the takes load then). */
   unlock() {
     if (this.ctx) {
       if (this.ctx.state === 'suspended') this.ctx.resume();
@@ -46,56 +93,84 @@ export class Audio {
     if (!AC) return;
     const ctx = new AC();
     this.ctx = ctx;
+    // the end of the chain: a limiter (fast, high ratio) that only catches the peaks of a loud moment
+    const lim = ctx.createDynamicsCompressor();
+    lim.threshold.value = -3;
+    lim.knee.value = 2;
+    lim.ratio.value = 14;
+    lim.attack.value = 0.002;
+    lim.release.value = 0.14;
+    lim.connect(ctx.destination);
     this.master = ctx.createGain();
-    this.master.gain.value = 0.9;
-    const comp = ctx.createDynamicsCompressor();
-    comp.threshold.value = -14;
-    comp.ratio.value = 4;
-    this.master.connect(comp).connect(ctx.destination);
+    // (0.4's sounds sat at about −36 LUFS in a match, quiet on a phone; these at about −28)
+    this.master.gain.value = 1.3;
+    this.master.connect(lim);
     this.sfx = ctx.createGain();
     this.sfx.gain.value = this.sfxOn ? 1 : 0;
     this.sfx.connect(this.master);
+    this.arena = ctx.createGain();
+    this.arena.connect(this.sfx);
+    this.ui = ctx.createGain();
+    this.ui.connect(this.sfx);
+    // the hall: a light reverb (about 1.3 s, darker as it fades) under the arena's sounds
+    const conv = ctx.createConvolver();
+    conv.buffer = arenaIR(ctx);
+    this.verb = ctx.createGain();
+    const ret = ctx.createGain();
+    ret.gain.value = LVL.rev;
+    this.verb.connect(conv).connect(ret).connect(this.sfx);
     this.musicGain = ctx.createGain();
-    this.musicGain.gain.value = 0.5;
+    this.musicGain.gain.value = 0.4;
     this.musicGain.connect(this.master);
-    // white noise buffer
+    // white noise for the synthesised sounds
     const len = ctx.sampleRate * 2;
     this.noise = ctx.createBuffer(1, len, ctx.sampleRate);
     const d = this.noise.getChannelData(0);
     for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
-    // wind over the meadow (low-passed noise; rain in the storm)
-    const cr = ctx.createBufferSource();
-    cr.buffer = this.noise;
-    cr.loop = true;
-    cr.playbackRate.value = 0.5;
-    this.windFilter = ctx.createBiquadFilter();
-    this.windFilter.type = 'lowpass';
-    this.windFilter.frequency.value = 500;
-    this.windFilter.Q.value = 0.7;
-    this.windGain = ctx.createGain();
-    this.windGain.gain.value = 0;
-    cr.connect(this.windFilter).connect(this.windGain).connect(this.sfx);
-    cr.start();
-    // the crowd's murmur: noise through two voice-like bands, its level moved every frame (see crowd())
-    const cn = ctx.createBufferSource();
-    cn.buffer = this.noise;
-    cn.loop = true;
-    cn.playbackRate.value = 0.73;
-    this.crowdF = ctx.createBiquadFilter();
-    this.crowdF.type = 'bandpass';
-    this.crowdF.frequency.value = 480;
-    this.crowdF.Q.value = 0.9;
-    this.crowdF2 = ctx.createBiquadFilter();
-    this.crowdF2.type = 'peaking';
-    this.crowdF2.frequency.value = 1150;
-    this.crowdF2.gain.value = 6;
-    this.crowdF2.Q.value = 1.4;
-    this.crowdGain = ctx.createGain();
-    this.crowdGain.gain.value = 0;
-    cn.connect(this.crowdF).connect(this.crowdF2).connect(this.crowdGain).connect(this.sfx);
-    cn.start();
-    this.clapBuf = applauseBuffer(ctx);
+    // the murmur's level and colour, moved every frame (crowd())
+    this.bedF = ctx.createBiquadFilter();
+    this.bedF.type = 'lowpass';
+    this.bedF.frequency.value = 2400;
+    this.bedGain = ctx.createGain();
+    this.bedGain.gain.value = 0;
+    this.bedF.connect(this.bedGain);
+    this.bedGain.connect(this.arena);
+    const bs = ctx.createGain();
+    bs.gain.value = 0.6;
+    this.bedGain.connect(bs).connect(this.verb);
+    this.ready = this.loadTakes(ctx);
+    // the crowd's buffers are rendered a moment later, one per task, so the tap that unlocked does not wait for them
+    const later = (f: () => void) => setTimeout(f, 0);
+    later(() => {
+      this.startBed(babbleBuffer(ctx));
+      later(() => {
+        this.clapBufs = [applauseBuffer(ctx), applauseBuffer(ctx)];
+        later(() => {
+          this.oohBufs = [voicesBuffer(ctx, 'ooh'), voicesBuffer(ctx, 'ooh')];
+          later(() => (this.roarBufs = [voicesBuffer(ctx, 'roar')]));
+        });
+      });
+    });
     if (this.musicMode !== 'none') this.music(this.musicMode, true);
+  }
+
+  /** Fetches and decodes the takes (in parallel); a family whose files fail keeps its synthesised sound. */
+  private loadTakes(ctx: BaseAudioContext): Promise<void> {
+    const one = (name: string) =>
+      fetch(`${SFX_DIR}${name}.mp3`)
+        .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`${name}: ${r.status}`))))
+        .then((ab) => new Promise<AudioBuffer>((res, rej) => ctx.decodeAudioData(ab, res, rej)))
+        .then((buf): Take => ({ buf, start: onset(buf) }));
+    const fams = Object.keys(FAMILIES) as Family[];
+    return Promise.all(
+      fams.map((f) =>
+        Promise.all(FAMILIES[f].map(one))
+          .then((t) => {
+            this.takes[f] = t;
+          })
+          .catch((err) => console.warn('sfx: synthesised fallback for', f, err)),
+      ),
+    ).then(() => undefined);
   }
 
   setSfx(on: boolean) {
@@ -104,104 +179,128 @@ export class Audio {
   }
   setMusic(on: boolean) {
     this.musicOn = on;
-    if (!on && this.musicEl) this.musicEl.pause();
-    if (on) this.music(this.musicMode, true);
+    if (!on) this.stopMusic(0.4);
+    else this.music(this.musicMode, true);
   }
 
+  /** The music for a screen: the menus' theme, the match's (none: the crowd is the match's sound) or silence. */
   music(mode: Mode, force = false) {
     if (mode === this.musicMode && !force) return;
     this.musicMode = mode;
-    const src = mode === 'none' ? undefined : this.tracks[mode];
-    if (this.musicEl) {
-      const old = this.musicEl;
-      const fade = setInterval(() => {
-        old.volume = Math.max(0, old.volume - 0.08);
-        if (old.volume <= 0.01) {
-          old.pause();
-          clearInterval(fade);
-        }
-      }, 40);
-      this.musicEl = null;
-    }
-    if (!src || !this.musicOn || !this.ctx) return;
-    const el = new window.Audio(src);
-    el.loop = true;
-    el.volume = 0;
-    el.play().catch(() => undefined);
-    const target = mode === 'game' ? 0.32 : 0.42;
-    const up = setInterval(() => {
-      el.volume = Math.min(target, el.volume + 0.03);
-      if (el.volume >= target) clearInterval(up);
-    }, 60);
-    this.musicEl = el;
+    this.stopMusic(1.2);
+    if (mode === 'none' || !this.musicOn || !this.ctx) return;
+    const tr = this.tracks[mode];
+    if (!tr) return;
+    const buf = this.buffers[mode];
+    if (buf instanceof AudioBuffer) this.startMusic(mode, buf, tr);
+    else if (!buf) this.loadTrack(mode, tr);
   }
 
+  private loadTrack(mode: Exclude<Mode, 'none'>, tr: Track) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    this.buffers[mode] = 'loading';
+    fetch(tr.url)
+      .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(String(r.status)))))
+      .then((ab) => new Promise<AudioBuffer>((res, rej) => ctx.decodeAudioData(ab, res, rej)))
+      .then((b) => {
+        this.buffers[mode] = b;
+        // (still wanted once it has loaded: it starts then)
+        if (this.musicMode === mode && this.musicOn && !this.playing) this.startMusic(mode, b, tr);
+      })
+      .catch((err) => {
+        this.buffers[mode] = 'failed';
+        console.warn('music skipped:', err);
+      });
+  }
+
+  private startMusic(mode: Exclude<Mode, 'none'>, buf: AudioBuffer, tr: Track) {
+    const ctx = this.ctx!;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;
+    if (tr.loopEnd && tr.loopEnd <= buf.duration) {
+      src.loopStart = tr.loopStart ?? 0;
+      src.loopEnd = tr.loopEnd;
+    }
+    const gain = ctx.createGain();
+    const vol = (tr.vol ?? 1) * (this.ducked ? 0.3 : 1);
+    gain.gain.setValueAtTime(0, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(vol, ctx.currentTime + (mode === 'menu' ? 0.6 : 1.5));
+    src.connect(gain).connect(this.musicGain);
+    src.start();
+    this.playing = { src, gain };
+  }
+
+  private stopMusic(fade: number) {
+    const p = this.playing;
+    if (!p || !this.ctx) return;
+    this.playing = null;
+    const t = this.ctx.currentTime;
+    p.gain.gain.cancelScheduledValues(t);
+    p.gain.gain.setValueAtTime(p.gain.gain.value, t);
+    p.gain.gain.linearRampToValueAtTime(0, t + fade);
+    p.src.stop(t + fade + 0.05);
+  }
+
+  /** the music lower (a dialog, the pause) */
   duck(on: boolean) {
-    if (this.musicEl) this.musicEl.volume = on ? 0.12 : this.musicMode === 'game' ? 0.32 : 0.42;
+    this.ducked = on;
+    const p = this.playing;
+    if (!p || !this.ctx || this.musicMode === 'none') return;
+    const vol = (this.tracks[this.musicMode]?.vol ?? 1) * (on ? 0.3 : 1);
+    p.gain.gain.setTargetAtTime(vol, this.ctx.currentTime, 0.15);
   }
 
   // ---------- continuous ----------
-  /** Ambience of each course: wind and birds, the sea, the city, the fair, the glacier wind or the volcano's rumble. */
-  loops(kind: string, dt: number) {
+  /** Every frame: the crowd's murmur follows the match (`kind`: the venue; the padel has one, an indoor arena). */
+  loops(_kind: string, dt: number) {
     const c = this.ctx;
     if (!c) return;
-    const t = c.currentTime;
-    const gust = 0.5 + 0.5 * Math.sin(t * 0.37) * Math.sin(t * 0.11);
-    const cfg: Record<string, [number, number]> = {
-      lawn: [0.03, 450],
-      // a stadium at night: no birds, only the low air of the bowl under the crowd's murmur
-      stadium: [0.012, 220],
-      street: [0.05, 300],
-      sea: [0.09, 700],
-      fairground: [0.04, 900],
-      ice: [0.08, 1200],
-      magma: [0.1, 140],
-      beach: [0.08, 600],
-      desert: [0.07, 1100],
-      castle: [0.03, 500],
-      city: [0.05, 220],
-      canyon: [0.09, 900],
-      space: [0.02, 160],
-    };
-    const [g, f] = cfg[kind] ?? cfg.lawn;
-    const swell = kind === 'sea' || kind === 'beach' ? 0.5 + 0.5 * Math.sin(t * 0.8) : gust;
-    this.windGain.gain.setTargetAtTime(g * (0.6 + swell * 0.8), t, 0.5);
-    this.windFilter.frequency.setTargetAtTime(f * (0.7 + swell * 0.6), t, 0.5);
-    this.crowd(dt, t);
-    this.birdT -= dt;
-    if (this.birdT <= 0) {
-      this.birdT = 1.5 + Math.random() * 4;
-      if (kind === 'lawn' || kind === 'castle') this.bird();
-      else if (kind === 'beach' && Math.random() < 0.5) {
-        this.tone(1400, 0.25, 'sawtooth', 0.02, 0, 1900);
-        this.tone(1900, 0.3, 'sawtooth', 0.018, 0.22, 1200);
-      } else if (kind === 'space' && Math.random() < 0.4) this.tone(1200 + Math.random() * 800, 0.08, 'sine', 0.012, 0, 1600)
-      else if (kind === 'sea' && Math.random() < 0.6) {
-        // a gull
-        this.tone(1400, 0.25, 'sawtooth', 0.02, 0, 1900);
-        this.tone(1900, 0.3, 'sawtooth', 0.018, 0.22, 1200);
-      } else if (kind === 'fairground' && Math.random() < 0.5) {
-        [784, 988, 1175].forEach((fq, i) => this.tone(fq, 0.18, 'triangle', 0.015, i * 0.16));
-      } else if (kind === 'magma') this.tone(45 + Math.random() * 15, 1.2, 'sine', 0.06, 0, 30);
-    }
+    this.crowd(dt, c.currentTime);
   }
 
   stopLoops() {
     const c = this.ctx;
     if (!c) return;
-    this.windGain.gain.setTargetAtTime(0, c.currentTime, 0.1);
-    this.crowdGain.gain.setTargetAtTime(0, c.currentTime, 0.1);
+    this.bedGain.gain.setTargetAtTime(0, c.currentTime, 0.1);
   }
 
-  /** The murmur of the stands: a slow, uneven bed; louder with a long rally and with every swell, hushed on demand. */
+  private startBed(buf: AudioBuffer) {
+    const c = this.ctx;
+    if (!c || this.bedOn) return;
+    this.bedOn = true;
+    // two copies of the loop, apart in time and rate and on either side: no period to hear, a wide bed
+    for (const [rate, pan, off] of [
+      [0.97, -0.55, 0],
+      [1.04, 0.55, buf.duration * 0.47],
+    ]) {
+      const s = c.createBufferSource();
+      s.buffer = buf;
+      s.loop = true;
+      s.playbackRate.value = rate;
+      const p = c.createStereoPanner ? c.createStereoPanner() : null;
+      if (p) {
+        p.pan.value = pan;
+        s.connect(p).connect(this.bedF);
+      } else s.connect(this.bedF);
+      s.start(c.currentTime, off);
+    }
+  }
+
+  /** The murmur of the stands: an uneven bed; louder and brighter in a long rally and after every swell, hushed on demand. */
   private crowd(dt: number, t: number) {
-    this.swell = Math.max(0, this.swell - dt * 0.4);
+    this.swell = Math.max(0, this.swell - dt * 0.35);
     this.hush = Math.max(0, this.hush - dt * 0.5);
-    const wobble = 0.8 + 0.2 * Math.sin(t * 1.7) * Math.sin(t * 0.53 + 1);
-    const base = this.crowdBase * 0.024 * wobble * (1 - 0.7 * Math.min(1, this.hush)) * (this.replayMode ? 0.6 : 1);
-    const lvl = base + this.tension * this.crowdBase * 0.012 + this.swell * 0.11;
-    this.crowdGain.gain.setTargetAtTime(lvl, t, 0.12);
-    this.crowdF.frequency.setTargetAtTime(460 + this.swell * 520 + this.tension * 80, t, 0.25);
+    if (this.replayMode) {
+      if (this.replaySince < 0) this.replaySince = t;
+    } else this.replaySince = -1;
+    const replay = this.replayMode && t - this.replaySince < 25;
+    const wobble = 0.85 + 0.15 * Math.sin(t * 0.61) * Math.sin(t * 0.23 + 1);
+    const base = this.crowdBase * wobble * (1 + this.tension * 0.6) * (1 - 0.75 * Math.min(1, this.hush)) * (replay ? 0.5 : 1);
+    const lvl = LVL.bed * (base + this.swell * 1.4);
+    this.bedGain.gain.setTargetAtTime(lvl, t, 0.15);
+    this.bedF.frequency.setTargetAtTime(2000 + this.tension * 900 + this.swell * 2200, t, 0.3);
   }
   /** The stands get louder (0 … 1), then settle by themselves. */
   crowdSwell(x: number) {
@@ -212,301 +311,328 @@ export class Audio {
     this.hush = 1.4;
   }
 
-  /** a stereo position (−1 left … 1 right) to play through, or the plain output */
-  private out(pan: number): AudioNode {
+  // ---------- placing a sound ----------
+  /**
+   * Where a sound of the court goes: a stereo position (−1 left … 1 right), and the reverb's send (`rev`, more of it
+   * for the far end, whose dry sound is quieter and duller).
+   */
+  private place(node: AudioNode, pan: number, far: number, rev: number) {
     const c = this.ctx!;
-    if (!pan || !c.createStereoPanner) return this.sfx;
-    const p = c.createStereoPanner();
-    p.pan.value = Math.max(-1, Math.min(1, pan));
-    p.connect(this.sfx);
-    return p;
+    let out: AudioNode = node;
+    if (pan && c.createStereoPanner) {
+      const p = c.createStereoPanner();
+      p.pan.value = Math.max(-1, Math.min(1, pan));
+      node.connect(p);
+      out = p;
+    }
+    out.connect(this.arena);
+    if (rev > 0) {
+      const s = c.createGain();
+      s.gain.value = rev * (1 + far * 0.8);
+      out.connect(s).connect(this.verb);
+    }
   }
 
   /**
-   * The padel paddle meeting the ball: a solid «pock» (a pressurised felt ball on a foam-cored, perforated face), lower
-   * and rounder than pickleball's hollow plastic click. Its pitch, brightness and weight follow the shot (a chiquita or
-   * a dejada is a soft, muffled touch; a drive a full pock; a bandeja a sliced, brushed one; a remate or a víbora a
-   * crack with a thump; a bajada the same, off the glass) and how fast it leaves. `pan`: where on screen (−1 … 1);
-   * `far`: 0 … 1 for the far end. `power` (0 … 1, the hit event's: the speed of the gesture, 0.5 a plain release): a
-   * still release is a softer, rounder pock, a fast flick a louder, harder one with a crack on top. `special`: a remate
-   * going for «por 3» or «por 4» has its own crack, a whip and a boom.
+   * A take of a family: a different one from the last (when there are two or more), its pitch and level a little
+   * different every time; the far end quieter (−5 dB) and duller (a low-pass from 16 kHz down to 3.5 kHz). False when
+   * the family has no takes (the caller synthesises it).
+   */
+  private take(fam: Family, gain: number, o: { rate?: number; pan?: number; far?: number; lp?: number; rev?: number; delay?: number; eq?: [number, number] } = {}): boolean {
+    const set = this.takes[fam];
+    if (!set?.length) return false;
+    const c = this.ctx!;
+    let i = Math.floor(Math.random() * set.length);
+    if (set.length > 1 && i === this.picked[fam]) i = (i + 1 + Math.floor(Math.random() * (set.length - 1))) % set.length;
+    this.picked[fam] = i;
+    const tk = set[i];
+    const far = Math.max(0, Math.min(1, o.far ?? 0));
+    const src = c.createBufferSource();
+    src.buffer = tk.buf;
+    src.playbackRate.value = (o.rate ?? 1) * (1 + (Math.random() - 0.5) * 0.07) * (this.replayMode ? 0.86 : 1);
+    const lp = c.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.Q.value = 0.6;
+    lp.frequency.value = Math.min(o.lp ?? 16000, 16000 * Math.pow(3500 / 16000, far));
+    const g = c.createGain();
+    g.gain.value = gain * (1 - 0.45 * far) * (1 + (Math.random() - 0.5) * 0.14);
+    src.connect(lp);
+    if (o.eq) {
+      // (a bell: the band a phone's speaker can play, lifted)
+      const pk = c.createBiquadFilter();
+      pk.type = 'peaking';
+      pk.frequency.value = o.eq[0];
+      pk.gain.value = o.eq[1];
+      pk.Q.value = 0.9;
+      lp.connect(pk).connect(g);
+    } else lp.connect(g);
+    this.place(g, o.pan ?? 0, far, o.rev ?? 0.22);
+    src.start(c.currentTime + (o.delay ?? 0), tk.start);
+    return true;
+  }
+
+  // ---------- the ball ----------
+  /**
+   * The padel paddle meeting the ball. The recorded takes: the soft family for the touches (a chiquita, a dejada, a
+   * block), the hard one for the firm shots (drives, volleys, remates), and a crossfade between the two by how hard it
+   * was meant (`power`, the hit event's: 0.5 a plain release), brighter and louder the harder; overhead shots a notch
+   * lower and fuller. `special`: a remate going for «por 3» or «por 4» gets its crack and the boom of the frame on top
+   * (and only those). `pan`: where on screen (−1 … 1); `far`: 0 … 1 for the far end.
    */
   paddle(kind: string, speed: number, pan = 0, far = 0, perfect = false, power = 0.5, special: string | null = null) {
     if (!this.ctx || !this.sfxOn) return;
-    const slow = this.replayMode ? 0.78 : 1;
-    const n = Math.min(1, Math.max(0, (speed - 5) / 18));
-    const o = this.out(pan * 0.6);
-    // (how hard it was meant: 0.82 × a still release … 1.3 × the fastest flick)
+    // (one contact is one sound: an echo of the same event within 30 ms is dropped)
+    if (!this.limit('paddle', 0.03)) return;
     const pw = Math.min(1, Math.max(0, power));
-    const dist = (1 - far * 0.35) * (0.82 + pw * 0.48);
+    const n = Math.min(1, Math.max(0, (speed - 5) / 18));
+    const soft = kind === 'dink' || kind === 'drop' || kind === 'auto';
+    const over = kind === 'smash' || kind === 'vibora' || kind === 'bajada' || kind === 'bandeja';
+    // how much of the hard take: none for a touch; by the power for the rest (a placed ball 0.3 → soft, a flick → hard)
+    const hard = soft ? 0 : special ? 1 : Math.min(1, Math.max(0, (pw - 0.3) / 0.4 + (over ? 0.3 : 0)));
+    // the level: a still release −4 dB under a flick; the touches under both
+    const lvl = soft ? 0.75 + 0.25 * n : 0.62 + 0.38 * Math.max(pw, n * 0.8);
+    // pitch: the overheads a little lower and fuller, a lob a touch lower, a fast ball a touch higher
+    const rate = (over ? 0.94 : kind === 'lob' ? 0.97 : 1) * (0.98 + n * 0.05);
+    const o = { pan: pan * 0.6, far, rate, lp: 4200 + 11000 * Math.max(hard, n * 0.6) };
+    // (an equal-power crossfade; the onsets are aligned at t = 0, so the two make one contact)
+    const a = Math.cos((hard * Math.PI) / 2);
+    const b = Math.sin((hard * Math.PI) / 2);
+    let ok = true;
+    if (a > 0.05) ok = this.take('soft', LVL.soft * lvl * a, o) && ok;
+    if (b > 0.05) ok = this.take('hard', LVL.hard * lvl * b, o) && ok;
+    if (!ok) this.paddleSynth(kind, speed, pan, far, pw);
+    if (special === 'por3' || special === 'por4') this.crack(pan * 0.6, far, special === 'por4');
+    if (perfect && !this.replayMode) {
+      // the perfect timing: a small bright «ting» (the game's, not the court's: dry)
+      this.tone(1568, 0.08, 'sine', 0.03, 0.02, undefined, this.ui);
+      this.tone(2093, 0.12, 'sine', 0.025, 0.06, undefined, this.ui);
+    }
+  }
+
+  /** the paddle without its takes: a short pock of a triangle and filtered noise over a low thump */
+  private paddleSynth(kind: string, speed: number, pan: number, far: number, pw: number) {
+    const o = this.out(pan * 0.6, far, 0.22, 2.2);
+    const slow = this.replayMode ? 0.86 : 1;
+    const n = Math.min(1, Math.max(0, (speed - 5) / 18));
+    const dist = (1 - far * 0.4) * (0.8 + pw * 0.4);
     const j = 1 + (Math.random() - 0.5) * 0.06;
-    // (the body of every contact: a short low thump of the foam core under the face)
-    const body = (f: number, v: number, dur = 0.06) => this.tone(f * slow, dur, 'sine', v * dist, 0, f * 0.55 * slow, o);
     if (kind === 'dink' || kind === 'drop' || kind === 'auto') {
-      // a soft touch: muffled, short, the felt more than the face
       const f = 560 * j * slow;
       this.tone(f, 0.05, 'triangle', 0.075 * dist, 0, f * 0.7, o);
-      body(230, 0.06, 0.05);
+      this.tone(230 * slow, 0.05, 'sine', 0.06 * dist, 0, 126 * slow, o);
       this.noiseBurst(0.03, 'lowpass', 1500 * slow, 700, 0.05 * dist, 1.2, 0, o);
-    } else if (kind === 'smash' || kind === 'vibora' || kind === 'speedup' || kind === 'bajada') {
-      const f = (900 + n * 220) * j * slow;
-      this.noiseBurst(0.014, 'highpass', 4200, 2600, 0.13 * dist, 0.7, 0, o);
-      this.tone(f, 0.06, 'triangle', (0.15 + n * 0.06) * dist, 0, f * 0.55, o);
-      this.tone(f * 2.05, 0.03, 'sine', 0.04 * dist, 0, f * 1.5, o);
-      this.noiseBurst(0.07, 'bandpass', 2600 * slow, 1100, 0.17 * dist, 1.4, 0, o);
-      body(kind === 'speedup' ? 200 : 150, kind === 'speedup' ? 0.1 : 0.17, kind === 'speedup' ? 0.07 : 0.15);
-      // the víbora's slice: a brush of the face across the felt
-      if (kind === 'vibora') this.noiseBurst(0.09, 'bandpass', 5200 * slow, 2400, 0.06 * dist, 2.2, 0.004, o);
-    } else if (kind === 'bandeja') {
-      // controlled, sliced: a rounder pock with the brush of the cut
-      const f = (760 + n * 180) * j * slow;
-      this.tone(f, 0.06, 'triangle', 0.12 * dist, 0, f * 0.6, o);
-      body(190, 0.09);
-      this.noiseBurst(0.08, 'bandpass', 4600 * slow, 2200, 0.05 * dist, 2, 0.003, o);
-      this.noiseBurst(0.03, 'bandpass', 1900 * slow, 1000, 0.08 * dist, 1.6, 0, o);
-    } else {
-      // drives, returns, serves, lobs, volleys: the full pock, brighter and louder the harder it is hit
-      const lob = kind === 'lob';
-      const f = (700 + n * 300 - (lob ? 80 : 0)) * j * slow;
-      const v = (0.1 + n * 0.12) * dist;
-      this.noiseBurst(0.01, 'highpass', 3600, 2200, v * 0.4, 0.7, 0, o);
-      this.tone(f, lob ? 0.075 : 0.06, 'triangle', v, 0, f * 0.6, o);
-      this.tone(f * 2.0, 0.025, 'sine', v * 0.28, 0, f * 1.4, o);
-      this.noiseBurst(0.04, 'bandpass', (1800 + n * 700) * slow, 1000, v * 0.75, 1.8, 0, o);
-      body(210 + n * 40, 0.06 + n * 0.05);
+      return;
     }
-    // a hard flick: a sharper crack of the face on top (more the harder)
-    if (pw > 0.65 && kind !== 'dink' && kind !== 'drop' && kind !== 'auto') this.noiseBurst(0.012, 'highpass', 5600, 3600, 0.1 * ((pw - 0.65) / 0.35) * dist, 0.7, 0, o);
-    if (special === 'por3' || special === 'por4') this.crack(o, 1 - far * 0.35, slow, special === 'por4');
-    if (perfect && !this.replayMode) {
-      this.tone(1568, 0.09, 'sine', 0.06, 0.02, undefined, o);
-      this.tone(2093, 0.14, 'sine', 0.05, 0.07, undefined, o);
-    }
+    const f = (720 + n * 280) * j * slow;
+    const v = (0.1 + n * 0.1) * dist;
+    this.tone(f, 0.06, 'triangle', v, 0, f * 0.6, o);
+    this.tone(f * 2.0, 0.025, 'sine', v * 0.28, 0, f * 1.4, o);
+    this.noiseBurst(0.04, 'bandpass', (1800 + n * 700) * slow, 1000, v * 0.75, 1.8, 0, o);
+    this.tone((200 + n * 40) * slow, 0.07, 'sine', v * 0.6, 0, 110 * slow, o);
   }
 
   /**
-   * A remate going for «por 3» (flat, the hardest there is) or «por 4» (with topspin, brushed up): a whip of the face
-   * through the air, a dry crack and a deep boom of the frame, so it sounds like nothing else in the rally.
+   * A remate going for «por 3» (flat, the hardest there is) or «por 4» (with topspin, brushed up), on top of the
+   * paddle's take: a dry, very bright snap at the contact and the boom of the frame (100 → 55 Hz, a third of a second),
+   * the por 4's brush of the strings up the felt.
    */
-  private crack(o: AudioNode, dist: number, slow: number, topspin: boolean) {
-    // the whip: a fast rising hiss just before the contact
-    this.noiseBurst(0.05, 'bandpass', 1800 * slow, 6200 * slow, 0.05 * dist, 2.5, 0, o);
-    // the crack: a very short, very bright snap
-    this.noiseBurst(0.018, 'highpass', 7200, 4200, 0.24 * dist, 0.6, 0.03, o);
-    this.tone(3300 * slow, 0.05, 'square', 0.025 * dist, 0.03, 2400 * slow, o);
-    // the boom of the frame
-    this.tone(95 * slow, 0.28, 'sine', 0.22 * dist, 0.03, 42 * slow, o);
-    // the topspin of a por 4: the strings brushing up the felt
-    if (topspin) this.noiseBurst(0.12, 'bandpass', 3800 * slow, 6800 * slow, 0.07 * dist, 3, 0.035, o);
+  private crack(pan: number, far: number, topspin: boolean) {
+    const o = this.out(pan, far, 0.3);
+    const dist = 1 - far * 0.4;
+    const slow = this.replayMode ? 0.86 : 1;
+    this.noiseBurst(0.02, 'highpass', 6400, 3800, 0.28 * dist, 0.6, 0, o);
+    this.noiseBurst(0.05, 'bandpass', 2400 * slow, 1400 * slow, 0.12 * dist, 1.4, 0, o);
+    this.tone(100 * slow, 0.32, 'sine', 0.2 * dist, 0, 55 * slow, o);
+    this.tone(180 * slow, 0.12, 'sine', 0.08 * dist, 0, 120 * slow, o);
+    if (topspin) this.noiseBurst(0.12, 'bandpass', 3800 * slow, 6800 * slow, 0.05 * dist, 3, 0.01, o);
   }
 
   /**
-   * The ball meets a wall. The glass: a deep, short thud of the thick panel (a low knock with a little ring of the
-   * glass on top). The mesh: a metallic rattle of the wire panel that shivers for a moment. `k`: 0 … 1 how hard.
+   * The ball meets a wall. The glass: a recorded knock of the panel (deep, with its ring), louder and a touch lower the
+   * harder it comes, with a short knock in the mids on top (a phone's speaker plays nothing of the panel's 90 Hz). The
+   * mesh: a metal fence, synthesised: the clank of the wire and a rattle of the panel in its frame. `k`: 0 … 1 how hard.
    */
   wall(surface: 'glass' | 'mesh', k: number, pan = 0, far = 0) {
     if (!this.ctx || !this.sfxOn) return;
     if (!this.limit('wall', 0.05)) return;
     const s = Math.min(1, Math.max(0.15, k));
-    const slow = this.replayMode ? 0.8 : 1;
-    const o = this.out(pan * 0.7);
-    const dist = 1 - far * 0.4;
-    const j = 1 + (Math.random() - 0.5) * 0.08;
     if (surface === 'glass') {
-      const v = (0.08 + s * 0.14) * dist;
-      // the knock of the panel: a low sine that drops, a muffled noise body, a faint ring of the glass
-      this.tone(118 * j * slow, 0.16 + s * 0.06, 'sine', v, 0, 62 * slow, o);
-      this.tone(240 * j * slow, 0.07, 'triangle', v * 0.45, 0, 150 * slow, o);
-      this.noiseBurst(0.06, 'lowpass', 900 * slow, 260, v * 0.9, 0.9, 0, o);
-      this.tone(2650 * j * slow, 0.12, 'sine', v * 0.07, 0.004, 2580 * slow, o);
-    } else {
-      const v = (0.05 + s * 0.09) * dist;
-      // the wire: a bright clank, then a short rattle of the panel against its frame
-      this.noiseBurst(0.02, 'highpass', 3800, 2400, v * 0.8, 0.8, 0, o);
-      this.noiseBurst(0.26 + s * 0.1, 'bandpass', 1600 * slow, 700, v * 0.9, 3.5, 0, o);
-      for (let i = 0; i < 5; i++) this.tone((520 + Math.random() * 380) * slow, 0.035, 'square', v * 0.22 * (1 - i * 0.15), i * 0.028 + Math.random() * 0.01, 300 * slow, o);
-      this.tone(140 * slow, 0.08, 'sine', v * 0.5, 0, 90 * slow, o);
-    }
+      const v = 0.4 + 0.6 * s;
+      const ok = this.take('glass', LVL.glass * v, { pan: pan * 0.7, far, rate: 1.04 - s * 0.08, rev: 0.3, eq: [520, 9] });
+      // the knock of the panel in the mids (the take's own click is thin there)
+      const o = this.out(pan * 0.7, far, ok ? 0.3 : 0.2, ok ? 1 : 2.5);
+      const dist = 1 - far * 0.45;
+      const slow = this.replayMode ? 0.86 : 1;
+      this.noiseBurst(0.05, 'bandpass', 620 * slow, 380, (ok ? 0.08 : 0.09) * v * dist, 1.1, 0, o);
+      if (!ok) {
+        this.tone(118 * slow, 0.16 + s * 0.06, 'sine', 0.16 * v * dist, 0, 62 * slow, o);
+        this.tone(240 * slow, 0.07, 'triangle', 0.07 * v * dist, 0, 150 * slow, o);
+        this.tone(2650 * slow, 0.12, 'sine', 0.012 * v * dist, 0.004, 2580 * slow, o);
+      }
+    } else this.mesh(s, pan * 0.7, far);
   }
 
-  /** The ball on the court: a dull "tock" (live: by how hard it lands; dead: the little bounces after the point). */
+  /**
+   * The mesh: a welded wire panel on a steel frame. A dull thud of the ball on the wire, the clank (a few inharmonic
+   * partials of the steel, struck), then the panel shivering in its frame: the same partials re-struck faster and
+   * fainter for a quarter of a second.
+   */
+  private mesh(s: number, pan: number, far: number) {
+    const c = this.ctx!;
+    const t = c.currentTime;
+    const o = this.out(pan, far, 0.28);
+    const slow = this.replayMode ? 0.86 : 1;
+    const dist = (1 - far * 0.45) * (0.45 + 0.55 * s);
+    // the ball on the wire: the turf's take, muffled (or a low knock)
+    if (!this.take('bounce', LVL.bounce * 0.8 * dist, { pan, far, rate: 0.8, lp: 900, rev: 0.2 })) this.tone(170 * slow, 0.07, 'sine', 0.06 * dist, 0, 110 * slow, o);
+    // the rattle: a pattern of strikes on a bank of resonances
+    const exc = c.createGain();
+    exc.gain.value = 0;
+    const src = c.createBufferSource();
+    src.buffer = this.noise;
+    src.connect(exc);
+    const strikes = 6 + Math.floor(s * 5);
+    let at = 0;
+    for (let i = 0; i < strikes; i++) {
+      const a = (i === 0 ? 1 : 0.55 * Math.pow(0.78, i)) * dist;
+      exc.gain.setValueAtTime(a, t + at);
+      exc.gain.exponentialRampToValueAtTime(0.0001, t + at + 0.006);
+      at += (0.018 + Math.random() * 0.03) * (1 + i * 0.12);
+    }
+    const sum = c.createGain();
+    sum.gain.value = 1;
+    const j = 1 + (Math.random() - 0.5) * 0.06;
+    for (const [f, q] of [
+      [1180, 9],
+      [1730, 11],
+      [2470, 12],
+      [3390, 12],
+      [4610, 14],
+      [6020, 12],
+    ]) {
+      const bp = c.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = f * j * slow;
+      bp.Q.value = q;
+      exc.connect(bp).connect(sum);
+    }
+    sum.connect(o);
+    src.start(t, Math.random(), at + 0.25);
+  }
+
+  /** The ball on the turf: a recorded bounce (live: by how hard it lands; dead: the little bounces after the point). */
   courtBounce(strength: number, pan = 0, far = 0, dead = false) {
     if (!this.ctx || !this.sfxOn) return;
     if (!this.limit(dead ? 'deadb' : 'bounce', 0.04)) return;
     const s = Math.min(1, Math.max(0.05, strength));
-    const slow = this.replayMode ? 0.8 : 1;
-    const o = this.out(pan * 0.6);
-    const v = (dead ? 0.05 : 0.06 + s * 0.07) * (1 - far * 0.35) * (dead ? s : 1);
+    const v = dead ? 0.55 * s : 0.6 + 0.4 * s;
+    if (this.take('bounce', LVL.bounce * v, { pan: pan * 0.6, far, rate: dead ? 1.08 : 0.98 + s * 0.04, rev: 0.18 })) return;
+    const o = this.out(pan * 0.6, far, 0.18, 3.5);
+    const slow = this.replayMode ? 0.86 : 1;
+    const g = (dead ? 0.05 : 0.06 + s * 0.07) * (1 - far * 0.35) * (dead ? s : 1);
     const f = (dead ? 560 : 470 + s * 120) * (1 + (Math.random() - 0.5) * 0.08) * slow;
-    this.tone(f, 0.045, 'triangle', v, 0, f * 0.6, o);
-    this.tone(f * 0.5, 0.06, 'sine', v * 0.6, 0, f * 0.35, o);
-    this.noiseBurst(0.03, 'lowpass', 2400 * slow, 600, v * 0.9, 0.8, 0, o);
+    this.tone(f, 0.045, 'triangle', g, 0, f * 0.6, o);
+    this.tone(f * 0.5, 0.06, 'sine', g * 0.6, 0, f * 0.35, o);
+    this.noiseBurst(0.03, 'lowpass', 2400 * slow, 600, g * 0.9, 0.8, 0, o);
   }
 
-  /** Sneakers on the acrylic: a short rubbery squeal on a hard stop or a turn. */
+  /**
+   * Shoes on the court on a hard stop or a turn. Padel turf is sanded artificial grass: a sole does not squeal on it as
+   * on a hard court, it scrapes the sand (a short, soft «shh»). Only on real stops (strength over 0.55), and rarely
+   * (one at a time, 1.2 s apart at least): it was 27 a minute, a constant chirp under the rally.
+   */
   squeak(strength: number, pan = 0, far = 0) {
     if (!this.ctx || !this.sfxOn) return;
-    if (!this.limit('squeak', 0.12)) return;
-    const c = this.ctx;
-    const t = c.currentTime;
-    const o = this.out(pan * 0.6);
-    const dur = 0.07 + Math.random() * 0.07;
-    const f = 1700 + Math.random() * 900;
-    const osc = c.createOscillator();
-    osc.type = 'triangle';
-    osc.frequency.setValueAtTime(f, t);
-    osc.frequency.linearRampToValueAtTime(f * (1.08 + Math.random() * 0.1), t + dur * 0.5);
-    osc.frequency.linearRampToValueAtTime(f * 0.92, t + dur);
-    // the rubber chatters: a fast wobble of the pitch
-    const lfo = c.createOscillator();
-    lfo.frequency.value = 38 + Math.random() * 20;
-    const depth = c.createGain();
-    depth.gain.value = f * 0.06;
-    lfo.connect(depth).connect(osc.frequency);
-    const bp = c.createBiquadFilter();
-    bp.type = 'bandpass';
-    bp.frequency.value = f * 1.1;
-    bp.Q.value = 3;
-    const g = c.createGain();
-    const v = (0.022 + 0.03 * Math.min(1, strength)) * (1 - far * 0.45);
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(v, t + 0.012);
-    g.gain.setValueAtTime(v, t + dur * 0.6);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    osc.connect(bp).connect(g).connect(o);
-    osc.start(t);
-    lfo.start(t);
-    osc.stop(t + dur + 0.03);
-    lfo.stop(t + dur + 0.03);
+    if (strength < 0.55 || !this.limit('squeak', 1.2)) return;
+    const o = this.out(pan * 0.6, far, 0.12);
+    const v = (0.018 + 0.03 * Math.min(1, strength)) * (1 - far * 0.6);
+    const dur = 0.09 + Math.random() * 0.07;
+    this.noiseBurst(dur, 'bandpass', 2600 + Math.random() * 1400, 1500, v, 0.9, 0, o);
   }
 
-  /** The umpire's chime before the score is called (match point: three notes). */
+  // ---------- the stands and the umpire ----------
+  /** The umpire's chime before the score is called (match point: three notes), through the hall's PA. */
   chime(big = false) {
     if (!this.ctx || !this.sfxOn) return;
+    const o = this.out(0, 0, 0.5);
     const notes = big ? [1175, 1480, 1760] : [1319, 1047];
     notes.forEach((f, i) => {
-      this.tone(f, 0.42, 'sine', 0.045, i * 0.16);
-      this.tone(f * 2, 0.2, 'sine', 0.01, i * 0.16);
+      this.tone(f, 0.42, 'sine', 0.032, i * 0.16, undefined, o);
+      this.tone(f * 2, 0.2, 'sine', 0.006, i * 0.16, undefined, o);
     });
   }
 
-  /** A crowd "ooh": voices rising and falling through the vowel (a net cord, a ball just in or just out). */
+  /** A crowd «uy» / «ooh» (a net cord, a ball just in, a por 3 got back): many voices rising and falling on the vowel. */
   ooh(strength = 1) {
     if (!this.ctx || !this.sfxOn) return;
-    if (!this.limit('ooh', 1.2)) return;
-    const c = this.ctx;
-    const t = c.currentTime;
-    const v = 0.07 + 0.06 * Math.min(1, strength);
-    const g = c.createGain();
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(v, t + 0.18);
-    g.gain.setValueAtTime(v, t + 0.42);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + 1.25);
-    g.connect(this.sfx);
-    // two formants of an "oo" sliding up and back, fed by noise and a chorus of low voices
-    const f1 = c.createBiquadFilter();
-    f1.type = 'bandpass';
-    f1.Q.value = 7;
-    f1.frequency.setValueAtTime(310, t);
-    f1.frequency.linearRampToValueAtTime(420, t + 0.35);
-    f1.frequency.linearRampToValueAtTime(330, t + 1.1);
-    const f2 = c.createBiquadFilter();
-    f2.type = 'bandpass';
-    f2.Q.value = 6;
-    f2.frequency.setValueAtTime(760, t);
-    f2.frequency.linearRampToValueAtTime(900, t + 0.35);
-    f2.frequency.linearRampToValueAtTime(720, t + 1.1);
-    f1.connect(g);
-    f2.connect(g);
-    const src = c.createBufferSource();
-    src.buffer = this.noise;
-    const ng = c.createGain();
-    ng.gain.value = 1.6;
-    src.connect(ng);
-    ng.connect(f1);
-    ng.connect(f2);
-    src.start(t, Math.random(), 1.4);
-    for (let i = 0; i < 7; i++) {
-      const o = c.createOscillator();
-      o.type = 'sawtooth';
-      const f = 150 + Math.random() * 130;
-      o.frequency.setValueAtTime(f, t);
-      o.frequency.linearRampToValueAtTime(f * 1.12, t + 0.35);
-      o.frequency.linearRampToValueAtTime(f * 0.94, t + 1.1);
-      const og = c.createGain();
-      og.gain.value = 0.06;
-      o.connect(og);
-      og.connect(f1);
-      og.connect(f2);
-      o.start(t + Math.random() * 0.06);
-      o.stop(t + 1.35);
-    }
-    this.crowdSwell(0.35 * strength);
+    if (!this.limit('ooh', 2.5)) return;
+    const s = Math.min(1, Math.max(0.2, strength));
+    this.voices(this.oohBufs, LVL.voices * (0.3 + 0.4 * s), 0.94 + Math.random() * 0.12);
+    this.crowdSwell(0.3 * s);
   }
 
-  /** Applause (0 … 1): many hands, rendered once into a buffer and played louder or softer. */
+  /** Applause (0 … 1): many hands, rendered once into two buffers and played louder or softer, longer or shorter. */
   applause(strength = 1) {
-    if (!this.ctx || !this.sfxOn || !this.clapBuf) return;
+    if (!this.ctx || !this.sfxOn || !this.clapBufs.length) return;
     if (!this.limit('applause', 0.8)) return;
     const c = this.ctx;
     const t = c.currentTime;
+    const s = Math.min(1, Math.max(0, strength));
     const src = c.createBufferSource();
-    src.buffer = this.clapBuf;
-    src.playbackRate.value = 0.94 + Math.random() * 0.12;
+    src.buffer = this.clapBufs[Math.floor(Math.random() * this.clapBufs.length)];
+    src.playbackRate.value = 0.95 + Math.random() * 0.1;
     const g = c.createGain();
-    const v = 0.05 + 0.13 * Math.min(1, strength);
+    const v = LVL.claps * (0.1 + 0.3 * s);
+    const hold = 0.4 + s * 1.1;
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(v, t + 0.08);
-    g.gain.setValueAtTime(v, t + 0.6 + strength);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + 2.6 + strength * 0.6);
-    const hp = c.createBiquadFilter();
-    hp.type = 'highpass';
-    hp.frequency.value = 700;
-    src.connect(hp).connect(g).connect(this.sfx);
-    src.start(t, Math.random() * 0.3);
+    g.gain.exponentialRampToValueAtTime(v, t + 0.12);
+    g.gain.setValueAtTime(v, t + hold);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + hold + 1.6 + s * 0.8);
+    src.connect(g);
+    this.place(g, 0, 0, 0.45);
+    src.start(t, Math.random() * 0.2);
+    src.stop(t + hold + 2.6 + s);
   }
 
-  /** The stands erupt: a roar of voices ("ah") over applause, its size 0 … 1. */
+  /** The stands erupt: a roar of voices over applause, its size 0 … 1 (a por 3 / por 4, a great point, the match). */
   roar(strength = 1) {
     if (!this.ctx || !this.sfxOn) return;
     if (!this.limit('roar', 1.0)) return;
     const s = Math.min(1, Math.max(0.2, strength));
-    const c = this.ctx;
-    const t = c.currentTime;
-    const dur = 1.6 + s * 1.2;
-    const g = c.createGain();
-    const v = 0.05 + 0.08 * s;
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(v, t + 0.15);
-    g.gain.setValueAtTime(v, t + dur * 0.35);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    g.connect(this.sfx);
-    for (const [f, q] of [
-      [700, 4],
-      [1220, 5],
-      [2600, 3],
-    ]) {
-      const bp = c.createBiquadFilter();
-      bp.type = 'bandpass';
-      bp.frequency.value = f;
-      bp.Q.value = q;
-      bp.connect(g);
-      const src = c.createBufferSource();
-      src.buffer = this.noise;
-      src.playbackRate.value = 0.9 + Math.random() * 0.2;
-      src.connect(bp);
-      src.start(t, Math.random(), dur + 0.1);
-    }
-    this.applause(s);
+    this.voices(this.roarBufs, LVL.voices * (0.25 + 0.35 * s), 0.96 + Math.random() * 0.08);
+    this.applause(0.4 + 0.6 * s);
     this.crowdSwell(0.6 + 0.4 * s);
+  }
+
+  /** one of the crowd's voice buffers (or, before they are rendered, nothing: the bed's swell says it) */
+  private voices(bufs: AudioBuffer[], v: number, rate: number) {
+    if (!bufs.length) return;
+    const c = this.ctx!;
+    const t = c.currentTime;
+    const src = c.createBufferSource();
+    src.buffer = bufs[Math.floor(Math.random() * bufs.length)];
+    src.playbackRate.value = rate * (this.replayMode ? 0.9 : 1);
+    const g = c.createGain();
+    g.gain.value = v;
+    src.connect(g);
+    this.place(g, (Math.random() - 0.5) * 0.4, 0, 0.5);
+    src.start(t);
   }
 
   // ---------- one-shots ----------
   private limit(key: string, gap: number): boolean {
     const now = performance.now();
-    if (now - (this.last[key] ?? 0) < gap * 1000) return false;
+    if (now - (this.last[key] ?? -1e9) < gap * 1000) return false;
     this.last[key] = now;
     return true;
+  }
+
+  /** a court sound's output: placed (pan, far) with a reverb send, as `place` does (`gain`: the fallbacks' make-up) */
+  private out(pan: number, far = 0, rev = 0.22, gain = 1): AudioNode {
+    const g = this.ctx!.createGain();
+    g.gain.value = gain;
+    this.place(g, pan, far, rev);
+    return g;
   }
 
   private noiseBurst(dur: number, type: BiquadFilterType, f0: number, f1: number, vol: number, q = 0.8, delay = 0, dest?: AudioNode) {
@@ -523,7 +649,7 @@ export class Audio {
     g.gain.setValueAtTime(0.0001, t);
     g.gain.exponentialRampToValueAtTime(vol, t + Math.min(0.03, dur * 0.2));
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    src.connect(f).connect(g).connect(dest ?? this.sfx);
+    src.connect(f).connect(g).connect(dest ?? this.ui);
     src.start(t, Math.random() * 1.0, dur + 0.05);
   }
 
@@ -538,144 +664,299 @@ export class Audio {
     g.gain.setValueAtTime(0.0001, t);
     g.gain.exponentialRampToValueAtTime(vol, t + 0.01);
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    o.connect(g).connect(dest ?? this.sfx);
+    o.connect(g).connect(dest ?? this.ui);
     o.start(t);
     o.stop(t + dur + 0.05);
   }
 
+  /** The menus' and the match's small sounds (the clicks, the point's sting) and the net. */
   play(name: string, n = 0) {
     if (!this.ctx || !this.sfxOn) return;
     switch (name) {
-      case 'pop': {
-        // the padel "pock": a felt ball on a foam-cored paddle. Harder hit = brighter and louder.
-        const v = 0.1 + n * 0.16;
-        const f = 720 + n * 300 + Math.random() * 50;
-        this.tone(f, 0.05, 'triangle', v, 0, f * 0.62);
-        this.tone(f * 2.1, 0.025, 'sine', v * 0.35, 0, f * 1.4);
-        this.noiseBurst(0.035, 'bandpass', 2600 + n * 900, 1500, v * 0.9, 2.2);
-        break;
-      }
-      case 'soft':
-        // a chiquita: a muted touch
-        this.tone(560 + Math.random() * 30, 0.05, 'triangle', 0.09, 0, 400);
-        this.noiseBurst(0.03, 'bandpass', 1900, 1200, 0.06, 2);
-        break;
-      case 'smash':
-        this.tone(1500, 0.06, 'square', 0.12, 0, 700);
-        this.noiseBurst(0.08, 'bandpass', 3800, 1400, 0.3, 1.4);
-        this.tone(160, 0.18, 'sine', 0.16, 0, 70);
-        break;
-      case 'bounce':
-        if (!this.limit('bounce', 0.05)) return;
-        this.tone(330 + Math.random() * 40, 0.05, 'triangle', 0.05 + n * 0.06, 0, 200);
-        this.noiseBurst(0.04, 'lowpass', 1600, 500, 0.06 + n * 0.06);
-        break;
-      case 'net':
-        // ball into the mesh: a rattle and a thud
-        this.noiseBurst(0.22, 'bandpass', 900, 420, 0.22, 0.9);
-        for (let i = 0; i < 4; i++) this.tone(260 + Math.random() * 90, 0.04, 'square', 0.025, i * 0.03, 180);
-        break;
-      case 'tape':
-        // the net cord: a sharp tick on the tape, the tape's thud and a short rattle of the mesh
-        this.noiseBurst(0.012, 'bandpass', 3600, 2800, 0.12, 2.5);
-        this.tone(2200, 0.03, 'sine', 0.05, 0, 1700);
-        this.tone(190, 0.09, 'sine', 0.09, 0.005, 120);
-        this.noiseBurst(0.12, 'bandpass', 900, 500, 0.06, 1.1, 0.02);
-        break;
-      case 'perfect':
-        this.tone(1568, 0.09, 'sine', 0.07, 0.02);
-        this.tone(2093, 0.14, 'sine', 0.06, 0.07);
-        break;
-      case 'cheer': {
-        const big = n;
-        this.noiseBurst(1.0 + big * 0.6, 'bandpass', 1300, 900, 0.1 + big * 0.06, 0.7, 0.05);
-        this.noiseBurst(0.9 + big * 0.6, 'bandpass', 2400, 1700, 0.05 + big * 0.04, 1.2, 0.1);
-        for (let i = 0; i < 4 + big * 6; i++) this.noiseBurst(0.04, 'highpass', 3000, 2500, 0.05, 1, 0.1 + Math.random() * (0.8 + big * 0.4));
-        break;
-      }
-      case 'groan':
-        this.tone(220, 0.45, 'sawtooth', 0.035, 0, 150);
-        this.noiseBurst(0.5, 'bandpass', 600, 350, 0.07, 0.8);
-        break;
-      case 'point':
-        [659, 784, 1047].forEach((f, i) => this.tone(f, i === 2 ? 0.32 : 0.12, 'triangle', 0.09, i * 0.08));
-        break;
-      case 'lost':
-        [440, 370].forEach((f, i) => this.tone(f, i === 1 ? 0.3 : 0.14, 'triangle', 0.08, i * 0.12));
-        break;
-      case 'fault':
-        this.tone(330, 0.18, 'square', 0.05, 0, 250);
-        this.tone(250, 0.28, 'square', 0.05, 0.14, 190);
-        break;
       case 'click':
-        this.tone(900, 0.05, 'triangle', 0.1);
+        this.tone(900, 0.04, 'triangle', 0.07);
         break;
       case 'tick':
-        this.tone(1500, 0.04, 'square', 0.03);
-        break;
-      case 'win':
-        [523, 659, 784, 1047, 784, 1047].forEach((f, i) => this.tone(f, i === 5 ? 0.6 : 0.15, 'sawtooth', 0.07, i * 0.11));
-        [262, 330, 392].forEach((f) => this.tone(f, 0.9, 'triangle', 0.08, 0.55));
-        break;
-      case 'lose':
-        [392, 349, 311].forEach((f, i) => this.tone(f, i === 2 ? 0.5 : 0.18, 'triangle', 0.09, i * 0.16));
+        this.tone(1500, 0.04, 'square', 0.02);
         break;
       case 'whoosh':
-        this.noiseBurst(0.18, 'bandpass', 900, 2600, 0.07, 1.4);
+        this.noiseBurst(0.18, 'bandpass', 900, 2600, 0.05, 1.4);
+        break;
+      case 'net': {
+        // the ball into the net: a soft thud into the cord and a rustle
+        const o = this.out(0, 0, 0.2);
+        if (!this.take('bounce', LVL.bounce * 0.7, { rate: 0.7, lp: 1100, rev: 0.2 })) this.tone(190, 0.08, 'sine', 0.06, 0, 120, o);
+        this.noiseBurst(0.2, 'bandpass', 900, 420, 0.06, 0.9, 0.01, o);
+        break;
+      }
+      case 'tape': {
+        // the net cord: a sharp tick on the tape, the tape's thud and a short shiver of the net
+        const o = this.out(0, 0, 0.2);
+        this.noiseBurst(0.012, 'bandpass', 3600, 2800, 0.08, 2.5, 0, o);
+        this.tone(190, 0.09, 'sine', 0.08, 0.005, 120, o);
+        this.noiseBurst(0.12, 'bandpass', 900, 500, 0.05, 1.1, 0.02, o);
+        break;
+      }
+      case 'perfect':
+        this.tone(1568, 0.08, 'sine', 0.035, 0.02);
+        this.tone(2093, 0.12, 'sine', 0.03, 0.06);
+        break;
+      // the point's result for the player: a soft two-note sting (the stands carry the moment, this only says whose)
+      case 'point':
+        [784, 1175].forEach((f, i) => this.tone(f, i ? 0.22 : 0.1, 'sine', 0.045, i * 0.07));
+        break;
+      case 'lost':
+        [440, 370].forEach((f, i) => this.tone(f, i ? 0.22 : 0.1, 'sine', 0.04, i * 0.09));
+        break;
+      case 'fault':
+        this.tone(330, 0.16, 'triangle', 0.045, 0, 280);
+        this.tone(262, 0.24, 'triangle', 0.045, 0.13, 220);
+        break;
+      case 'win':
+        [523, 659, 784, 1047].forEach((f, i) => this.tone(f, i === 3 ? 0.6 : 0.15, 'triangle', 0.06, i * 0.11));
+        [262, 330, 392].forEach((f) => this.tone(f, 0.9, 'sine', 0.04, 0.44));
+        break;
+      case 'lose':
+        [392, 349, 311].forEach((f, i) => this.tone(f, i === 2 ? 0.5 : 0.18, 'triangle', 0.06, i * 0.16));
         break;
       case 'sting':
         // the replay's sting: a swoosh across and a bright tick
-        this.noiseBurst(0.32, 'bandpass', 500, 3200, 0.08, 1.6);
-        this.tone(1760, 0.12, 'sine', 0.035, 0.16, 2350);
+        this.noiseBurst(0.32, 'bandpass', 500, 3200, 0.06, 1.6);
+        this.tone(1760, 0.12, 'sine', 0.025, 0.16, 2350);
         break;
     }
   }
+}
 
-  private bird() {
-    const f = 2600 + Math.random() * 1800;
-    const n = 2 + Math.floor(Math.random() * 4);
-    for (let i = 0; i < n; i++) this.tone(f * (1 + (i % 2) * 0.12), 0.07, 'sine', 0.018, i * 0.1, f * (i % 2 ? 0.8 : 1.25));
-  }
+/** where a take's sound starts: the first sample over 5 % of its peak, less a millisecond */
+function onset(b: AudioBuffer): number {
+  const d = b.getChannelData(0);
+  let pk = 0;
+  for (let i = 0; i < d.length; i++) pk = Math.max(pk, Math.abs(d[i]));
+  const thr = pk * 0.05;
+  for (let i = 0; i < d.length; i++) if (Math.abs(d[i]) > thr) return Math.max(0, i / b.sampleRate - 0.001);
+  return 0;
 }
 
 /**
- * Applause, rendered once (about 3 s): a few hundred hand claps, each a short burst of band-limited noise, dense at
- * the start and thinning out.
+ * The hall's impulse response: an indoor arena, lightly (about 1.3 s to −60 dB, a 12 ms gap before the first
+ * reflections, a handful of early reflections off the stands and the roof, a tail that darkens as it fades).
  */
-function applauseBuffer(ctx: BaseAudioContext): AudioBuffer {
+function arenaIR(ctx: BaseAudioContext): AudioBuffer {
   const sr = ctx.sampleRate;
-  const len = Math.floor(sr * 3.2);
-  const buf = ctx.createBuffer(1, len, sr);
-  const d = buf.getChannelData(0);
-  const claps = 420;
-  for (let c = 0; c < claps; c++) {
-    // more claps early on
-    const u = Math.random();
-    const at = Math.floor(sr * 3.0 * u * u * (0.4 + 0.6 * Math.random()));
-    const n = Math.floor(sr * (0.008 + Math.random() * 0.012));
-    const amp = 0.25 + Math.random() * 0.5;
-    // a hand clap: noise through a simple resonance (two one-pole filters make a rough band-pass)
-    const a1 = 0.55 + Math.random() * 0.3;
+  const rt = 1.3;
+  const len = Math.floor(sr * 1.6);
+  const b = ctx.createBuffer(2, len, sr);
+  const pre = Math.floor(sr * 0.012);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = b.getChannelData(ch);
     let lp = 0;
-    let hp = 0;
-    let prev = 0;
-    for (let i = 0; i < n && at + i < len; i++) {
-      const x = (Math.random() * 2 - 1) * Math.exp((-6 * i) / n);
-      lp += (x - lp) * a1;
-      hp = 0.7 * (hp + lp - prev);
-      prev = lp;
-      d[at + i] += hp * amp;
+    for (let i = pre; i < len; i++) {
+      const t = (i - pre) / sr;
+      // (the tail's low-pass closes as it fades: 0.55 → 0.08)
+      const a = 0.08 + 0.47 * Math.exp(-t * 2.2);
+      lp += ((Math.random() * 2 - 1) - lp) * a;
+      d[i] = lp * Math.exp((-6.9 * t) / rt) * Math.min(1, t / 0.02);
+    }
+    for (const [ms, g] of [
+      [17, 0.5],
+      [23, 0.42],
+      [31, 0.36],
+      [43, 0.3],
+      [57, 0.24],
+      [71, 0.18],
+    ]) {
+      const i = pre + Math.floor((sr * (ms + (ch ? 3.1 : 0))) / 1000);
+      if (i < len) d[i] += g * (ch ? -1 : 1);
     }
   }
-  // soft ends and a level that fits the other sounds
-  let peak = 0;
-  for (let i = 0; i < len; i++) peak = Math.max(peak, Math.abs(d[i]));
-  const k = peak > 0 ? 0.9 / peak : 1;
-  for (let i = 0; i < len; i++) {
-    const e = Math.min(1, i / (sr * 0.03), (len - i) / (sr * 0.4));
-    d[i] *= k * e;
+  return b;
+}
+
+/** a resonant band-pass (RBJ), as coefficients for the voices' recurrences */
+function bp(f: number, q: number, sr: number): [number, number, number, number] {
+  const w = (2 * Math.PI * f) / sr;
+  const al = Math.sin(w) / (2 * q);
+  const a0 = 1 + al;
+  return [al / a0, -al / a0, (-2 * Math.cos(w)) / a0, (1 - al) / a0];
+}
+
+/**
+ * The murmur of the stands, rendered once (about 7 s, looped): two dozen people talking, each a voiced buzz with
+ * breath through the formants of a vowel that changes syllable by syllable, in phrases with pauses, at different
+ * distances. Mono, at 22 kHz (nothing of a murmur is above 8 kHz); the end crossfaded into the start.
+ */
+function babbleBuffer(ctx: BaseAudioContext): AudioBuffer {
+  const sr = 22050;
+  const sec = 7;
+  const len = Math.floor(sr * sec);
+  const xf = Math.floor(sr * 0.6);
+  const d = new Float32Array(len + xf);
+  const VOW: [number, number][] = [
+    [730, 1090],
+    [530, 1840],
+    [300, 2200],
+    [570, 840],
+    [330, 900],
+    [660, 1720],
+    [450, 1050],
+  ];
+  for (let v = 0; v < 26; v++) {
+    const f0 = (Math.random() < 0.5 ? 100 : 180) + Math.random() * 70;
+    const amp = 0.25 + Math.random() * 0.75;
+    let ph = 0;
+    let x1 = 0, x2 = 0, y1 = 0, y2 = 0, z1 = 0, z2 = 0, w1 = 0, w2 = 0;
+    let i = Math.floor(Math.random() * sr * 0.8);
+    while (i < len + xf) {
+      // a phrase: 3 … 9 syllables, then a pause
+      const syl = 3 + Math.floor(Math.random() * 7);
+      for (let k = 0; k < syl && i < len + xf; k++) {
+        const n = Math.floor(sr * (0.09 + Math.random() * 0.17));
+        const [F1, F2] = VOW[Math.floor(Math.random() * VOW.length)];
+        const c1 = bp(F1 * (0.9 + Math.random() * 0.2), 5, sr);
+        const c2 = bp(F2 * (0.9 + Math.random() * 0.2), 7, sr);
+        const p0 = f0 * (0.9 + Math.random() * 0.25);
+        for (let j = 0; j < n && i < len + xf; j++, i++) {
+          const u = j / n;
+          const env = Math.sin(Math.PI * u) ** 1.5;
+          ph += (p0 * (1 + 0.08 * (0.5 - u))) / sr;
+          ph -= Math.floor(ph);
+          const src = (ph * 2 - 1) * 0.6 + (Math.random() * 2 - 1) * 0.4;
+          const o1 = c1[0] * src + c1[1] * x2 - c1[2] * y1 - c1[3] * y2;
+          x2 = x1;
+          x1 = src;
+          y2 = y1;
+          y1 = o1;
+          const o2 = c2[0] * src + c2[1] * w2 - c2[2] * z1 - c2[3] * z2;
+          w2 = w1;
+          w1 = src;
+          z2 = z1;
+          z1 = o2;
+          d[i] += (o1 + 0.6 * o2) * env * amp;
+        }
+      }
+      i += Math.floor(sr * (0.15 + Math.random() * (Math.random() < 0.3 ? 1.2 : 0.3)));
+    }
   }
-  return buf;
+  // the seam: the extra tail faded into the head
+  for (let i = 0; i < xf; i++) {
+    const u = i / xf;
+    d[i] = d[i] * Math.sqrt(u) + d[len + i] * Math.sqrt(1 - u);
+  }
+  return toBuffer(ctx, d.subarray(0, len), sr, 0.5);
+}
+
+/**
+ * The crowd's voices on one vowel, rendered once: «ooh» (an «uy» of 36 people: the pitch and the vowel rise and fall,
+ * a second and a half) or «roar» (an «¡ah!» of 50, higher and breathier, near three seconds). Each voice a buzz with
+ * jitter and its own entrance and length; the sum through the vowel's moving formants.
+ */
+function voicesBuffer(ctx: BaseAudioContext, kind: 'ooh' | 'roar'): AudioBuffer {
+  const sr = 22050;
+  const roar = kind === 'roar';
+  const dur = roar ? 2.8 : 1.6;
+  const len = Math.floor(sr * dur);
+  const src = new Float32Array(len);
+  const nv = roar ? 50 : 36;
+  for (let v = 0; v < nv; v++) {
+    const low = Math.random() < 0.6;
+    const f0 = (roar ? (low ? 150 : 260) : low ? 115 : 205) * (0.85 + Math.random() * 0.35);
+    const t0 = Math.random() * (roar ? 0.2 : 0.14);
+    const t1 = (roar ? 1.6 : 0.9) + Math.random() * (roar ? 1.0 : 0.5);
+    const amp = 0.3 + Math.random() * 0.7;
+    const vib = 4 + Math.random() * 2;
+    let ph = Math.random();
+    for (let i = Math.floor(t0 * sr); i < len; i++) {
+      const t = i / sr;
+      if (t > t1) break;
+      const u = (t - t0) / (t1 - t0);
+      // the contour: up through the first third, down after (an «uy» falls further)
+      const pc = roar ? 1 + 0.1 * Math.sin(Math.PI * Math.min(1, u * 1.4)) - 0.08 * u : 1 + 0.14 * Math.sin(Math.PI * Math.min(1, u * 1.6)) - 0.12 * u;
+      ph += (f0 * pc * (1 + 0.012 * Math.sin(2 * Math.PI * vib * t) + (Math.random() - 0.5) * 0.02)) / sr;
+      ph -= Math.floor(ph);
+      const env = Math.min(1, (t - t0) / 0.08) * Math.pow(1 - u, roar ? 0.8 : 1.3);
+      src[i] += (ph * 2 - 1) * env * amp;
+    }
+  }
+  // breath and the noise of the room, then the vowel's formants moving over time (updated every 64 samples)
+  const out = new Float32Array(len);
+  const st = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+  let c1 = bp(400, 5, sr), c2 = bp(800, 6, sr), c3 = bp(2600, 4, sr);
+  const breath = roar ? 0.55 : 0.3;
+  for (let i = 0; i < len; i++) {
+    if (i % 64 === 0) {
+      const u = i / len;
+      const rise = Math.sin(Math.PI * Math.min(1, u * (roar ? 1.3 : 1.7)));
+      if (roar) {
+        c1 = bp(680 + 120 * rise, 4, sr);
+        c2 = bp(1150 + 250 * rise, 5, sr);
+        c3 = bp(2600, 3, sr);
+      } else {
+        c1 = bp(320 + 120 * rise, 6, sr);
+        c2 = bp(760 + 160 * rise, 7, sr);
+        c3 = bp(2500, 4, sr);
+      }
+    }
+    const env = Math.min(1, i / (sr * 0.1));
+    const x = src[i] / Math.sqrt(nv) + (Math.random() * 2 - 1) * breath * env * Math.max(0, 1 - i / len);
+    let y = 0;
+    for (const [k, c, g] of [
+      [0, c1, 1],
+      [4, c2, 0.7],
+      [8, c3, roar ? 0.35 : 0.15],
+    ] as [number, [number, number, number, number], number][]) {
+      const o = c[0] * x + c[1] * st[k + 1] - c[2] * st[k + 2] - c[3] * st[k + 3];
+      st[k + 1] = st[k];
+      st[k] = x;
+      st[k + 3] = st[k + 2];
+      st[k + 2] = o;
+      y += o * g;
+    }
+    out[i] = y;
+  }
+  const fade = Math.floor(sr * 0.25);
+  for (let i = 0; i < fade; i++) out[len - 1 - i] *= i / fade;
+  return toBuffer(ctx, out, sr, 0.8);
+}
+
+/** a Float32Array into a mono AudioBuffer at its rate, its peak at `peak` */
+function toBuffer(ctx: BaseAudioContext, d: Float32Array, sr: number, peak: number): AudioBuffer {
+  let pk = 0;
+  for (let i = 0; i < d.length; i++) pk = Math.max(pk, Math.abs(d[i]));
+  const k = pk > 0 ? peak / pk : 1;
+  const b = ctx.createBuffer(1, d.length, sr);
+  const o = b.getChannelData(0);
+  for (let i = 0; i < d.length; i++) o[i] = d[i] * k;
+  return b;
+}
+
+/**
+ * Applause, rendered once (about 3.4 s): seven hundred hand claps, each a short burst of noise through the ring of the
+ * cupped hands (a band-pass between 0.8 and 2.6 kHz), dense at the start and thinning out.
+ */
+function applauseBuffer(ctx: BaseAudioContext): AudioBuffer {
+  const sr = 22050;
+  const len = Math.floor(sr * 3.4);
+  const d = new Float32Array(len);
+  for (let c = 0; c < 700; c++) {
+    const u = Math.random();
+    const at = Math.floor(sr * 3.1 * u * u * (0.3 + 0.7 * Math.random()));
+    const n = Math.floor(sr * (0.006 + Math.random() * 0.01));
+    const amp = 0.2 + Math.random() * 0.8;
+    const k = bp(800 + Math.random() * 1800, 1.5 + Math.random() * 2.5, sr);
+    let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+    for (let i = 0; i < n * 3 && at + i < len; i++) {
+      const x = i < n ? (Math.random() * 2 - 1) * Math.exp((-5 * i) / n) : 0;
+      const y = k[0] * x + k[1] * x2 - k[2] * y1 - k[3] * y2;
+      x2 = x1;
+      x1 = x;
+      y2 = y1;
+      y1 = y;
+      d[at + i] += y * amp;
+    }
+  }
+  for (let i = 0; i < len; i++) d[i] *= Math.min(1, i / (sr * 0.03), (len - i) / (sr * 0.4));
+  return toBuffer(ctx, d, sr, 0.9);
 }
 
 export const audio = new Audio();
