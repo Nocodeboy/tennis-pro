@@ -1,6 +1,6 @@
-// The characters with the players' builds (render/body.ts, the builds in src/kits.ts), for tools/poses.ts: every
+// The characters with the players' builds (render/body.ts, the builds in src/kits.ts), for tools/render/poses-tenis.ts: every
 // CharacterView it makes gets the next build in turn (hero, the rivals, Marta), so the pose metrics are measured on
-// the real heights, shoulders and hips. Usage: CHARS=./chars-bodies.ts npx tsx tools/poses.ts [seconds] [out.json]
+// the real heights, shoulders and hips. Usage: CHARS=./chars-bodies.ts npx tsx tools/render/poses-tenis.ts [seconds] [out.json]
 // (the path is relative to tools/)
 import * as C from '../src/render/chars';
 import { HERO, PARTNER_KIT, RIVAL_KITS } from '../src/kits';

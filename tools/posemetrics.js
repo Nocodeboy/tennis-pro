@@ -1,4 +1,4 @@
-// How natural a drawn body looks, measured on its bones (plain JS: the same code runs in Node, tools/poses.ts, and
+// How natural a drawn body looks, measured on its bones (plain JS: the same code runs in Node, tools/render/poses-tenis.ts, and
 // inside the page, tools/poses.py). Every measure is taken on the pose as drawn, after the clips, the IK and the bends.
 //
 //   features(char)  → the instant measures of one body (angles in degrees, distances in metres)
@@ -250,7 +250,7 @@ function calibrate(ch, clips, sample) {
 }
 
 /**
- * The references of the hero rig as measured by calibrate() on its clips (tools/poses.ts prints them): used by the
+ * The references of the hero rig as measured by calibrate() on its clips (tools/render/poses-tenis.ts prints them): used by the
  * page, which has no clip sampler at hand.
  */
 const NAT = {

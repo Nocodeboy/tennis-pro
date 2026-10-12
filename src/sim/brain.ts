@@ -1004,23 +1004,29 @@ export const RIVAL_ATTRS: Record<string, Attributes> = {
   paco: { pot: 66, con: 64, vel: 62, ref: 60, saq: 64, red: 56, tq: 69 },
   lola: { pot: 60, con: 74, vel: 92, ref: 84, saq: 62, red: 66, tq: 66 },
   bruno: { pot: 82, con: 86, vel: 78, ref: 84, saq: 88, red: 66, tq: 76 },
-  nuria: { pot: 92, con: 88, vel: 84, ref: 88, saq: 80, red: 72, tq: 77 },
-  reina: { pot: 92, con: 85, vel: 93, ref: 89, saq: 84, red: 86, tq: 87 },
+  nuria: { pot: 92, con: 90, vel: 84, ref: 90, saq: 80, red: 72, tq: 73 },
+  reina: { pot: 92, con: 87, vel: 93, ref: 89, saq: 84, red: 86, tq: 85 },
 };
 export const RIVAL_STYLES: Record<string, Style> = {
   paco: { touch: 0.3, attack: 0.3, lob: 0.45, risk: 0.18, netRush: 0.12, serveDelay: 1.3, angle: 0.45, slice: 0.2, topspin: 0.95, flat: 0.3 },
   lola: { touch: 0.4, attack: 0.35, lob: 0.5, risk: 0.22, netRush: 0.25, serveDelay: 1.0, angle: 0.6, slice: 0.35, topspin: 0.6, flat: 0.35 },
-  bruno: { touch: 0.45, attack: 0.55, lob: 0.35, risk: 0.32, netRush: 0.2, serveDelay: 1.1, angle: 0.75, slice: 0.15, topspin: 0.3, flat: 0.75, retBack: 2.5 },
+  bruno: { touch: 0.45, attack: 0.55, lob: 0.35, risk: 0.32, netRush: 0.2, serveDelay: 1.1, angle: 0.75, slice: 0.15, topspin: 0.3, flat: 0.75, retBack: 1.3 },
   nuria: { touch: 0.35, attack: 0.8, lob: 0.3, risk: 0.38, netRush: 0.3, serveDelay: 0.9, angle: 0.8, slice: 0.12, topspin: 0.6, flat: 0.6 },
   reina: { touch: 0.85, attack: 0.82, lob: 0.5, risk: 0.45, netRush: 0.5, serveDelay: 0.9, angle: 0.9, slice: 0.35, topspin: 0.75, flat: 0.55 },
 };
 export const SINGLES_SKILLS: Record<string, Skill> = Object.fromEntries(Object.keys(RIVAL_ATTRS).map((id) => [id, skillFrom(RIVAL_ATTRS[id], RIVAL_STYLES[id])]));
 /**
  * Doubles: the same players come to the net much more (the doubles game is won there), slice and lob a little more,
- * and serve and volley behind the first serve.
+ * and serve and volley behind the first serve. Their contact is `DOUBLES_Q` less clean than in singles (measured: with
+ * two of them covering the court, the singles quality made the last pair unbeatable; docs/tenis/notas-01-simulacion.md).
  */
-const doublesStyle = (st: Style): Style => ({ ...st, netRush: clamp(0.45 + st.netRush * 0.9, 0, 1), lob: st.lob * 1.1, slice: (st.slice ?? 0.3) + 0.1 });
-export const DOUBLES_SKILLS: Record<string, Skill> = Object.fromEntries(Object.keys(RIVAL_ATTRS).map((id) => [id, skillFrom(RIVAL_ATTRS[id], doublesStyle(RIVAL_STYLES[id]))]));
+export const DOUBLES_Q = 0.035;
+const doublesStyle = (st: Style): Style => ({ ...st, netRush: clamp(0.4 + st.netRush * 0.6, 0, 1), lob: st.lob * 1.1, slice: (st.slice ?? 0.3) + 0.1 });
+const doublesSkill = (a: Attributes, st: Style): Skill => {
+  const s = skillFrom(a, doublesStyle(st));
+  return { ...s, q: s.q - DOUBLES_Q };
+};
+export const DOUBLES_SKILLS: Record<string, Skill> = Object.fromEntries(Object.keys(RIVAL_ATTRS).map((id) => [id, doublesSkill(RIVAL_ATTRS[id], RIVAL_STYLES[id])]));
 
 /** The singles rivals (first names in the manner of the PES; the surnames are in tour.ts), the ladder's order. */
 export const RIVALS: Rival[] = [
@@ -1035,7 +1041,7 @@ export const RIVALS: Rival[] = [
  * The human's doubles partner: Marcel Granoyers, a doubles specialist (overall 78): sharp at the net and on the return,
  * not much power or pace; he plays the ad court and goes up and back with the game.
  */
-export const PARTNER_ATTRS: Attributes = { pot: 70, con: 82, vel: 68, ref: 86, saq: 78, red: 90, tq: 72 };
+export const PARTNER_ATTRS: Attributes = { pot: 70, con: 85, vel: 68, ref: 88, saq: 78, red: 90, tq: 69 };
 export const PARTNER: Rival = {
   id: 'marta',
   name: 'Marcel',

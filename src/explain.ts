@@ -336,6 +336,11 @@ export class Explainer {
     const n = t('xn.' + k);
     return this.isMe(m, h.pid) ? t('xs.me', { n }) : t('xs.of', { a: t('xa.' + k), n, name: this.name(h.pid) });
   }
+  /** the Spanish ending that agrees with the shot's name («la derecha se fue larga», «el revés se fue largo») */
+  private gend(h: HitRec): string {
+    const k = h.intent === 'block' ? 'block' : h.kind === 'drive' ? (h.hand === 1 ? 'fh' : 'bh') : h.kind;
+    return t('xa.' + k) === 'la' ? 'a' : 'o';
+  }
   private line(key: string, vars: Record<string, string>, tag: string | null, data: Why['data']): Why {
     return { key, vars, text: cap(t(key, vars)), tag, data };
   }
@@ -436,7 +441,7 @@ export class Explainer {
       const tag = mine ? c.tag ?? outcome.tag : null;
       return this.line('x.cause', { C: t(c.key, c.vars), O: o }, tag, { ...outcome.data, ...c.data, cause: c.key });
     }
-    return this.line('x.' + outcome.key, { S: this.shot(m, h), ...outcome.vars }, mine ? outcome.tag : null, outcome.data);
+    return this.line('x.' + outcome.key, { S: this.shot(m, h), g: this.gend(h), ...outcome.vars }, mine ? outcome.tag : null, outcome.data);
   }
 
   /** A double fault: what the second serve did (into the net, long or wide of the box). */

@@ -1,4 +1,4 @@
-"""Before → after of two tools/poses.ts runs (their out.json), side by side: the measures that match the patterns given
+"""Before → after of two tools/render/poses-tenis.ts runs (their out.json), side by side: the measures that match the patterns given
 (regular expressions; default: the ready stance, the free arm, the paddle, the serve, the feet, pops and the paddle on
 the ball), p50 / p90 (or the share, for the yes/no measures).
 Usage: python3 tools/posecmp.py before.json after.json [pattern …]"""

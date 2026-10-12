@@ -1,4 +1,4 @@
-// A person on a phone, simulated for the bots (tools/bot.ts, tools/bot-doubles.ts): the game's own HumanController
+// A person on a phone, simulated for the bots (tools/bot.ts, singles and doubles): the game's own HumanController
 // and Input, driven frame by frame at 60 Hz (like the game) by a virtual pair of thumbs, so the bots measure the real
 // control code (assist, parking, the suggested circle, the golden ring, the aim mapping, the automatic reset).
 //

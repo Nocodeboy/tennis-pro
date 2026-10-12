@@ -1,5 +1,5 @@
 // What the characters cost: the time CharacterView.update takes per player and frame (µs: median, p90, p99, mean), in
-// two CPU padel matches (four players) at 60 fps, without the measures of tools/poses.ts. CHARS=… times another chars.ts
+// two CPU padel matches (four players) at 60 fps, without the measures of tools/render/poses-tenis.ts. CHARS=… times another chars.ts
 // (before/after a change, run one after the other on the same machine; a desktop, not a phone).
 // Usage: npx tsx tools/charcost.ts [seconds = 90]
 

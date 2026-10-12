@@ -1,5 +1,5 @@
 // Loads the AI-made players in Node (no browser, no WebGL): the same CharacterView the game draws, driven by the
-// same simulation, for numeric checks of the poses over thousands of frames (tools/poses.ts). The model, the clips
+// same simulation, for numeric checks of the poses over thousands of frames (tools/render/poses-tenis.ts). The model, the clips
 // and the texture are read from assets/; the canvas, the image and fetch are stubbed (nothing is drawn).
 
 import { readFileSync } from 'node:fs';

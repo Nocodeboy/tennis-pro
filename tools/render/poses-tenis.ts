@@ -150,24 +150,22 @@ function makeRun(a: CharAssets, mode: string, i: number): Run {
     const chars = m.players.map(() => new CharacterView(a, kit));
     return { m, chars, gate: () => true, tick() {}, after() {}, label: `dobles ${pair.a.name}+${pair.b.name}` };
   }
-  // (padel is always two a side: the human, or a CPU player, with the partner against a pair)
-  const rv = PAIRS[(i + 1) % PAIRS.length];
+  // singles: the human (or a CPU player in his place) against a rival of the ladder
+  const rv = RIVALS[(i + 1) % RIVALS.length];
   const four = (human: boolean) =>
     new Match(
       [
         { team: 0, human, speed: HUMAN_SPEED, reaction: HUMAN_REACTION, look: 0 },
-        { team: 0, human: false, speed: PARTNER.skill.speed, reaction: PARTNER.skill.reaction, look: 0 },
-        { team: 1, human: false, speed: rv.a.skill.speed, reaction: rv.a.skill.reaction, look: 0 },
-        { team: 1, human: false, speed: rv.b.skill.speed, reaction: rv.b.skill.reaction, look: 0 },
+        { team: 1, human: false, speed: rv.skill.speed, reaction: rv.skill.reaction, look: 0 },
       ],
-      { games: 6, golden: true },
+      { games: 6, golden: false, surface: (['hard', 'clay', 'grass'] as const)[i % 3] },
       seed,
     );
   if (mode === 'human') {
     const lv = Object.values(HUMANS)[i % 3];
     const bot = new ThumbBot(lv, 1, seed + 17);
     const m = four(true);
-    m.setControllers([bot.ctl as unknown as Controller, new AIController(PARTNER.skill), new AIController(rv.a.skill), new AIController(rv.b.skill)]);
+    m.setControllers([bot.ctl as unknown as Controller, new AIController(rv.skill)]);
     bot.attach(m);
     m.start();
     const chars = m.players.map(() => new CharacterView(a, kit));
@@ -177,14 +175,14 @@ function makeRun(a: CharAssets, mode: string, i: number): Run {
       gate: (k) => !m.players[k].human || bot.ctl.willSwing(m, m.players[k]),
       tick: () => bot.tick(m),
       after: () => bot.events(m.events),
-      label: `humano(${Object.keys(HUMANS)[i % 3]}) vs ${rv.a.name}+${rv.b.name}`,
+      label: `humano(${Object.keys(HUMANS)[i % 3]}) vs ${rv.name}`,
     };
   }
   const m = four(false);
-  m.setControllers([new AIController(RIVALS[(i + 3) % RIVALS.length].skill), new AIController(PARTNER.skill), new AIController(rv.a.skill), new AIController(rv.b.skill)]);
+  m.setControllers([new AIController(RIVALS[(i + 3) % RIVALS.length].skill), new AIController(rv.skill)]);
   m.start();
   const chars = m.players.map(() => new CharacterView(a, kit));
-  return { m, chars, gate: () => true, tick() {}, after() {}, label: `cpu vs ${rv.a.name}+${rv.b.name}` };
+  return { m, chars, gate: () => true, tick() {}, after() {}, label: `cpu vs ${rv.name}` };
 }
 
 /**
@@ -300,18 +298,6 @@ function gripOf(ch: CharView): { inside: number; deepest: number; gap: number } 
       while (r.m.phase !== 'over' && r.m.t < SECS) {
         r.tick();
         r.m.update(dt);
-        // (the contract's serve, until match.ts has it: as tools/render/harness.ts)
-        for (const e of r.m.events)
-          if (e.type === 'serveStart' && r.m.windup) {
-            const w = r.m.windup;
-            const sv = r.m.players[w.pid];
-            sv.z = sv.side * (HL + 0.1);
-            w.at = r.m.t + 1.05;
-            w.y = 2.75;
-            w.z = sv.side * (HL - 0.35);
-            w.x = sv.x + sv.side * 0.25;
-            (e as { at: number }).at = w.at;
-          }
         r.after();
         const hits: { pid: number; x: number; y: number; z: number; kind: string; vel: number[] | undefined }[] = [];
         for (const e of r.m.events) {
