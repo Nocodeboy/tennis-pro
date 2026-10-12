@@ -187,3 +187,17 @@ Germán: «el sonido y el audio debemos mejorarlo»; le sonaban mal los golpes y
   - más tomas (unas 6 duras, 4 suaves, malla, cinta y público real);
   - las repeticiones no guardan la potencia ni los golpes en pared;
   - **escucharlo en el móvil y con cascos.**
+
+## Golpes desde vídeo (12 oct, rama `modelos-ia`)
+
+Germán: «Es importante que hagamos lo de los vídeos». Detalle en `notas-golpes-video.md`.
+
+- **Fuente:** clips de pádel del canal KNSU de YouTube (CC BY): un jugador, de lado, un golpe por clip. Se bajan en el portátil con `Vídeos\padel-clips\descargar_clips_padel.bat` (yt-dlp y Deno oficiales; sin Node).
+- **En el juego:**
+  - el saque y el revés pasan a ser de una persona real (antes, Meshy);
+  - la bajada toma el cuerpo de una bajada real.
+  - `?video=off` vuelve a los de antes.
+- **El remate de vídeo está preparado pero sin usar:** la bandeja y la víbora se construyen sobre el clip del remate y con él salían peor. Falta ajustarlas.
+- **Sonido:** los clips de KNSU están mudos; de estos vídeos no salen golpes reales. Lo que queda es grabarlos con el móvil en pista.
+- **Créditos:** citar a KNSU (CC BY) al publicar.
+

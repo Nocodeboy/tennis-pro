@@ -165,3 +165,6 @@ python3 tools/video_pose.py <vídeo> /tmp/puntos.json [--espejo]
 python3 art/blender/padel_clip.py dist video /tmp/puntos.json assets/anims/<clip>.json <nombre> [desde hasta] [frente]
 python3 art/blender/padel_clip.py dist comparar <clip_bueno.json> <clip.json>
 ```
+
+- `VERTICAL=1` endereza una cámara inclinada (los clips de KNSU, 7–22°) con la postura del primer fotograma del tramo.
+- `RED=derecha|izquierda|camara|fondo`: dónde está la red en la imagen, para un vídeo grabado de lado; el clip se gira para que esa dirección sea el frente (sin RED, el frente es hacia donde mira el actor en `frente`). Ver `docs/notas-golpes-video.md`.

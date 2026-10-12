@@ -264,21 +264,49 @@ const MOCAP: Partial<Record<SwingKind, { file: string; def: SwingDef }>> = {
   // at the ball) without its jump; the paddle's path is BAJADA's (down onto a ball at the shoulder, across to the hip)
   bajada: { file: 'smash_mocap', def: { find: 1.667, out: 2.1, fade: 0.12, ik: 0.46, lead: 0.9, home: 1.5, drop: 0.06, legs: 0.25 } },
 };
+/**
+ * The padel swings from video: a real padel player, one stroke a clip, filmed side on in a sports hall (KNSU's clips
+ * on YouTube, CC BY; tools/video_pose.py and `padel_clip.py video`, docs/notas-golpes-video.md). They take the place of
+ * the Meshy serve and backhand and of the overhead's body in the bajada (?video=off plays those). Contacts measured on
+ * the videos, frame by frame (the ball leaving the paddle):
+ *  · serve: from the ball let go to the follow-through over the left shoulder; the contact 0.88 s in, below the waist
+ *    (the wind-up the simulation waits for is 0.87 s: SERVE_WINDUP);
+ *  · backhand: one-handed, the right shoulder to the net, the paddle back by the left shoulder, the contact in front
+ *    at chest height, finished with both arms flung wide;
+ *  · bajada: the body of a real bajada (side on, the paddle up behind the head, a step into the ball); the paddle's
+ *    path is still BAJADA's (the IK holds the arm through the stroke).
+ * The remate from video (assets/anims/smash_video.json: the trophy pose side on from 0.9 s, the contact at full
+ * stretch 1.43 s in, the paddle 2.12 m up, right over the head; down across to the left hip; no jump) is not used yet:
+ * the bandeja, the víbora and the por 3 / por 4 are built on the smash's clip (OVER, SPECIAL, tuned on the tennis one)
+ * and on it the bandeja stood right under the ball, arched back, the paddle over the head. It wants that tuning first.
+ */
+const VIDEO: Partial<Record<SwingKind, { file: string; def: SwingDef }>> = {
+  serve: { file: 'serve_video', def: { find: 0.88, out: 1.5, fade: 0.12, ik: 0.15 } },
+  backhand: { file: 'backhand_video', def: { find: 0.78, out: 1.2, fade: 0.1, ik: 0.17, lead: 0.5, drop: 0.12 } },
+  bajada: { file: 'bajada_video', def: { find: 1.25, out: 1.75, fade: 0.12, ik: 0.46, lead: 0.9, home: 1.5, drop: 0.06, legs: 0.5 } },
+};
 /** the swings played from motion capture and their contact (s into the clip), for keyposes.ts */
 export const MOCAP_CONTACT: Record<string, number> = {};
-const mocapOff = (() => {
+const urlOff = (name: string) => {
   try {
-    return new URLSearchParams(location.search).get('mocap') === 'off';
+    return new URLSearchParams(location.search).get(name) === 'off';
   } catch {
     return false;
   }
-})();
-if (!mocapOff) {
-  Object.assign(CLIP_FILES, MOCAP_FILES);
-  for (const [k, m] of Object.entries(MOCAP)) {
+};
+const mocapOff = urlOff('mocap');
+const videoOff = urlOff('video');
+for (const [table, on] of [
+  [MOCAP, !mocapOff],
+  [VIDEO, !videoOff],
+] as const) {
+  if (!on) continue;
+  if (table === MOCAP) Object.assign(CLIP_FILES, MOCAP_FILES);
+  for (const [k, m] of Object.entries(table)) {
     CLIP_FILES[k] = m.file;
     SWINGS[k as SwingKind] = m.def;
     if (typeof m.def.find === 'number') MOCAP_CONTACT[k] = m.def.find;
+    else delete MOCAP_CONTACT[k];
   }
 }
 export const CLIP_NAMES = Object.keys(CLIP_FILES);

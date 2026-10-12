@@ -426,8 +426,12 @@ def video(build, esq, arm, path, out, name, desde=None, hasta=None, frente=None)
     print(f"VIDEO {os.path.basename(path)}: {n} fotogramas a {fps:.2f} fps; vertical corregida {tilt:.1f}°")
     src = construir(P, fps, arm)
     bis = bisagras_destino(esq, build)
+    # (RED: dónde está la red en la imagen, para un vídeo grabado de lado: derecha, izquierda, camara o fondo; el clip
+    # se gira para que esa dirección sea el frente del jugador. Sin RED, el frente es hacia donde mira en `frente`)
+    red = os.environ.get("RED")
+    giro_z = {"derecha": -math.pi / 2, "izquierda": math.pi / 2, "camara": 0.0, "fondo": math.pi}[red] if red else None
     act = retarget(src, arm, name, inicio=desde + 1, fin=hasta + 1, fps_fuente=fps, mapa=MAPA_MIXAMO, pose_t=None,
-                   bisagras_destino=bis, frente=(frente if frente is not None else desde) + 1)
+                   bisagras_destino=bis, frente=(frente if frente is not None else desde) + 1, giro_z=giro_z)
     scn = bpy.context.scene
     rest = esq.local_rest[esq.idx["Hips"]].to_translation()
     frames = []
