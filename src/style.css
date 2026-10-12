@@ -497,6 +497,23 @@ button:focus-visible {
   color: var(--fg-3);
 }
 
+/* the credits (Settings) */
+.panel .credits {
+  margin: 0;
+  padding: 0 0 6px 18px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--fg-3);
+}
+.panel .credits li {
+  margin: 0 0 6px;
+}
+.panel .credits a {
+  color: var(--fg-2);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 /* how to play */
 .court-mini {
   display: block;

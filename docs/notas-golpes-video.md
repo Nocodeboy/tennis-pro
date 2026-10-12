@@ -120,7 +120,13 @@ La vía que queda para tener golpes, cristal, malla y bote reales de pádel es *
 ## Licencias y créditos
 
 - **KNSU (YouTube):** CC BY. Al publicar hay que citarlos en los créditos: el nombre del canal y el enlace a cada vídeo usado, que son `hw3AeXSWblI` (saque), `ct4qEtYR4uk` (revés), `0B17bkGJ0B8` (bajada) y `pTGTSzR8K30` (remate).
-- El juego aún no tiene página de créditos; ya estaba pendiente por el pack de Rokoko (`concepto.md`, 0.2).
+- **Ajustes → Créditos** (nuevo, en español e inglés):
+  - KNSU, con el título original de cada vídeo y su enlace, el canal y la licencia (CC BY 3.0, la de YouTube); el revés se cita como «Padel: Drive (4)», que es como se titula aunque el gesto sea un revés;
+  - la cita que pide CMU;
+  - Rokoko (la derecha);
+  - la IA de los cuerpos (Qwen-Image; TRELLIS 2, MIT);
+  - el sonido y la música.
+- **Rokoko:** la licencia del pack sigue sin confirmar para una tienda (`concepto.md`, 0.2).
 
 ## Pendiente
 
