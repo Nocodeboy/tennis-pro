@@ -4,6 +4,7 @@ Juego de tenis en 3D para web y móvil, propio del estudio Nocodeboy Games. El n
 
 > **Repositorio propio desde el 13 oct 2026.** El tenis se empezó en la rama `tenis` de `Nocodeboy/padel-pro` y se trajo aquí con toda su historia (la del pádel y la del pickleball incluidas). El pádel sigue en `padel-pro`, con su web en [padel-pro-one.vercel.app](https://padel-pro-one.vercel.app); los dos juegos evolucionan cada uno por su lado.
 
+- **Web:** [tennis-pro-zeta.vercel.app](https://tennis-pro-zeta.vercel.app), proyecto `tennis-pro` de Vercel enlazado a `main`: se publica sola con cada push. Las demás ramas solo tienen vista previa, con inicio de sesión de Vercel.
 - **Origen:** el motor del pádel 0.6 (`Nocodeboy/padel-pro@33e2ba3`) más lo que el pickleball sabía de individual (`Nocodeboy/Pickleball`). Las notas del pádel siguen en `docs/` y las del pickleball en `docs/pickleball/` como referencia; las del tenis, en `docs/tenis/`.
 - **Versión:** 0.1 (12–13 oct 2026), la primera jugable:
   - **individual** contra un cuadro de cinco rivales, de dieciseisavos a la final;
