@@ -23,6 +23,8 @@ declare const __VERSION__: string;
 // ------------------------------------------------------------------ save
 interface Save {
   sound: boolean;
+  /** the menus' music (assets/music, made with AI), apart from the sound */
+  music: boolean;
   /** the length of the match (one set): games to win it, a tie-break at games-games */
   games: 2 | 3 | 4 | 6;
   /** one set, or the best of three (0.5) */
@@ -53,7 +55,7 @@ interface Save {
   seen: string[];
 }
 const KEY = 'padel-proto-v1';
-const save: Save = { sound: true, games: 3, sets: 1, golden: true, tutorial: false, swing: 'assist', assist: 1, beatenPairs: 0, replays: true, recover: false, haptics: true, hud: 'min', skips: 0, played: 0, coach: true, seen: [] };
+const save: Save = { sound: true, music: true, games: 3, sets: 1, golden: true, tutorial: false, swing: 'assist', assist: 1, beatenPairs: 0, replays: true, recover: false, haptics: true, hud: 'min', skips: 0, played: 0, coach: true, seen: [] };
 try {
   Object.assign(save, JSON.parse(localStorage.getItem(KEY) || '{}'));
 } catch {
@@ -74,6 +76,10 @@ const rules = (): Rules => ({ games: save.games, golden: save.golden, sets: save
 if (save.lang) setLang(save.lang);
 else setLang(lang);
 audio.setSfx(save.sound);
+audio.setMusic(save.music);
+// the menus' theme (the studio's, from the pickleball: Magnific, Google Lyria 3 Pro; looped round its 36 bars after
+// the intro). In the matches the crowd is the sound, as on TV.
+audio.setMusicTracks({ menu: { url: 'assets/music/menu-loop.mp3', loopStart: 11.2725, loopEnd: 83.2725, vol: 0.55 } });
 
 // ------------------------------------------------------------------ DOM
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -289,6 +295,7 @@ function menu() {
   mode = 'menu';
   bc.reset();
   audio.crowdBase = 0.4; // a murmur from the stands behind the menus
+  audio.music('menu');
   hud.hidden = true;
   clearHint();
   banner.innerHTML = '';
@@ -430,6 +437,7 @@ function settings(scroll = -1) {
     ${onOff(t('set.replays'), 'replays', save.replays)}
     <h3>${t('set.groupSound')}</h3>
     ${onOff(t('set.sound'), 'sound', save.sound)}
+    ${onOff(t('set.music'), 'music', save.music)}
     ${onOff(t('set.haptics'), 'haptics', save.haptics)}
     <h3>${t('set.groupGeneral')}</h3>
     ${row(t('set.lang'), 'lang', [['es', 'Español', lang === 'es'], ['en', 'English', lang === 'en']])}
@@ -451,6 +459,9 @@ function settings(scroll = -1) {
     if (k === 'sound') {
       save.sound = v === '1';
       audio.setSfx(save.sound);
+    } else if (k === 'music') {
+      save.music = v === '1';
+      audio.setMusic(save.music);
     } else if (k === 'replays') {
       save.replays = v === '1';
       bc.replays = save.replays;
@@ -634,6 +645,7 @@ function startDoubles(p: Pair) {
 /** A match: the human (player 0, near side) plus the CPU players given. */
 function begin(cfgs: PlayerCfg[], ctls: Controller[], kits: Kit[], board: [string, string], who: string[], tv: BroadcastSetup) {
   mode = 'play';
+  audio.music('none');
   paused = false;
   clearScreens();
   demo = null;
@@ -986,6 +998,7 @@ function wouldWinSet(m: Match, k: 0 | 1): boolean {
 function endScreen(m: Match, won: boolean) {
   if (match !== m || mode !== 'play') return;
   mode = 'end';
+  audio.music('menu');
   hud.hidden = true;
   clearHint();
   clearBanner();

@@ -451,7 +451,13 @@ export class Broadcast {
       this.view.crowd.react('ooh', 1);
       audio.applause(0.2);
     } else if (great >= 2.5 || e.rally >= 16) {
-      audio.roar(0.5 + big * 0.5);
+      // (the stands erupt for a remate or a net cord that wins it, or a very long rally; a good winner or a long rally
+      // gets warm applause: a roar on three points in four, 0.4, was no roar at all)
+      if (great >= 3.5 || e.rally >= 24) audio.roar(0.5 + big * 0.5);
+      else {
+        audio.applause(0.8);
+        audio.crowdSwell(0.5);
+      }
       this.view.crowd.react('cheer', 0.5 + big * 0.5);
     } else if (won && e.rally >= 3) {
       audio.applause(0.55);
