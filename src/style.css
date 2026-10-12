@@ -1280,6 +1280,21 @@ button.pcard:active {
   color: var(--ink);
   background: var(--fg);
 }
+/* (the best of three: the games of each set, small, before the sets) */
+.fr .st {
+  width: 24px;
+  align-self: stretch;
+  display: grid;
+  place-items: center;
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-3);
+}
+.fr .st.w {
+  color: var(--fg);
+}
 .champ {
   display: flex;
   align-items: center;
@@ -1460,6 +1475,30 @@ button.pcard:active {
   width: calc(30px * var(--k));
   background: rgba(255, 255, 255, 0.17);
 }
+/* padel 0.5, the best of three: a column with the sets before the games (smaller, dimmer) */
+.tvbug.sets {
+  max-width: min(calc(284px * var(--k)), calc(100vw - 72px));
+}
+.tvbug .st {
+  flex: none;
+  width: calc(20px * var(--k));
+  align-self: stretch;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: calc(13.5px * var(--k));
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  color: var(--fg-2);
+  perspective: 120px;
+}
+.tvbug .st span {
+  display: block;
+}
+.tvbug .st span.flip {
+  animation: flip 0.55s var(--ease);
+  color: var(--accent);
+}
 .tvbug.tb .pt {
   background: rgba(242, 196, 67, 0.22);
 }
@@ -1503,7 +1542,8 @@ button.pcard:active {
   color: var(--ink);
   box-shadow: none;
 }
-.tv-state span.tb {
+.tv-state span.tb,
+.tv-state span.sp {
   color: var(--gold);
 }
 /* (with that line the bug is taller: the umpire's call and the point's tag go under it) */

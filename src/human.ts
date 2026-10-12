@@ -208,7 +208,7 @@ export class HumanController implements Controller {
       if (k.special) {
         // por 3 / por 4: the depth is the shot's own (the steepest the net allows, or the middle for the topspin);
         // an aimed drag keeps its side
-        const sp = specialShot(m, p, pl, k.special, aimed ? { x: tx } : { x: pl.bx * 0.3 }, opts.power ?? 1);
+        const sp = specialShot(m, p, pl, k.special, aimed ? { x: tx } : k.special === 'por4' ? { x: pl.bx * 0.3 } : null, opts.power ?? 1);
         return { x: sp.tx, z: sp.tz, kind: k.kind, clear: k.clear, pace: k.pace, ok: inHalf(sp.tx, sp.tz, -p.side as 1 | -1), special: k.special };
       }
       if (attack) {

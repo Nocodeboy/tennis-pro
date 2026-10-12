@@ -731,6 +731,6 @@ function decalGeometry(list: Decal[]): THREE.BufferGeometry {
 }
 
 /** Repaints the video boards and the LED score (games in the set, points in the game). */
-export function drawBoard(b: Venue['board'], left: string, right: string, games: [number, number], points: [string, string], serving: 0 | 1 | null, footer: string, intro = false) {
-  drawScreen(b, left, right, games, points, serving, footer, intro);
+export function drawBoard(b: Venue['board'], left: string, right: string, games: [number, number], points: [string, string], serving: 0 | 1 | null, footer: string, intro = false, sets: [number, number] | null = null) {
+  drawScreen(b, left, right, games, points, serving, footer, intro, sets);
 }

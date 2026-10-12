@@ -25,6 +25,8 @@ interface Save {
   sound: boolean;
   /** the length of the match (one set): games to win it, a tie-break at games-games */
   games: 2 | 3 | 4 | 6;
+  /** one set, or the best of three (0.5) */
+  sets: 1 | 3;
   /** at 40-40: the golden point (the next point wins the game) or advantages */
   golden: boolean;
   tutorial: boolean;
@@ -51,7 +53,7 @@ interface Save {
   seen: string[];
 }
 const KEY = 'padel-proto-v1';
-const save: Save = { sound: true, games: 3, golden: true, tutorial: false, swing: 'assist', assist: 1, beatenPairs: 0, replays: true, recover: false, haptics: true, hud: 'min', skips: 0, played: 0, coach: true, seen: [] };
+const save: Save = { sound: true, games: 3, sets: 1, golden: true, tutorial: false, swing: 'assist', assist: 1, beatenPairs: 0, replays: true, recover: false, haptics: true, hud: 'min', skips: 0, played: 0, coach: true, seen: [] };
 try {
   Object.assign(save, JSON.parse(localStorage.getItem(KEY) || '{}'));
 } catch {
@@ -65,9 +67,10 @@ function persist() {
   }
 }
 if (![2, 3, 4, 6].includes(save.games)) save.games = 3;
+if (save.sets !== 3) save.sets = 1;
 if (!Array.isArray(save.seen)) save.seen = [];
 /** the rules of a match as Settings has them */
-const rules = (): Rules => ({ games: save.games, golden: save.golden });
+const rules = (): Rules => ({ games: save.games, golden: save.golden, sets: save.sets });
 if (save.lang) setLang(save.lang);
 else setLang(lang);
 audio.setSfx(save.sound);
@@ -415,7 +418,8 @@ function settings(scroll = -1) {
     `<div class="panel settings">${head(t('menu.settings'))}
     <h3>${t('set.groupMatch')}</h3>
     ${row(t('set.games'), 'games', ([2, 3, 4, 6] as const).map((g) => [String(g), String(g), save.games === g] as [string, string, boolean]))}
-    <p class="set-note">${t('set.gamesNote', { n: save.games })}</p>
+    ${row(t('set.sets'), 'sets', [['1', t('set.sets1'), save.sets === 1], ['3', t('set.sets3'), save.sets === 3]])}
+    <p class="set-note">${t(save.sets === 3 ? 'set.gamesNote3' : 'set.gamesNote', { n: save.games })}</p>
     ${row(t('set.deuce'), 'golden', [['1', t('set.golden'), save.golden], ['0', t('set.adv'), !save.golden]], true)}
     <h3>${t('set.groupControl')}</h3>
     ${row(t('set.swing'), 'swing', [['assist', t('set.swingAssist'), save.swing === 'assist'], ['manual', t('set.swingManual'), save.swing === 'manual']], true)}
@@ -456,6 +460,7 @@ function settings(scroll = -1) {
       save.haptics = v === '1';
       if (save.haptics) vibrate(20);
     } else if (k === 'games') save.games = Number(v) as Save['games'];
+    else if (k === 'sets') save.sets = v === '3' ? 3 : 1;
     else if (k === 'golden') save.golden = v === '1';
     else if (k === 'swing') save.swing = v as SwingMode;
     else if (k === 'assist') save.assist = Number(v);
@@ -681,6 +686,10 @@ function pause() {
   const tv = bc.teams;
   if (m && tv)
     where = `<div class="pause-score"><span>${tv[0].names.join(' / ')}</span><b>${m.games[0]}</b><i></i><b>${m.games[1]}</b><span>${tv[1].names.join(' / ')}</span></div><div class="pause-pts">${t(m.tiebreak ? 'tv.tiebreak' : 'tv.points')} <b>${m.pointText(0)}-${m.pointText(1)}</b></div>`;
+  // (the best of three: which set it is, the sets so far and the games of the sets played)
+  if (m && tv && (m.rules.sets ?? 1) > 1) where += `<div class="pause-pts">${t('tv.setN', { n: m.setNo })} <b>${m.sets[0]}-${m.sets[1]}</b>${m.setHist.length ? ` · ${m.setHist.map((g) => g.join('-')).join(' · ')}` : ''}</div>`;
+  // (the legs, FIT: yours and your partner's, as a percentage)
+  if (m && tv) where += `<div class="pause-pts">${t('pause.fit')} <b>${Math.round(m.players[0].fit * 100)}%</b> · ${PARTNER.name} <b>${Math.round(m.players[1].fit * 100)}%</b></div>`;
   const el = show(
     `<div class="panel pause">
     <div class="eyebrow">${bc.round || EVENT}</div><h2>${t('pause.title')}</h2>${where}
@@ -790,7 +799,7 @@ function onEvent(m: Match, e: MatchEvent, live: boolean) {
       // the umpire calls the score (and who serves) with a chime; the camera frames the server
       const name = callNames[e.server] ?? names[e.server];
       const who = m.serveNum === 2 ? (me ? t('hud.youServe2') : t('hud.serves2', { name })) : me ? t('hud.youServe') : t('hud.serves', { name });
-      bc.onEvent(m, e, { matchPoint: matchPoint(m), who });
+      bc.onEvent(m, e, { matchPoint: matchPoint(m), setPoint: setPoint(m), who });
       if (me && !save.tutorial && !tut.served) setHint('tut.serve');
       break;
     }
@@ -931,6 +940,11 @@ function onEvent(m: Match, e: MatchEvent, live: boolean) {
       renderHud(e.winner);
       bc.onEvent(m, e);
       break;
+    case 'set':
+      // a set won with the match still on (the best of three): the bug shows the sets, a strap says it
+      renderHud(e.winner);
+      bc.onEvent(m, e);
+      break;
     case 'over': {
       const won = e.winner === 0;
       // (the victory strap has the bottom of the screen)
@@ -948,7 +962,11 @@ let lastWhy = '';
 
 /** Would the point about to be played win the match for either team? */
 function matchPoint(m: Match): boolean {
-  return ([0, 1] as const).some((k) => wouldWinGame(m, k) && wouldWinSet(m, k));
+  return ([0, 1] as const).some((k) => wouldWinGame(m, k) && wouldWinSet(m, k) && m.sets[k] + 1 >= m.setsToWin());
+}
+/** Would the point about to be played win the set, but not yet the match, for either team (the best of three)? */
+function setPoint(m: Match): boolean {
+  return !matchPoint(m) && ([0, 1] as const).some((k) => wouldWinGame(m, k) && wouldWinSet(m, k));
 }
 /** Would team k win the game (or tie-break) by winning the next point? */
 function wouldWinGame(m: Match, k: 0 | 1): boolean {
@@ -983,13 +1001,18 @@ function endScreen(m: Match, won: boolean) {
   // your own perfect shots and errors, the team's winners, and your partner's errors
   // the final score as the broadcast shows it: both teams, the winner's row lit, the games of the set
   const tv = bc.teams;
+  // (the best of three: the games of each set in small, then the sets; one set: its games)
+  const multi = (m.rules.sets ?? 1) > 1;
   const team = (k: 0 | 1) => {
     const c = k === 0 ? HERO.css : kitOf(pair.a.id).css;
     const nm = tv ? tv[k].names.join(' / ') : k === 0 ? t('you') : '';
     const w = m.winner === k;
-    return `<div class="fr${w ? ' w' : ''}"><i style="background:${c}"></i><span class="nm">${nm}</span>${w ? `<span class="wk">${ICON.check}</span>` : ''}<span class="sc">${m.games[k]}</span></div>`;
+    const sets = multi ? m.setHist.map((g) => `<span class="st${g[k] > g[k === 0 ? 1 : 0] ? ' w' : ''}">${g[k]}</span>`).join('') : '';
+    return `<div class="fr${w ? ' w' : ''}"><i style="background:${c}"></i><span class="nm">${nm}</span>${w ? `<span class="wk">${ICON.check}</span>` : ''}${sets}<span class="sc">${multi ? m.sets[k] : m.games[k]}</span></div>`;
   };
-  const stat = (label: string, v: number) => `<div class="sr"><span>${label}</span><b>${v}</b></div>`;
+  const stat = (label: string, v: number | string) => `<div class="sr"><span>${label}</span><b>${v}</b></div>`;
+  // the broadcast's «distance covered» (the metres run, Player.dist), in km with one decimal
+  const km = (d: number) => `${(d / 1000).toLocaleString(lang === 'es' ? 'es-ES' : 'en-GB', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} km`;
   const el = show(
     `<div class="end"><div class="end-a">
     <div class="eyebrow">${roundName(i, n)} · ${EVENT}</div>
@@ -1004,6 +1027,7 @@ function endScreen(m: Match, won: boolean) {
       ${stat(t('end.errorsPartner', { name: PARTNER.name }), s.errorsBy[1])}
       ${stat(t('end.por34'), por34[0])}
       ${stat(t('end.longest'), s.longest)}
+      ${stat(t('end.distance', { name: PARTNER.name }), `${km(m.players[0].dist)} / ${km(m.players[1].dist)}`)}
     </div>
     <div class="btn-col">
       ${hasNext ? `<button class="btn primary" data-a="next">${t('end.nextPair')}<small>${roundName(i + 1, n)}</small></button>` : ''}

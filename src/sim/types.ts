@@ -119,6 +119,14 @@ export interface Player {
   look: number;
   /** doubles: the half of the court this player covers (sign of x); the partner covers the other one */
   lane: 1 | -1;
+  /**
+   * 0 … 1: how fresh the legs are (match.ts, FIT): it drains with the metres run (sprinting more) and the hard swings,
+   * comes back in the pauses and at the end of each game, and never quite all the way in a long match. Tired, a player
+   * is slower, reacts later (the CPU) and hits a little less cleanly.
+   */
+  fit: number;
+  /** metres run in the match (the broadcast's «distance covered») */
+  dist: number;
 }
 
 /**
@@ -165,11 +173,18 @@ export type MatchEvent =
   | { type: 'point'; winner: 0 | 1; reason: PointReason; fault: number | null; rally: number; touched?: number }
   /** a game won: the games of each team after it (`tiebreak`: the game was the tie-break) */
   | { type: 'game'; winner: 0 | 1; games: [number, number]; tiebreak: boolean }
+  /**
+   * a set won: its games, the sets of each team after it and whether it ended in the tie-break. The last set of the
+   * match fires it too, before `over` (the broadcast's strap says «match», not «set», then)
+   */
+  | { type: 'set'; winner: 0 | 1; games: [number, number]; sets: [number, number]; tiebreak: boolean }
   | { type: 'over'; winner: 0 | 1 };
 
 export interface Rules {
-  /** games to win the set (the match is one set): 6 is a full set; a tie-break to 7 at games−games */
+  /** games to win a set: 6 is a full set; a tie-break to 7 at games−games */
   games: number;
   /** at 40-40 the next point wins the game («punto de oro»); false: advantages */
   golden: boolean;
+  /** sets of the match: 1 (one set, the default) or 3 (the best of three, as on the tour: two sets win it) */
+  sets?: 1 | 3;
 }

@@ -14,7 +14,8 @@
 
 import { bounce, groundTime, minFlight, netTime, nextEvent, posAt, seg, shotByClearance, velAt, wallBounce, wallTime, type Seg, type Vec3, type WallHit } from './ball';
 import { AT_NET, DEPTH_Z, HL, NET_C, R, SERVICE, W, backSurface, inHalf, inServiceCourt, netHeight, serveOutBy, sideSurface, type Side, type Surface } from './court';
-import { BAJADA, POR, POWER, Q_FLOOR, blockShot } from './brain';
+import { BAJADA, LAUNCH, POR, POWER, Q_FLOOR, blockShot } from './brain';
+export { LAUNCH };
 import { Rng } from './rng';
 import type { MatchEvent, Plan, Player, PointReason, Rules, ServeFault, ShotKind, ShotSpec, Timing } from './types';
 import type { Attributes } from './attributes';
@@ -37,9 +38,7 @@ const LONG = 2.0;
  *    `backUp` (cumulative), the rest go low. A shank (`shankBack`): into the net, long into the back glass, the rest
  *    off the frame into the side glass.
  */
-export const MISHIT = { closeUp: 0.6, long: 0.3, longLow: 0.4, backUp: 0.6, shankClose: [0.5, 0.38] as [number, number], shankBack: [0.55, 0.25] as [number, number] };
-/** the fastest a shot flies, on average over its flight (m/s): about 150 km/h off the paddle, a top pro's remate */
-export const LAUNCH = { vmax: 36 };
+export const MISHIT = { closeUp: 0.7, long: 0.3, longLow: 0.4, backUp: 0.6, shankClose: [0.4, 0.48] as [number, number], shankBack: [0.55, 0.25] as [number, number] };
 
 export interface Controller {
   /** The server: a shot when ready, null to keep waiting (the human aiming, the AI's routine). */
@@ -106,6 +105,20 @@ export const OVERHEAD = { ideal: 2.5, k: 0.8, fromBehind: 2.2, keep: 1.3, keepTo
  *    (his feet are his thumb's; nobody steps him aside).
  */
 export const BODY = { r: 0.2, legs: 0.7, rLegs: 0.14, lo: 0.12, hi: 1.75, clear: 0.42, plan: 1.5, near: 0.32, step: 0.6, look: 0.6, before: 0.3, contact: 0.12, reflexAt: 0.5, reflex: 0.6, block: 0.14, blockQ: [0.45, 1.0, 0.7] as [number, number, number] };
+/**
+ * The legs (Player.fit, 0 … 1; `k` scales the whole thing, 0 switches it off for the probes):
+ *  · running drains `run` per metre at a jog and up to × (1 + `sprint`) at top speed (quadratic in the speed: a sprint
+ *    costs, a shuffle hardly does); a hard swing costs `hit` × its power over 0.4 (a remate at full power, 0.018);
+ *  · with the ball dead (the pause after the point, the serve's routine) the legs come back `rest` a second, × 0.8 at
+ *    vel 50 of the card up to × 1.2 at 95 (the quick ones are the fit ones), and `game` more at the end of each game
+ *    (the changeover); never above the ceiling, which drops `wear` per metre run in the match (a long match tells),
+ *    and never below `floor`;
+ *  · tired (fit < 1): the top speed is × (1 − `speed` × (1 − fit)), a CPU reaction is `react` s longer at fit 0 (the
+ *    human's is his thumb's), and every contact loses `q` × (1 − fit) of its quality.
+ * A point costs about 0.1 and the pause gives about 0.15 back: fresh for the next point unless the rally was long
+ * (40 shots, 60 m: 0.3, two or three points to recover). A best-of-three (3 km run) wears the ceiling down to 0.85.
+ */
+export const FIT = { k: 1, run: 0.0032, sprint: 1.6, hit: 0.03, rest: 0.045, game: 0.1, wear: 0.00005, floor: 0.35, speed: 0.28, react: 0.14, q: 0.09 };
 
 export interface Mover {
   /** 0 … 1: how readily they move up to the net */
@@ -433,8 +446,12 @@ export class Match {
   readonly players: Player[] = [];
   readonly controllers: Controller[] = [];
   readonly rng: Rng;
-  /** games won in the set */
+  /** games won in the set being played */
   games: [number, number] = [0, 0];
+  /** sets won (Rules.sets: one set, or the best of three) */
+  sets: [number, number] = [0, 0];
+  /** the games of every set finished (the last set of the match included) */
+  setHist: [number, number][] = [];
   /** points in the current game (raw counts: 0, 1, 2, 3 = 0, 15, 30, 40; in a tie-break, the tie-break points) */
   points: [number, number] = [0, 0];
   /** the current game is the tie-break */
@@ -512,6 +529,8 @@ export class Match {
         lastHit: null,
         look: c.look,
         lane: 1,
+        fit: 1,
+        dist: 0,
       });
       this.stats.perfectBy.push(0);
       this.stats.errorsBy.push(0);
@@ -547,6 +566,42 @@ export class Match {
   /** points played in the current game (or tie-break): even, the serve goes from the right */
   private pointsPlayed(): number {
     return this.points[0] + this.points[1];
+  }
+  /** sets a team needs to win the match (1 of 1, 2 of the best of three) */
+  setsToWin(): number {
+    return Math.ceil((this.rules.sets ?? 1) / 2);
+  }
+  /** the set being played, from 1 */
+  get setNo(): number {
+    return this.sets[0] + this.sets[1] + 1;
+  }
+
+  // ------------------------------------------------------------------ the legs (FIT)
+  /** the top speed of `p` right now (his legs: FIT) */
+  vmax(p: Player): number {
+    return p.speed * (1 - FIT.speed * FIT.k * (1 - p.fit));
+  }
+  /** the reaction of `p` right now (a CPU player's gets longer tired, FIT; the human's is his thumb's) */
+  reactOf(p: Player): number {
+    return p.human ? p.reaction : p.reaction + FIT.react * FIT.k * (1 - p.fit);
+  }
+  /** the ceiling of `p`'s legs: it drops with the metres run in the match (FIT.wear) */
+  fitCap(p: Player): number {
+    return Math.max(FIT.floor, 1 - FIT.wear * FIT.k * p.dist);
+  }
+  /** `p` ran `d` metres at `v` m/s this step: the distance covered, and the legs it cost (during the rally) */
+  private spend(p: Player, d: number, v: number) {
+    p.dist += d;
+    if (FIT.k <= 0 || this.phase !== 'rally') return;
+    const r = Math.min(1, v / Math.max(0.1, this.vmax(p)));
+    p.fit = Math.max(FIT.floor, p.fit - FIT.run * FIT.k * d * (1 + FIT.sprint * r * r));
+  }
+  /** the legs come back `amount` (the pauses, the changeover), never over the ceiling */
+  private recover(p: Player, amount: number) {
+    if (FIT.k <= 0) return;
+    const vel = this.controllers[p.id]?.card?.vel ?? 70;
+    const k = 0.8 + 0.4 * Math.max(0, Math.min(1, (vel - 50) / 45));
+    p.fit = Math.min(this.fitCap(p), p.fit + amount * k);
   }
 
   /** The score of a team in the current game as it is called: 0, 15, 30, 40, AD (tie-break: the number). */
@@ -719,6 +774,7 @@ export class Match {
       }
     }
     this.movePlayers(h);
+    if (this.phase !== 'rally') for (const p of this.players) this.recover(p, FIT.rest * h);
     if (this.phase === 'rally') {
       this.reread();
       this.planManual();
@@ -1039,6 +1095,8 @@ export class Match {
       this.passOn(p, true);
       return;
     }
+    // tired legs: a little off every contact (FIT)
+    if (FIT.k > 0 && p.fit < 1) spec.q = Math.max(0, spec.q - FIT.q * FIT.k * (1 - p.fit));
     p.lastHit = { t, kind: spec.kind, hand: plan.hand, overhead: plan.overhead, timing: spec.timing };
     this.t = t;
     this.launch(p, bp, spec, volley, plan.stretch ?? 0);
@@ -1069,6 +1127,8 @@ export class Match {
     // The power (brain.ts, POWER): harder flies sooner and flatter and scatters more; placed, the other way. The soft
     // game feels it gently (a placed globo or a quicker, flatter one).
     const power = Math.max(0, Math.min(1.1, spec.power ?? 0.5));
+    // (a hard swing costs the legs: FIT)
+    if (FIT.k > 0) p.fit = Math.max(FIT.floor, p.fit - FIT.hit * FIT.k * Math.max(0, power - 0.4));
     const dp = power - 0.5;
     const pw = soft || spec.kind === 'lob' ? POWER.soft : 1;
     pace *= 1 - dp * POWER.pace * pw;
@@ -1116,7 +1176,7 @@ export class Match {
         clear += bad * (0.25 + u * 0.9);
         pace *= 1 + bad * 0.5;
         tz = recvSide * Math.max(2.4, Math.abs(tz) - bad * (0.5 + u * 2.2));
-      } else clear -= bad * (0.08 + u * 0.35);
+      } else clear -= bad * (0.06 + u * 0.32);
     } else {
       // a hard swing from the back gone wrong: off a low ball it sometimes sails (long: on a 10 m half a deep one can
       // carry into the back glass on the fly, LONG), more often it is hit down into the net or floats up short
@@ -1337,7 +1397,7 @@ export class Match {
     this.owner = best.p.id;
     if (!this.controllers[best.p.id].steer) {
       best.p.plan = best.plan;
-      best.p.moveFrom = this.t + best.p.reaction;
+      best.p.moveFrom = this.t + this.reactOf(best.p);
       this.misread(best.p);
     }
   }
@@ -1355,8 +1415,8 @@ export class Match {
     if (plan.hand === -1) c += 0.15;
     const lg = manual ? 0 : this.controllers[p.id].mover.lunge ?? 0;
     const dist = runLen(plan.fx - p.x, plan.fz - p.z, p.side, this.backK(p));
-    const run = manual ? Math.max(0, dist - 0.3) / p.speed : runTime(Math.max(0, dist - 0.3 - lg), p.speed);
-    const spare = plan.t - this.t - (run + p.reaction);
+    const run = manual ? Math.max(0, dist - 0.3) / this.vmax(p) : runTime(Math.max(0, dist - 0.3 - lg), this.vmax(p));
+    const spare = plan.t - this.t - (run + this.reactOf(p));
     c += Math.max(0, 0.5 - spare) * 1.2;
     if (manual) c -= 0.25;
     return c;
@@ -1382,7 +1442,7 @@ export class Match {
     const res = this.planContact(q);
     if (!res || !res.plan.reach) return;
     q.plan = res.plan;
-    q.moveFrom = this.t + q.reaction * (missed ? 0.5 : 1);
+    q.moveFrom = this.t + this.reactOf(q) * (missed ? 0.5 : 1);
     this.owner = q.id;
     this.misread(q);
   }
@@ -1490,7 +1550,7 @@ export class Match {
     const p = this.players[pid];
     if (!tg || !p) return null;
     const d = Math.max(0, runLen(tg.fx - p.x, tg.fz - p.z, p.side, this.backK(p)) - 0.3);
-    return { slack: tg.t - this.t - d / p.speed, reach: this.reachAt(tg.t) };
+    return { slack: tg.t - this.t - d / this.vmax(p), reach: this.reachAt(tg.t) };
   }
   /**
    * The human taps during the pause after a point: the next serve is set up sooner (never before MIN_DEAD has gone by,
@@ -1542,7 +1602,7 @@ export class Match {
     const pl = p.plan;
     if (pl) {
       const left = pl.t - this.t;
-      if (manual ? left < (p.speed - HUMAN_FEET.plantV) / HUMAN_FEET.plantB && (!ctl.swing || ctl.swing(this, p, pl)) : this.t >= p.moveFrom && left < (p.speed - FEET.plantV) / FEET.plantB) return 'plant';
+      if (manual ? left < (this.vmax(p) - HUMAN_FEET.plantV) / HUMAN_FEET.plantB && (!ctl.swing || ctl.swing(this, p, pl)) : this.t >= p.moveFrom && left < (this.vmax(p) - FEET.plantV) / FEET.plantB) return 'plant';
     }
     const r = this.rally;
     const opp = r?.last && r.last.team !== p.team ? r.last.lastHit : null;
@@ -1559,7 +1619,7 @@ export class Match {
   private canMake(p: Player, pl: Plan): boolean {
     const dist = Math.hypot(pl.fx - p.x, pl.fz - p.z);
     const reach = this.reachAt(pl.t);
-    return dist <= reach || Math.max(0, runLen(pl.fx - p.x, pl.fz - p.z, p.side, this.backK(p)) - reach) / p.speed <= pl.t - this.t;
+    return dist <= reach || Math.max(0, runLen(pl.fx - p.x, pl.fz - p.z, p.side, this.backK(p)) - reach) / this.vmax(p) <= pl.t - this.t;
   }
 
   /**
@@ -1688,7 +1748,7 @@ export class Match {
       const x = Math.max(-AREA_X, Math.min(AREA_X, b.x + nx * BODY.step));
       const zz = p.side * Math.max(0.5, Math.min(AREA_Z, (b.z + nz * BODY.step) * p.side));
       // (not if the step aside costs him his contact)
-      if (p.plan && runTime(Math.max(0, Math.hypot(p.plan.fx - x, p.plan.fz - zz) - 0.3), p.speed) > p.plan.t - t - 0.1) return null;
+      if (p.plan && runTime(Math.max(0, Math.hypot(p.plan.fx - x, p.plan.fz - zz) - 0.3), this.vmax(p)) > p.plan.t - t - 0.1) return null;
       const dg = { x, z: zz, until: t + 0.08, shots: r.shots };
       this.dodges[p.id] = dg;
       return dg;
@@ -1744,6 +1804,7 @@ export class Match {
   planContact(p: Player, fromHere = false, suggest = false, stretch = false): { plan: Plan; cost: number } | null {
     const r = this.rally!;
     const mv = this.controllers[p.id].mover;
+    const vm = this.vmax(p);
     const legs = this.path();
     // would it go into the net? Then there is nothing to play.
     if (r.bounces === 0 && !r.crossed && r.tNet !== null && !r.netDone) {
@@ -1762,9 +1823,9 @@ export class Match {
     const playOut = !firstIn && !suggest && (fromHere || this.rng.chance(mv.misjudge));
     if (!firstIn && !playOut) return null; // let it go
     const mustBounce = r.shots === 1;
-    const start = fromHere || suggest ? Math.max(this.t + 1 / 240, this.declined + 1 / 60) : this.t + p.reaction;
+    const start = fromHere || suggest ? Math.max(this.t + 1 / 240, this.declined + 1 / 60) : this.t + this.reactOf(p);
     // (CPU: nothing before the reaction, except a reflex block of a ball right at the body, BODY.reflex)
-    const first = fromHere || suggest ? start : this.t + p.reaction * BODY.reflexAt;
+    const first = fromHere || suggest ? start : this.t + this.reactOf(p) * BODY.reflexAt;
     // in: until the second bounce (the end of the path); going out: only before it bounces (or hits the glass)
     const end = firstIn ? legs[legs.length - 1].t1 : iFirst >= 0 ? legs[iFirst].t0 : legs[0].t1;
     // the suggested spot: what is left of the time a person needs to see the ball and push the stick (SUGGEST)
@@ -1783,7 +1844,7 @@ export class Match {
       const v = Math.hypot(p.vx, p.vz);
       const B = FEET.brakeMax;
       if (v > 0.05) {
-        const tb = Math.min(p.reaction, v / B);
+        const tb = Math.min(this.reactOf(p), v / B);
         const sd = v * tb - 0.5 * B * tb * tb;
         ox += (p.vx / v) * sd;
         oz += (p.vz / v) * sd;
@@ -1842,7 +1903,7 @@ export class Match {
         // (going back for a lob is slower: BACK)
         const len = bk < 1 ? runLen(fx - ox, fz - oz, p.side, bk) : dist;
         const run = Math.max(0, len - 0.3 - lg);
-        let need = cpu ? Math.max(0, runTime(run, p.speed) + plantTime(run, p.speed) - FEET.optimism) : run / p.speed + (len - lg > 0.6 ? 0.12 : 0);
+        let need = cpu ? Math.max(0, runTime(run, vm) + plantTime(run, vm) - FEET.optimism) : run / vm + (len - lg > 0.6 ? 0.12 : 0);
         if (rvx || rvz) need += Math.max(0, -(rvx * (fx - ox) + rvz * (fz - oz)) / Math.max(dist, 1e-3)) / FEET.brakeMax;
         const avail = reflex ? 0 : t - start;
         if (reflex) need = 0;
@@ -1853,7 +1914,7 @@ export class Match {
         if (suggest) {
           tight = Math.max(0, need + seeLeft - avail);
           const rs = Math.max(0, dist - Math.min(SUGGEST.stretch, this.reachAt(t) - 0.1));
-          if (stretch) need = Math.min(need, rs / p.speed + (rs > 0.3 ? 0.12 : 0));
+          if (stretch) need = Math.min(need, rs / vm + (rs > 0.3 ? 0.12 : 0));
         }
         // from here: the feet stay where they are (the lunge does the rest)
         const ffx = fromHere ? p.x : reflex ? ox : fx;
@@ -1967,6 +2028,7 @@ export class Match {
     const ball = this.phase === 'rally' ? posAt(this.rally!.seg, this.t, this.pv) : null;
     if (this.doubles && this.phase === 'rally') this.keepLanes();
     for (const p of this.players) {
+      const vm = this.vmax(p);
       let tx = p.homeX;
       let tz = p.homeZ;
       const ctl = this.controllers[p.id];
@@ -1976,7 +2038,7 @@ export class Match {
         const k = Math.min(1, Math.hypot(st.x, st.z));
         let ux = k > 0.01 ? st.x / Math.hypot(st.x, st.z) : 0;
         let uz = k > 0.01 ? st.z / Math.hypot(st.x, st.z) : 0;
-        let want = p.speed * k;
+        let want = vm * k;
         // The assist: with the stick at rest the last steps to the suggested spot happen by themselves; pushing roughly
         // towards it locks on and the player goes straight there and parks, for as long as the thumb keeps pushing
         // roughly the way he came (a held stick or key never carries him past it). The thumb stays in charge: turning
@@ -2015,7 +2077,7 @@ export class Match {
             uz = tz;
             // a planted stop on the spot: a braking profile the feet can follow (within a centimetre)
             const arrive = d < 0.006 ? 0 : Math.sqrt(2 * HUMAN_FEET.park * (d - 0.004));
-            want = Math.min(p.speed, k < 0.2 ? arrive : Math.min(Math.max(want, p.speed * 0.9), arrive));
+            want = Math.min(vm, k < 0.2 ? arrive : Math.min(Math.max(want, vm * 0.9), arrive));
           }
         }
         // Between shots (his side's ball on its way, the thumb off the stick for a moment): jog back to a sensible
@@ -2029,7 +2091,7 @@ export class Match {
           if (d > 0.08) {
             ux = dx / d;
             uz = dz / d;
-            want = Math.min(p.speed * 0.72, d * 4 + 0.2);
+            want = Math.min(vm * 0.72, d * 4 + 0.2);
           }
         }
         let wx = ux * want;
@@ -2061,10 +2123,11 @@ export class Match {
         }
         // (chasing a lob, going back is slower: BACK)
         const bkh = this.backK(p);
-        if (bkh < 1 && wz * p.side > bkh * p.speed) wz = p.side * bkh * p.speed;
-        footStep(p, wx, wz, h, p.speed, HUMAN_FEET, upCap, upMul);
+        if (bkh < 1 && wz * p.side > bkh * vm) wz = p.side * bkh * vm;
+        footStep(p, wx, wz, h, vm, HUMAN_FEET, upCap, upMul);
         p.x += p.vx * h;
         p.z += p.vz * h;
+        this.spend(p, Math.hypot(p.vx, p.vz) * h, Math.hypot(p.vx, p.vz));
         if (p.z * p.side < 0.4) {
           p.z = p.side * 0.4;
           p.vz = 0;
@@ -2091,26 +2154,26 @@ export class Match {
       // braking into the contact: no faster than this (m/s)
       let plant = Infinity;
       // the ball coming at him before his contact: a step aside to let it pass (BODY)
-      const dg = this.phase === 'rally' && this.t >= p.moveFrom - p.reaction * BODY.reflexAt ? this.dodge(p) : null;
+      const dg = this.phase === 'rally' && this.t >= p.moveFrom - this.reactOf(p) * BODY.reflexAt ? this.dodge(p) : null;
       if (this.phase !== 'rally') {
         // the point is over (or the serve is being set up): ease to a stop
         stop = this.phase === 'serve' ? FEET.brakeMax : FEET.brake;
       } else if (dg) {
         tx = dg.x;
         tz = dg.z;
-        want = p.speed;
+        want = vm;
         this.settled[p.id] = false;
       } else if (p.plan && this.t >= p.moveFrom) {
         const pl = p.plan;
         const left = pl.t - this.t;
         const d0 = Math.hypot(pl.fx - p.x, pl.fz - p.z);
         const run = Math.max(0, runLen(pl.fx - p.x, pl.fz - p.z, p.side, this.backK(p)) - 0.3 - (ctl.mover.lunge ?? 0));
-        const need = runTime(run, p.speed) + plantTime(run, p.speed);
+        const need = runTime(run, vm) + plantTime(run, vm);
         // with time in hand: come round a little behind the ball and step in to it at the end
         tx = pl.fx;
         tz = pl.fz + (left - need > 0.5 && d0 > 1 ? p.side * 0.25 * Math.min(1, d0 - 1) : 0);
         // the pace the ball asks for: get there with a third of a second in hand, sprint only when that needs it
-        want = left - need > FEET.margin ? Math.max(FEET.jog, (d0 / Math.max(0.25, left - FEET.margin)) * 1.2) : p.speed;
+        want = left - need > FEET.margin ? Math.max(FEET.jog, (d0 / Math.max(0.25, left - FEET.margin)) * 1.2) : vm;
         // and the feet are planted (or braking) when the paddle meets the ball: a late run ends in a stretch
         plant = FEET.plantV + FEET.plantB * Math.max(0, left);
         this.settled[p.id] = false;
@@ -2145,16 +2208,17 @@ export class Match {
         const dz = tz - p.z;
         const d = Math.hypot(dx, dz);
         // a planted stop: a steady braking profile into the spot
-        const sp = d < 0.01 ? 0 : Math.min(p.speed, want, Math.sqrt(2 * FEET.brake * d), plant);
+        const sp = d < 0.01 ? 0 : Math.min(vm, want, Math.sqrt(2 * FEET.brake * d), plant);
         wx = d > 0 ? (dx / d) * sp : 0;
         wz = d > 0 ? (dz / d) * sp : 0;
       }
       // (chasing a lob, going back is slower: BACK)
       const bkc = this.backK(p);
-      if (bkc < 1 && wz * p.side > bkc * p.speed) wz = p.side * bkc * p.speed;
-      footStep(p, wx, wz, h, p.speed);
+      if (bkc < 1 && wz * p.side > bkc * vm) wz = p.side * bkc * vm;
+      footStep(p, wx, wz, h, vm);
       p.x += p.vx * h;
       p.z += p.vz * h;
+      this.spend(p, Math.hypot(p.vx, p.vz) * h, Math.hypot(p.vx, p.vz));
       // never past the net, nor through the glass
       if (p.z * p.side < 0.4) {
         p.z = p.side * 0.4;
@@ -2216,12 +2280,24 @@ export class Match {
     const wasTie = this.tiebreak;
     this.events.push({ type: 'game', winner, games: [this.games[0], this.games[1]], tiebreak: wasTie });
     this.points = [0, 0];
+    // (the changeover: the legs get a breather, FIT)
+    for (const p of this.players) this.recover(p, FIT.game);
     const g = this.games[winner];
     const G = this.rules.games;
     if (wasTie || (g >= G && g - this.games[lose] >= 2)) {
-      this.winner = winner;
-      this.phase = 'over';
-      this.events.push({ type: 'over', winner });
+      // the set: the match with it (one set, or the second of the best of three), or on to the next set
+      this.sets[winner]++;
+      this.setHist.push([this.games[0], this.games[1]]);
+      this.events.push({ type: 'set', winner, games: [this.games[0], this.games[1]], sets: [this.sets[0], this.sets[1]], tiebreak: wasTie });
+      if (this.sets[winner] >= this.setsToWin()) {
+        this.winner = winner;
+        this.phase = 'over';
+        this.events.push({ type: 'over', winner });
+        return;
+      }
+      this.games = [0, 0];
+      this.tiebreak = false;
+      this.nextServer();
       return;
     }
     this.tiebreak = this.games[0] === G && this.games[1] === G;

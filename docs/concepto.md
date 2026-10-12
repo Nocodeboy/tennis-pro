@@ -1,7 +1,7 @@
 # Pádel · ficha de concepto y estado
 
 *Nombre provisional:* **Pádel · Pro Tour**. Es un juego propio del estudio Nocodeboy Games (Germán, 12 oct: «el pádel también es propio»): el nombre, la marca, las tiendas y la publicación los decide el estudio con sus protocolos. La marca está en `src/tour.ts`.
-*Estado (12 oct 2026):* **prototipo 0.2 jugable en web**, hecho a partir del pickleball 0.10 (`Nocodeboy/Pickleball@2f15030`). La 0.2 trae de la 0.12 del pickleball (`cc00ccb`) las animaciones de captura de movimiento y el trabajo de Blender: ver «0.2» al final.
+*Estado (12 oct 2026):* **prototipo 0.5 jugable en web**, hecho a partir del pickleball 0.10 (`Nocodeboy/Pickleball@2f15030`). La 0.2 trae de la 0.12 del pickleball (`cc00ccb`) las animaciones de captura de movimiento y el trabajo de Blender; la 0.5 (rama de experimento) añade los sets, el físico y una pasada de afinado medido: ver el final.
 
 ## El origen
 
@@ -162,3 +162,26 @@ Germán: «una pasada de audit al juego para mejorar su jugabilidad y experienci
   - con el bot humano, las dos parejas en la red siguen siendo el 15 % de los golpes;
   - algún desequilibrio entre atributos (reflejos pesa más);
   - probar en el móvil la curva de potencia y el hueco bajo la pista en vertical.
+
+## 0.5 (12 oct): sets, físico y afinado medido (rama de experimento)
+
+Germán: «mejorar este juego y conseguir el mejor simulador de pádel calidad AAA», en una rama nueva. Lo que se ha hecho, medido con las sondas de la 0.4 (`notas-05-simulacion.md`):
+
+- **Partidos al mejor de tres sets** (Ajustes → Partido → Sets), cada set a los juegos de siempre con tie-break; el bug de TV lleva los sets, hay bola de set, rótulo de set ganado, videomarcador y LED con sets, y la pausa y el final los muestran por set. Un set sigue siendo lo normal.
+- **Físico.** Las piernas se gastan con los metros corridos (más al esprint) y los golpes fuertes, y vuelven en las pausas y al cambiar de juego, nunca del todo en un partido largo. Cansado, el jugador corre menos, la CPU reacciona más tarde y todos golpean algo peor. Se ve en la pausa y, como distancia recorrida, en las estadísticas del final. En un set a 3 juegos no mueve la escalera.
+- **Afinado:**
+  - el globo bueno obliga a bajar a la pareja de la red el 54 % de las veces (antes 39 %);
+  - los siete atributos pesan parecido: +20 en uno da de +9 a +14 puntos de % (vel y par, de +4 a +7); antes pot, vel y par no pasaban de +5 y ref llegaba a +15;
+  - el por 3 lo planifica la física: la CPU (y el latigazo sin apuntar) elige el destino cuyo vuelo sale del recinto con más margen, por el fondo o por el lateral;
+  - la bandeja varía de ritmo y altura, la víbora no busca el cristal lateral antes del bote;
+  - la CPU apunta al rival de peor ficha, no al más lento (tú y Martín siguen a medias);
+  - las voleas de definición pasan a un palmo de la cinta y la chiquita de la defensa un poco más alta.
+- **Números** (12 partidos por casilla): el bueno gana a los campeones el 58 % de los partidos (50 % de los puntos; antes 33 y 46); fuzz de 48 partidos sin fallos.
+
+### Pendiente de la 0.5
+- **La pareja de la red** entre parejas CPU se queda en el 60 % (objetivo 65–75 %); con el bot humano, 60–68 % según la pasada.
+- **vel y par** pesan menos que el resto (+4 a +7 con +20).
+- **El por 3 a 2,5 m** sale el 15 % con un latigazo perfecto (la física de la 0.4 lo había dejado en el 19 %).
+- **Punto de oro:** la pareja del humano no elige quién resta.
+- **Cambio de lado** y descanso entre sets: no se modelan.
+- **Probar en el móvil** el físico tras un peloteo largo y la columna de sets con nombres largos.
