@@ -94,3 +94,28 @@ Germán, tras probar la 0.1 («se siente bien»): aprovechar del pickleball «el
 - **Probar en el móvil:** los triángulos de más del mobiliario, la derecha y el salto del remate a la velocidad del juego.
 - **Golpes propios del pádel con captura:** volea, chiquita, bandeja de verdad y salida de pared. El método de Blender ya está en el repo (`art/blender/padel_clip.py`); falta una fuente de capturas de pádel.
 
+
+## 0.3 (12 oct): potencia, remates por 3 y por 4, bajada de pared y atributos
+
+Germán, tras la 0.2: diferenciar víboras, bandejas, remates, por 3 y por 4; añadir las bajadas de pared; ajustar mejor la potencia; jugadores con características y atributos distintos. Decidió: potencia por la velocidad del gesto, por 3 y por 4 por gesto, y atributos visibles para todos. El repo pasa a `Nocodeboy/padel-pro` (privado, rama `main`).
+
+- **Gesto → golpe** (detalle en `notas-03-simulacion.md`):
+  - dedo quieto al soltar: golpe colocado; soltar normal: medio; latigazo: fuerte, tanto más cuanto más rápido;
+  - por encima de la cabeza: soltar = bandeja; latigazo torcido = víbora; latigazo recto = remate; recto a tope con la bola alta y cerca de la red = **por 3**; latigazo hacia abajo = **por 4**;
+  - bola que vuelve alta del cristal de fondo: aviso rosa «BAJADA»; soltar = bajada controlada, latigazo = bajada fuerte;
+  - teclado: F más tiempo = más fuerte; Mayús+F = por 4.
+- **Por 3 y por 4 los decide la física:** un por 3 perfecto con la bola a 2,5 m y a 2,5 m de la red sale el 48 % de las veces (77 % a 2,7 m y 2 m); un por 4, el 31 %.
+- **Atributos 0–99** (`src/sim/attributes.ts`, `skillFrom` en `brain.ts`): potencia, control, velocidad, reflejos, remate, pared y toque. Mueven el juego de cada uno. Medias: Paquito 58, Fede 71, Alejandro 80, Agustín 84, Arturo 89, Martín 75, tú 73. Fichas en la presentación del partido, la media de cada pareja en el cuadro y «Tu pareja» en el menú (`notas-03-interfaz.md`).
+- **Animación** (`notas-03-animacion.md`): bajada de derecha y de revés, por 3 más violento, por 4 liftado, la bandeja salta menos (se golpea a 2,48 m de mediana), destello y estela según la potencia. La CPU decide la bajada al salir a por la bola, así que la vista prepara el golpe que llega.
+- **Números** (bot, 12–16 partidos por casilla, 3 juegos, punto de oro):
+  - el bueno gana a los campeones el 33–50 % (el medio, 17–19 %; el novato, 0–13 %);
+  - los ganadores pasan del 19 % al 31–33 % de los puntos;
+  - 12–13,5 golpes por punto;
+  - fuzz de 48 + 24 partidos sin fallos ni atascos.
+
+### Pendiente de la 0.3
+- **Probar en el móvil la curva de la potencia,** el umbral del por 3 (unos 1.330 px/s) y el latigazo hacia abajo.
+- **Con el dedo no hay indicación de potencia mientras arrastras:** solo se ve al soltar (en el teclado sí hay barra).
+- **Por 4 desde muy alto y muy cerca:** a veces sale por encima de la pared y cuenta como por 3.
+- **El humano que globea una bola de bajada** ve primero la preparación de la bajada.
+- **El medio contra los campeones** baja al 17–19 %.
