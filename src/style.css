@@ -2005,6 +2005,15 @@ button.pcard:active {
 #banner .b1.has-why {
   padding-bottom: 6px;
 }
+/* whose point it is, small over the reason (the colour alone does not say it) */
+#banner .b1 .who {
+  display: block;
+  margin-bottom: 2px;
+  font-weight: 600;
+  font-size: calc(11px * var(--k));
+  letter-spacing: 0.14em;
+  opacity: 0.85;
+}
 #banner .b1 .why {
   display: block;
   margin-top: 3px;
@@ -2065,6 +2074,23 @@ button.pcard:active {
 .fl.early,
 .fl.late {
   color: #ffb3a6;
+}
+/* a shot over the head, by name (any timing: which one came out), its timing small under it */
+.fl.shot {
+  color: #fff;
+  font-size: calc(16px * var(--k));
+}
+.fl small {
+  display: block;
+  margin-top: 1px;
+  font-style: normal;
+  font-weight: 700;
+  font-size: 0.62em;
+  letter-spacing: 0.14em;
+  text-align: center;
+}
+.fl.long {
+  animation-duration: 1.15s;
 }
 @keyframes rise {
   0% {
@@ -2141,6 +2167,88 @@ button.pcard:active {
   height: 6px;
   border-radius: 50%;
   background: currentColor;
+}
+/* the timing ring's small copy, in place of the dot while the big one is on (the big one sits under the thumb):
+   a fixed target and a ring closing onto it, white, gold in the window, red or grey past it */
+.chip .mr {
+  display: none;
+  position: relative;
+  flex: none;
+  width: calc(16px * var(--k));
+  height: calc(16px * var(--k));
+}
+.chip.timed::before {
+  display: none;
+}
+.chip.timed .mr {
+  display: block;
+}
+.chip .mr::before,
+.chip .mr i {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+.chip .mr::before {
+  width: 5px;
+  height: 5px;
+  border: 1.5px solid rgba(255, 255, 255, 0.75);
+}
+.chip .mr i {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  border: 2px solid #fff;
+  transform: translate(-50%, -50%) scale(calc(0.42 + 0.58 * var(--r, 1)));
+}
+.chip .mr.gold::before {
+  border-color: var(--gold);
+  background: var(--gold);
+}
+.chip .mr.gold i {
+  border-color: var(--gold);
+  box-shadow: 0 0 6px rgba(255, 210, 58, 0.6);
+}
+.chip .mr.late i {
+  border-color: var(--bad);
+}
+.chip .mr.past i {
+  border-color: #9aa3ad;
+}
+/* over the head, while aiming: what each flick plays (↑ remate, ⇈ por 3, ↖↗ víbora, ↓ por 4), small, under the name */
+.fan {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  max-width: calc(170px * var(--k));
+  pointer-events: none;
+}
+.fan span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: calc(17px * var(--k));
+  padding: 0 6px 0 5px;
+  border-radius: 3px;
+  background: var(--pill);
+  color: #ffb36b;
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: calc(11px * var(--k));
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+.fan b {
+  color: #fff;
+  font-family: var(--ui);
+  font-size: calc(11px * var(--k));
+  letter-spacing: 0;
 }
 /* the power of an attack key held (F, the right button): a bar along the bottom that fills as it is held */
 .chip.pw::after {
@@ -2287,14 +2395,22 @@ button.pcard:active {
 .stick-base {
   width: calc(76px * var(--k));
   height: calc(76px * var(--k));
-  background: rgba(10, 22, 36, 0.12);
-  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.32), 0 0 0 1px rgba(0, 0, 0, 0.12);
+  background: rgba(10, 22, 36, 0.08);
+  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.26), 0 0 0 1px rgba(0, 0, 0, 0.1);
+  transition: opacity 0.2s;
 }
+/* the knob: a ring, not a disc (it never hides what is under it) */
 .stick-knob {
-  width: calc(24px * var(--k));
-  height: calc(24px * var(--k));
-  background: rgba(255, 255, 255, 0.55);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+  width: calc(22px * var(--k));
+  height: calc(22px * var(--k));
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.6), 0 0 0 1px rgba(0, 0, 0, 0.25);
+  transition: opacity 0.2s;
+}
+/* over your partner or yourself: fainter still */
+.stick-base.dim,
+.stick-knob.dim {
+  opacity: 0.4;
 }
 @media (prefers-reduced-motion: reduce) {
   .screen,

@@ -48,7 +48,8 @@ const REDUCED = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduce
 const STING = REDUCED ? 0.3 : 0.56;
 const STING_CUT = STING / 2;
 /** points won by the last shot (not an error): a winner, a ball they could not get to or let go, «por 3», «por 4» */
-const WON = new Set<PointReason>(['winner', 'miss', 'letGo', 'exit', 'back']);
+// (a ball at the body: the hitter's point, as a winner)
+const WON = new Set<PointReason>(['winner', 'miss', 'letGo', 'exit', 'back', 'body']);
 /**
  * How great a point has to be (planReplay's score) for a replay: normally (a smash or a net-cord winner after a
  * rally, an attack that wins a long rally, a perfect attack of yours, the winner of an epic rally), and within two

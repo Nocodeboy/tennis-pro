@@ -1,7 +1,8 @@
 import functools, http.server, threading, os, json, time
 from playwright.sync_api import sync_playwright
-ROOT = '/home/claude/padel/dist'
-OUT = '/tmp/padel-audit-ux'
+# (PADEL_DIST: another build to compare, e.g. the one before a change; PADEL_OUT: where the captures go)
+ROOT = os.environ.get('PADEL_DIST', '/home/claude/padel/dist')
+OUT = os.environ.get('PADEL_OUT', '/tmp/padel-audit-ux')
 os.makedirs(OUT, exist_ok=True)
 ARGS = ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist']
 class Q(http.server.SimpleHTTPRequestHandler):

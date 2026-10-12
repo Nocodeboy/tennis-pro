@@ -211,7 +211,8 @@ export function bounce(s: Seg, t: number): Seg {
   const v = velAt(s, t);
   const vh = Math.hypot(v.x, v.z);
   const vn = Math.max(0, -v.y);
-  const ey = BOUNCE_Y - 0.005 * Math.max(0, vn - 6);
+  // (a sliced ball skids: it comes up a little lower, SLICE)
+  const ey = (BOUNCE_Y - 0.005 * Math.max(0, vn - 6)) * (s.spin <= SLICE.from ? 1 + SLICE.low * s.spin : 1);
   const wr = s.spin * SPIN_SURF;
   const jRoll = (ALPHA * (vh - wr)) / (1 + ALPHA);
   const jMax = MU * (1 + ey) * vn;
@@ -219,9 +220,18 @@ export function bounce(s: Seg, t: number): Seg {
   const vh2 = Math.max(0, vh - j);
   const kh = vh > 1e-6 ? vh2 / vh : 0;
   const nv = { x: v.x * kh, y: vn * ey, z: v.z * kh };
-  const spin = Math.max(-1, Math.min(1, (wr + j / ALPHA) / SPIN_SURF));
+  let spin = Math.max(-1, Math.min(1, (wr + j / ALPHA) / SPIN_SURF));
+  // a sliced ball keeps part of its slice through the skid (the rigid-ball friction would turn it into topspin): off
+  // the back glass it then drops («se queda», wallBounce), a bandeja or a víbora does not kick up like a drive
+  if (s.spin <= SLICE.from) spin = Math.min(spin, SLICE.keep * s.spin);
   return { t0: t, x: p.x, y: R, z: p.z, vx: nv.x, vy: nv.y, vz: nv.z, spin, k: dragOf(nv), g: gravityFor(spin * 0.3) };
 }
+/**
+ * A sliced ball on the floor (bounce), one cut at least `from` (a bandeja, a víbora, a dejada; not the serve's touch of
+ * slice): `keep` of its backspin is left after the skid (at least), and it comes up `low` × the slice lower (a bandeja,
+ * −0.55: 7 % lower).
+ */
+export const SLICE = { from: -0.3, keep: 0.6, low: 0.12 };
 
 export const NET_TOP = NET_C;
 

@@ -35,6 +35,11 @@ export interface Release {
   gesture?: 'attack' | 'down' | 'tap';
   /** 0 … 1: how fast the stroke was at the lift (a still finger ≈ 0.3, a plain release 0.5, the fastest flick 1) */
   power?: number;
+  /**
+   * a press that never strayed from where it landed (TAP.px) but lasted longer than a tap (up to TAP.hold s): a block
+   * still, on a ball the game cued as one (HumanController; a finger pressed when the ring showed and lifted on gold)
+   */
+  quiet?: boolean;
   /** an attack: the drag before the flick's stroke (where it was aimed; ~0 = not aimed) and the stroke's direction */
   ax?: number;
   ay?: number;
@@ -52,18 +57,22 @@ const FOLLOW = 1.1;
 export const LAG = { touch: 0.04, other: 0.025 };
 /**
  * The flick (an attack), in CSS px on a 390 px phone (× Input.scale on bigger screens): the finger lifts while still
- * moving at `speed` px/s or more, measured over the last `window` s before the lift, having covered `travel` px in that
- * time, and within `cone` degrees of straight up the screen (towards the far end). A placing drag ends with the finger
- * slowed down or still (it waits for the ring), which is what tells them apart; a deliberate thumb flick on a phone
- * covers 40–120 px in 60–120 ms (500–1,500 px/s). Gesture libraries call a swipe from about 300 px/s (Hammer.js: 0.3
- * px/ms over 10 px), too low here: a quick aim across the screen reaches that.
+ * moving (the lift comes within `lift` s of its last motion), its stroke peaking at `speed` px/s or more (the fastest
+ * `peak` s of the last `window` s before the lift: the still lead-in and the lift's own sample, which repeats the last
+ * position, do not water it down), having covered `travel` px since the stroke began, and within `cone` degrees of
+ * straight up the screen (towards the far end); over the head the cone is `wideCone` (HumanController: a stroke bent
+ * past ATTACK.viboraDeg is the víbora, so a clearly sideways one still reads as one). A placing drag ends with the finger
+ * slowed down or still (it waits for the ring), which is what tells them apart; a quick thumb flick on a phone covers
+ * 40–120 px in 40–120 ms (about 1,000–1,800 px/s at its peak). Gesture libraries call a swipe from about 300 px/s
+ * (Hammer.js: 0.3 px/ms over 10 px), too low here: a quick aim across the screen reaches that.
  */
-export const FLICK = { speed: 650, window: 0.08, travel: 24, cone: 55, downCone: 45, full: 1500 };
+export const FLICK = { speed: 720, window: 0.08, peak: 0.035, lift: 0.04, travel: 18, cone: 55, wideCone: 72, downCone: 45, full: 1700 };
 /**
- * The power of a release from the speed of the finger as it lifts (px/s on a 390 px phone, over FLICK.window): up to
- * `still` it is a placed ball (`placed`), up to `plain` it rises to 0.5 (a plain release, the finger still moving),
- * up to FLICK.speed to `flick0`, and a flick goes from there to 1 at FLICK.full. A stroke faster than `aim` aims where
- * the finger was before the stroke (the stroke is the swing, not the aim).
+ * The power of a release from the speed of the finger as it lifts (px/s on a 390 px phone; a flick's peak, FLICK): up
+ * to `still` it is a placed ball (`placed`), up to `plain` it rises to 0.5 (a plain release, the finger still moving),
+ * up to FLICK.speed to `flick0`, and a flick goes from there to 1 at FLICK.full: a 40–60 px flick in as many ms is about
+ * 0.7, the remate por 3 (0.9, ATTACK.por3Power) takes a strong one, some 75 px in 50 ms. A stroke faster than `aim`
+ * aims where the finger was before the stroke (the stroke is the swing, not the aim).
  */
 export const STROKE = { still: 60, plain: 300, placed: 0.3, flick0: 0.6, aim: 380 };
 export function strokePower(v: number): number {
@@ -74,8 +83,16 @@ export function strokePower(v: number): number {
 }
 /** Keys and the right mouse button: an attack press's power grows with how long it is held, `min` … 1 over `full` s. */
 export const KEY_POWER = { min: 0.7, full: 0.6 };
-/** The tap (a block or reset): a press of at most `time` s that never strays more than `px` px from where it landed. */
-export const TAP = { time: 0.3, px: 14 };
+/**
+ * The tap (a block or reset): a press of at most `time` s that never strays more than `px` px from where it landed (a
+ * thumb pressed in a hurry trembles that much) and is no flick.
+ */
+export const TAP = { time: 0.3, px: 20, hold: 1.2 };
+/** The angle (degrees, 0 = straight up the screen, 90 = sideways) of a flick's stroke (Release.fx, fy). */
+export function strokeDeg(r: { fx?: number; fy?: number } | null | undefined): number {
+  if (!r || r.fx === undefined || r.fy === undefined) return 0;
+  return (Math.atan2(Math.abs(r.fx), Math.abs(r.fy)) * 180) / Math.PI;
+}
 
 export class Input {
   /** aim gesture */
@@ -342,44 +359,61 @@ export class Input {
     const k = Math.max(0.5, this.scale);
     let far = 0;
     for (const s of tr) far = Math.max(far, Math.hypot(s.x, s.y));
-    if (end - this.downAt <= TAP.time && far <= TAP.px * k) return { gesture: 'tap', power: 0.3 };
-    if (this.viaKey) return { power: 0.5 };
-    // the motion over the last moments before the lift (or since the press, if it was quicker than that)
-    const span = Math.max(1 / 240, Math.min(FLICK.window, end - this.downAt));
-    const from = this.at(end - span);
-    const last = tr[tr.length - 1];
-    const mx = last.x - from.x;
-    const my = last.y - from.y;
-    const travel = Math.hypot(mx, my);
-    const speed = travel / span;
-    const power = strokePower(speed / k);
-    // the stroke began where the finger was last slow: what is before it is the aim
-    const strokeStart = () => {
-      let i = tr.length - 1;
-      while (i > 0) {
-        const a = tr[i - 1];
-        const b = tr[i];
-        const v = Math.hypot(b.x - a.x, b.y - a.y) / Math.max(1e-3, b.t - a.t);
-        if (v < FLICK.speed * k * 0.4) break;
-        i--;
+    const tap = end - this.downAt <= TAP.time && far <= TAP.px * k;
+    if (this.viaKey) return tap ? { gesture: 'tap', power: 0.3 } : { power: 0.5 };
+    // The last sample that moved: the pointerup repeats the last position (Input adds it), and so does a finger that
+    // stopped before lifting. A lift within FLICK.lift of the last motion is a lift on the move: the stroke is measured
+    // up to that motion; a finger that stopped first is measured up to the lift (the stillness counts: a placed ball).
+    let li = tr.length - 1;
+    while (li > 0 && Math.hypot(tr[li].x - tr[li - 1].x, tr[li].y - tr[li - 1].y) < 0.5) li--;
+    const onMove = li > 0 && end - tr[li].t <= FLICK.lift;
+    const stop = onMove ? tr[li].t : end;
+    const span = Math.max(1 / 240, Math.min(FLICK.window, stop - this.downAt));
+    let speed: number;
+    // the stroke's peak: the fastest `w` s within the last moments (the still lead-in does not count)
+    const peakOf = (w: number) => {
+      let v = 0;
+      for (let i = li; i >= 0 && tr[i].t >= stop - span - 1e-9; i--) {
+        const a = this.at(tr[i].t - w);
+        v = Math.max(v, Math.hypot(tr[i].x - a.x, tr[i].y - a.y) / w);
       }
-      return tr[i];
+      return v;
     };
-    const flick = speed >= FLICK.speed * k && travel >= FLICK.travel * k;
+    if (onMove) speed = peakOf(Math.min(FLICK.peak, span));
+    else {
+      const from = this.at(end - span);
+      const last = tr[tr.length - 1];
+      speed = Math.hypot(last.x - from.x, last.y - from.y) / span;
+    }
+    // The stroke began where the finger was last slow against it (under 60 % of its peak, and under 40 % of a flick):
+    // what is before it is the aim. A stroke straight from the press has no aim before it (i = 0).
+    const vmin = Math.max(FLICK.speed * k * 0.4, speed * 0.6);
+    let si = li;
+    while (si > 0) {
+      const a = tr[si - 1];
+      const b = tr[si];
+      if (Math.hypot(b.x - a.x, b.y - a.y) / Math.max(1e-3, b.t - a.t) < vmin) break;
+      si--;
+    }
+    // (a stroke shorter than FLICK.peak: its peak over its own length)
+    if (onMove && si < li && tr[li].t - tr[si].t < FLICK.peak) speed = Math.max(speed, peakOf(Math.max(1 / 120, tr[li].t - tr[si].t)));
+    const s0 = tr[si];
+    const s1 = tr[li];
+    const mx = s1.x - s0.x;
+    const my = s1.y - s0.y;
+    const travel = Math.hypot(mx, my);
+    const power = strokePower(speed / k);
+    const flick = onMove && speed >= FLICK.speed * k && travel >= FLICK.travel * k;
     const up = -my / Math.max(1e-6, travel);
-    if (flick && up >= Math.cos((FLICK.cone * Math.PI) / 180)) {
-      const s0 = strokeStart();
-      return { gesture: 'attack', ax: s0.x, ay: s0.y, fx: mx / travel, fy: my / travel, power };
-    }
-    if (flick && -up >= Math.cos((FLICK.downCone * Math.PI) / 180)) {
-      const s0 = strokeStart();
-      return { gesture: 'down', ax: s0.x, ay: s0.y, fx: mx / travel, fy: my / travel, power };
-    }
-    // a fast stroke any other way: a hard shot, aimed where the finger was before the stroke
-    if (speed >= STROKE.aim * k) {
-      const s0 = strokeStart();
-      return { ax: s0.x, ay: s0.y, power };
-    }
+    // (a flick from the press, with no aim before it: not aimed, at the opponent's body; ATTACK.aimed)
+    const aim = si > 0 ? { ax: s0.x, ay: s0.y } : { ax: 0, ay: 0 };
+    if (flick && up >= Math.cos((FLICK.wideCone * Math.PI) / 180)) return { gesture: 'attack', ...aim, fx: mx / travel, fy: my / travel, power };
+    if (flick && -up >= Math.cos((FLICK.downCone * Math.PI) / 180)) return { gesture: 'down', ...aim, fx: mx / travel, fy: my / travel, power };
+    if (tap) return { gesture: 'tap', power: 0.3 };
+    if (far <= TAP.px * k && end - this.downAt <= TAP.hold) return { power, quiet: true };
+    // a fast stroke any other way: a hard shot, aimed where the finger was before the stroke (a fast drag straight from
+    // the press is the aim itself: where it lifts)
+    if (onMove && speed >= STROKE.aim * k && si > 0) return { ...aim, power };
     return { power };
   }
 

@@ -101,7 +101,7 @@ const EN = {
   'set.assistMid': 'Medium',
   'set.assistOff': 'None',
   'tut.hitManual': 'Release when the ring closes on the ball',
-  'tut.serve': 'Right thumb: aim across into the box, release when the ring is small',
+  'tut.serve': 'Right thumb: aim across into the box, release when the ring round the ball is small',
   'tut.move': 'Left thumb: walk to the circle on the court',
   'tut.moveKeys': 'WASD/arrows: walk to the circle · Space + arrows: aim',
   'tut.hit': 'You swing by yourself · release on gold: PERFECT',
@@ -360,6 +360,16 @@ const EN = {
   'tip.bajadaKeys': 'WALL SMASH on the ring: the ball comes high off the back glass. Space places it, F hits it down hard.',
   'tip.por3': 'A high ball near the net: flick straight up at full power for por 3, or down towards you for por 4.',
   'tip.por3Keys': 'A high ball near the net: hold F for por 3, or Shift+F for por 4.',
+  // ---- 0.4: the interface (auditoría 04: the overhead options while aiming, whose point it is, a ball at the body)
+  'fan.hold': 'F held',
+  'point.us': 'Your point',
+  'point.them': 'Point {name}',
+  'point.themShort': 'Their point',
+  'reason.body': 'Hit the body',
+  'reason.bodyMe': 'It hit you',
+  'x.body': '{S} hit {name} on the body',
+  'x.bodyMe': '{S} hit you on the body',
+  'x.bodyAny': '{S} hit a player on the body',
 };
 
 const ES: typeof EN = {
@@ -460,7 +470,7 @@ const ES: typeof EN = {
   'set.assistMid': 'Media',
   'set.assistOff': 'Sin ayuda',
   'tut.hitManual': 'Suelta cuando el aro se cierre sobre la bola',
-  'tut.serve': 'Pulgar derecho: apunta al cuadro cruzado y suelta con el aro pequeño',
+  'tut.serve': 'Pulgar derecho: apunta al cuadro cruzado y suelta con el aro de la bola pequeño',
   'tut.move': 'Pulgar izquierdo: ve al círculo de la pista',
   'tut.moveKeys': 'WASD o flechas: ve al círculo · Espacio + flechas: apunta',
   'tut.hit': 'Golpeas solo · apunta y suelta en dorado: PERFECTO',
@@ -719,6 +729,16 @@ const ES: typeof EN = {
   'tip.bajadaKeys': 'BAJADA en el aro: la bola sale alta del cristal de fondo. Espacio la coloca, F la baja fuerte.',
   'tip.por3': 'Bola alta cerca de la red: latigazo recto a tope para el por 3, o hacia ti para el por 4.',
   'tip.por3Keys': 'Bola alta cerca de la red: mantén F para el por 3, o Mayús+F para el por 4.',
+  // ---- 0.4: la interfaz (auditoría 04: las opciones por encima al apuntar, de quién es el punto, la bola al cuerpo)
+  'fan.hold': 'F mantenida',
+  'point.us': 'Punto vuestro',
+  'point.them': 'Punto de {name}',
+  'point.themShort': 'Punto rival',
+  'reason.body': 'Le dio en el cuerpo',
+  'reason.bodyMe': 'Te dio en el cuerpo',
+  'x.body': '{S} le dio a {name} en el cuerpo',
+  'x.bodyMe': '{S} te dio en el cuerpo',
+  'x.bodyAny': '{S} dio en el cuerpo a un jugador',
 };
 
 type Key = keyof typeof EN;

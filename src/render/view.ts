@@ -199,10 +199,19 @@ export class View {
   /**
    * camera: distance behind the net, height, the point it looks at (m from the net, towards the camera) and the field
    * of view (portrait p*, landscape l*). High over the near end's stands, behind the near back wall (it fades: see
-   * cage.ts): the whole court from glass to glass in the frame, the far players as big as they can be. Portrait: the
-   * far back wall's mesh under the top of the frame, a player against the side wall at the near end inside its edge.
+   * cage.ts): the whole court from glass to glass in the frame, the far players as big as they can be.
+   *  · portrait (0.4, auditoría 04 M4 / A3): higher and a little wider than before, the court raised in the frame: the
+   *    near baseline about three quarters down, so the thumbs rest on the stands under it and not on your player; a
+   *    player 4.3 m out at the near end inside the edge (the lateral follow keeps the near pair in: see frameX);
+   *  · landscape (M5): lower and closer, a longer lens: the far back glass touches the top of the frame and the near
+   *    baseline the bottom (the court about 56 % of the width, the far players about 45 px on a 390 px screen).
+   * (Further back than about 23.5 m the camera is inside the near stands.)
    */
-  cam = { pd: 23, ph: 13, pl: 0.25, pf: 46, ld: 22.75, lh: 11, ll: 0, lf: 34 };
+  cam = { pd: 23, ph: 15.5, pl: 3.5, pf: 48, ld: 22.5, lh: 10.5, ll: 1.0, lf: 29 };
+  /** the lateral follow: how far in from the frame's edge (NDC, 1 the edge) the near pair and your circle stay */
+  private static readonly KEEP = 0.9;
+  private probe = new THREE.PerspectiveCamera();
+  private keepPts: Vec3[] = [];
   /** does this player swing at the coming ball? (the human only when pressing) */
   swingGate: (p: Player) => boolean = () => true;
   /** the human's swing leaves balls going out alone (assisted swing, not holding the aim) */
@@ -1103,19 +1112,20 @@ export class View {
       this.camera.lookAt(0, 0.8, 0);
       return;
     }
+    const c = this.cam;
+    const dist = portrait ? c.pd : c.ld;
+    const height = portrait ? c.ph : c.lh;
+    const lookZ = portrait ? c.pl : c.ll;
     let tx = 0;
     if (m) {
       const me = m.players.find((p) => p.human) ?? m.players[0];
       tx = me.x * 0.35;
       const b = m.ballPos(this.bp);
       if (b) tx = tx * 0.6 + b.x * 0.12;
+      tx = this.frameX(m, me, tx, dist, height, lookZ, side);
     }
     // (held while the TV takes over, so the gameplay camera is where it was when the play comes back)
     if (this.director.kind === 'play') this.camX += (tx - this.camX) * (1 - Math.exp(-2.2 * dt));
-    const c = this.cam;
-    const dist = portrait ? c.pd : c.ld;
-    const height = portrait ? c.ph : c.lh;
-    const lookZ = portrait ? c.pl : c.ll;
     const sh = this.director.kind === 'play' ? this.shake : 0;
     this.shake = Math.max(0, this.shake - dt * 1.4);
     const jx = sh > 0 ? (Math.random() - 0.5) * sh * 0.5 : 0;
@@ -1129,6 +1139,68 @@ export class View {
     this.camLook.copy(o.look);
     this.camera.lookAt(this.camLook);
     this.setFov(o.fov);
+  }
+  /**
+   * The lateral follow, kept in bounds (auditoría 04, M4): the camera drifts towards your side and the ball, but never
+   * so far that your partner, you (a body's width either side) or your circle leave the frame (KEEP). Each point's
+   * place across the screen is nearly linear in the camera's x: two probe poses give the interval of x that keeps
+   * them all in, and the follow is clamped to it. When they cannot all fit (the pair at both side walls), you and your
+   * circle win; if even that fails, the middle of what they ask.
+   */
+  private frameX(m: Match, me: Player, tx: number, dist: number, height: number, lookZ: number, side: 1 | -1): number {
+    const pts = this.keepPts;
+    pts.length = 0;
+    const add = (x: number, y: number, z: number) => pts.push({ x, y, z });
+    for (const p of m.players) {
+      if (p.team !== me.team || p.side * side < 0) continue;
+      add(p.x - 0.45, 1.0, p.z);
+      add(p.x + 0.45, 1.0, p.z);
+    }
+    const mine = pts.length;
+    const tg = this.showTarget ? m.targetFor(me.id) : null;
+    if (tg) {
+      add(tg.fx - 0.5, 0, tg.fz);
+      add(tg.fx + 0.5, 0, tg.fz);
+    }
+    if (!pts.length) return tx;
+    const pr = this.probe;
+    pr.fov = this.gameFov;
+    pr.aspect = this.camera.aspect;
+    pr.updateProjectionMatrix();
+    const at = (x: number, out: number[]) => {
+      pr.position.set(x, height, side * dist);
+      pr.lookAt(x * 0.7, 0, side * lookZ);
+      pr.updateMatrixWorld();
+      for (let i = 0; i < pts.length; i++) out[i] = this.tmp.set(pts[i].x, pts[i].y, pts[i].z).project(pr).x;
+    };
+    const a0: number[] = [];
+    const a1: number[] = [];
+    at(0, a0);
+    at(1, a1);
+    // the interval of camera x that keeps points [from, to) inside ±KEEP
+    const range = (from: number, to: number): [number, number] => {
+      let lo = -Infinity;
+      let hi = Infinity;
+      for (let i = from; i < to; i++) {
+        const b = a1[i] - a0[i];
+        if (Math.abs(b) < 1e-4) continue;
+        const u = (View.KEEP - a0[i]) / b;
+        const v = (-View.KEEP - a0[i]) / b;
+        lo = Math.max(lo, Math.min(u, v));
+        hi = Math.min(hi, Math.max(u, v));
+      }
+      return [lo, hi];
+    };
+    let [lo, hi] = range(0, pts.length);
+    if (lo > hi) {
+      // (not all of them: yourself and your circle, i.e. without your partner)
+      const me0 = m.players.filter((p) => p.team === me.team && p.side * side > 0).indexOf(me) * 2;
+      const own: [number, number] = me0 >= 0 ? range(me0, me0 + 2) : [-Infinity, Infinity];
+      const circ = range(mine, pts.length);
+      [lo, hi] = [Math.max(own[0], circ[0]), Math.min(own[1], circ[1])];
+      if (lo > hi) return (lo + hi) / 2;
+    }
+    return Math.max(lo, Math.min(hi, tx));
   }
   private setFov(f: number) {
     if (Math.abs(this.camera.fov - f) < 1e-3) return;

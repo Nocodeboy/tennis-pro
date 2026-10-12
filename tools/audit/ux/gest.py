@@ -14,8 +14,21 @@ def path(segs, hz=120):
             pts.append((t + d * i / n, x + dx * i / n, y + dy * i / n))
         t += d; x += dx; y += dy
     return pts
+# (the same battery as tools/audit/gestos.ts, which runs it in Node with the pointerup's lift sample; here the lift
+# sample comes from the browser itself, LIFT s after the last move)
 G = {
  'latigazo 50px/50ms tras quieto': [(0.12, 0, 0), (0.05, 0, -50)],
+ 'latigazo 60px/60ms tras quieto': [(0.12, 0, 0), (0.06, 0, -60)],
+ 'latigazo 70px/50ms tras quieto': [(0.12, 0, 0), (0.05, 0, -70)],
+ 'latigazo 90px/50ms tras quieto': [(0.12, 0, 0), (0.05, 0, -90)],
+ 'latigazo sin parar antes (50px/50ms)': [(0.05, 0, -50)],
+ 'latigazo torcido 15 grados (70px/60ms)': [(0.12, 0, 0), (0.06, 18, -68)],
+ 'latigazo torcido 25 grados (70px/60ms)': [(0.12, 0, 0), (0.06, 30, -63)],
+ 'latigazo torcido 40 grados (70px/60ms)': [(0.12, 0, 0), (0.06, 45, -54)],
+ 'latigazo torcido 70 grados (70px/70ms)': [(0.12, 0, 0), (0.07, 66, -24)],
+ 'latigazo tras apuntar sin pausa (60px/300ms, 60px/50ms)': [(0.3, 40, -45), (0.05, 0, -60)],
+ 'toque con temblor 20px': [(0.04, 12, 8), (0.05, 4, 7)],
+ 'toque largo quieto 0.6 s (bloqueo si el aviso era BLOQUEO)': [(0.6, 0, 0)],
  'latigazo 40px/40ms tras quieto': [(0.12, 0, 0), (0.04, 0, -40)],
  'latigazo 80px/50ms tras quieto': [(0.12, 0, 0), (0.05, 0, -80)],
  'latigazo 100px/60ms tras quieto': [(0.12, 0, 0), (0.06, 0, -100)],

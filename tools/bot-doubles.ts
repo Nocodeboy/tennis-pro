@@ -46,7 +46,7 @@ const kindOf = (e: { kind: string; special?: string; volley: boolean }) => `${e.
 const pk = (k: string) => (perKind[k] ??= { n: 0, win: 0, err: 0, forced: 0, ys: [], pw: 0 });
 /** how points end, grouped: winners (nobody got it, por 3, por 4), errors (net, wall, out), double faults */
 const endGroups: Record<string, number> = {};
-const WINNING = new Set(['winner', 'miss', 'letGo', 'exit', 'back']);
+const WINNING = new Set(['winner', 'miss', 'letGo', 'exit', 'back', 'body']);
 const pc = (a: number, b: number) => `${b ? ((a / b) * 100).toFixed(0) : '–'}%`;
 const rows: string[][] = [['humano', 'pareja', 'gana', 'puntos', 'golpes/punto', 'min', 'tuyas', 'perfectos', 'nadie', 'a la vez', 'pasa', 'pierde por', 'gana por']];
 let stuck = 0;

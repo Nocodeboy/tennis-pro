@@ -1,11 +1,11 @@
 // The human's side: turns the drag into a target and a shot type, and the release time into contact quality.
 
-import { ATTACK, BLOCK, HUMAN_ATTRS, HUMAN_MOVER, Q_AIMED, Q_AUTO, Q_FLOOR_HUMAN, Q_PERFECT, SHANK, attackRisk, attackTarget, attrQ, autoShot, ballCue, blockShot, difficulty, humanSkill, kindForAim, lobShape, popOf, powerShank, shankOf, specialShot } from './sim/brain';
+import { ATTACK, BLOCK, HUMAN_ATTRS, HUMAN_MOVER, Q_AIMED, Q_AUTO, Q_FLOOR_HUMAN, Q_PERFECT, SHANK, attackRisk, attackTarget, attrQ, autoShot, ballCue, blockShot, cuedBlock, difficulty, humanSkill, isBajada, kindForAim, lobShape, popOf, powerShank, shankOf, specialShot } from './sim/brain';
 import type { Attributes } from './sim/attributes';
 import { HL, NET_C, SERVICE, W, inHalf, inServiceCourt } from './sim/court';
 import { IDEAL_RELEASE, Match, PERFECT_WINDOW, SERVE_HEIGHT, type Controller } from './sim/match';
 import type { Plan, Player, ShotKind, ShotSpec, Special, Timing } from './sim/types';
-import type { Input, Release } from './input';
+import { FLICK, strokeDeg, type Input, type Release } from './input';
 import type { Vec3 } from './sim/ball';
 
 export interface AimResult {
@@ -67,6 +67,13 @@ export const AUTO = { reflexFrom: 11, reflexTo: 18, reflex: 0.05, read: 0.1 };
  */
 export type SwingMode = 'assist' | 'manual';
 
+/** The across bend (m, world x from the hitter's view) of a flick's stroke: ATTACK.bend for a stroke 45° off straight up. */
+function bendOf(g: Partial<Release> | null, p: Player): number {
+  const fx = g?.fx ?? 0;
+  const fy = g?.fy ?? -1;
+  return Math.max(-1, Math.min(1, fx / Math.max(0.25, -fy))) * ATTACK.bend * p.side;
+}
+
 export class HumanController implements Controller {
   readonly mover = HUMAN_MOVER;
   mode: SwingMode = 'assist';
@@ -98,6 +105,10 @@ export class HumanController implements Controller {
     input.keyAim = (ix, iy) => this.keyDrag(ix, iy);
   }
 
+  /** the card (Controller.card) */
+  get card(): Attributes {
+    return this.attrs;
+  }
   /** the highest ball he meets over the head (Controller.reachH, from the card's rem) */
   get reachH(): number {
     return humanSkill(this.attrs).reachH;
@@ -218,11 +229,31 @@ export class HumanController implements Controller {
     const ax = r ? r.ax ?? r.dx ?? this.input.dx : this.input.dx;
     const ay = r ? r.ay ?? r.dy ?? this.input.dy : this.input.dy;
     const down = r?.gesture === 'down';
-    // the stroke's angle off straight up the screen, as the slope across (screen x is world x × side)
-    const fx = r?.fx ?? 0;
-    const fy = r?.fy ?? -1;
-    const bend = down ? 0 : Math.max(-1, Math.min(1, fx / Math.max(0.25, -fy))) * ATTACK.bend * p.side;
-    return this.aim(m, p, plan, ax, ay, !down, bend, { power, down });
+    return this.aim(m, p, plan, ax, ay, !down, down ? 0 : bendOf(r, p), { power, down });
+  }
+
+  /**
+   * Is this gesture an attack on this ball? An up-flick within FLICK.cone of straight up, or over the head within
+   * FLICK.wideCone (a clearly sideways stroke is the víbora there); a flick bent further on any other ball is a hard
+   * shot aimed where the finger was before the stroke.
+   */
+  private isAttack(g: Partial<Release> | null, plan: Plan): boolean {
+    return g?.gesture === 'attack' && (plan.overhead || isBajada(plan) || strokeDeg(g) <= FLICK.cone);
+  }
+
+  /**
+   * For the HUD (additive API): the shot over the head that a gesture makes on the ball `plan` (one over the head; null
+   * for any other ball). `g`: a release, or the gesture the press is becoming (Input.gestureNow; null: a drag, a plain
+   * release). 'bandeja' (a drag or a plain release), 'vibora' (a flick bent ATTACK.viboraDeg or more off straight up),
+   * 'smash' (a straight flick), 'smash' + special 'por3' (a straight flick at ATTACK.por3Power or more on a ball that
+   * allows it, specialOk), 'smash' + 'por4' (a down-flick). A tap is a block (kind 'dink' or 'drop', not shown here: null).
+   */
+  overheadFor(m: Match, p: Player, plan: Plan | null, g: Partial<Release> | null): { kind: ShotKind; special?: Special } | null {
+    if (!plan || !plan.overhead || !m.rally || g?.gesture === 'tap') return null;
+    const down = g?.gesture === 'down';
+    const attack = this.isAttack(g, plan);
+    const k = kindForAim(m, p, plan, AIM_D0, false, attack, attack ? bendOf(g, p) : 0, { power: this.powerOf(g), down });
+    return k.special ? { kind: k.kind, special: k.special } : { kind: k.kind };
   }
 
   /**
@@ -280,7 +311,7 @@ export class HumanController implements Controller {
       const raw = Q_AUTO + hs.q + attrQ(this.attrs, auto.kind, plan) - penalty - reflex;
       const shank = shankOf(m, raw, Q_FLOOR_HUMAN, SHANK.human);
       spec = { ...auto, q: Math.max(Q_FLOOR_HUMAN, raw), timing: 'auto', late: 0, pop: popOf(m) + seen * AUTO.read, power: 0.5, ...(shank > 0 ? { shank } : {}) };
-    } else if (r?.gesture === 'tap' || held?.gesture === 'tap') {
+    } else if (r?.gesture === 'tap' || held?.gesture === 'tap' || (r?.quiet && cuedBlock(m, p.id))) {
       // A tap: a block, a soft ball low over the net, judged on the golden window (BLOCK); a finger still down at the
       // contact is a late one (a poor block: the window is for the lift, it stays a fair one)
       this.autoRun(m, false);
@@ -293,7 +324,7 @@ export class HumanController implements Controller {
       const dy = r ? r.ay ?? r.dy : this.input.dy;
       // a flick (or an attack press, F or the right button, released or held through the contact; or a finger in the
       // middle of a flick's stroke when the ball arrives): the attack. A down-flick (Shift+F): over the head, por 4
-      const attack = g?.gesture === 'attack';
+      const attack = this.isAttack(g, plan);
       const down = g?.gesture === 'down';
       // how hard (the speed of the stroke, up to the card's ceiling); a finger held through the contact is a plain one
       const power = this.powerOf(g);

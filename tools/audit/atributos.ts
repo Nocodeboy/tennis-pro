@@ -2,13 +2,16 @@
 // pareja B tiene a BASE + DELTA en los dos jugadores. Mide el % de puntos y de partidos de B, y algún rasgo del juego
 // que ese atributo debería mover.
 // npx tsx tools/audit/atributos.ts [partidos=30]   (BASE=70 DELTA=10)
-import { AIController, skillFrom, type Style } from '../../src/sim/brain';
+import { AIController, CARD, skillFrom, type Style } from '../../src/sim/brain';
 import { ATTR_KEYS, type Attributes } from '../../src/sim/attributes';
 import { Match } from '../../src/sim/match';
 
 const N = Number(process.argv[2] ?? 30);
 const BASE = Number(process.env.BASE ?? 70);
 const DELTA = Number(process.env.DELTA ?? 10);
+// KEYS=pot,rem: only those rows · CARD='{"weight":0}': other values for brain.ts CARD
+const KEYS = process.env.KEYS?.split(',') as (keyof Attributes)[] | undefined;
+if (process.env.CARD) Object.assign(CARD, JSON.parse(process.env.CARD));
 // a neutral style: halfway between the rivals'
 const STYLE: Style = { touch: 0.55, attack: 0.55, lob: 0.6, risk: 0.3, netRush: 0.75, serveDelay: 1.0, vibora: 0.55, por: 1 };
 const card = (k?: keyof Attributes): Attributes => {
@@ -20,7 +23,7 @@ const pc = (a: number, b: number) => `${b ? ((a / b) * 100).toFixed(1) : '–'}%
 
 console.log(`carta base ${BASE} en todo, la pareja B con +${DELTA} en un atributo · ${N} partidos (3 juegos, punto de oro)`);
 console.log('atributo | puntos B | partidos B | golpes/punto | errores B / punto B perdido | ganadores B | vel. salida B (km/h, mediana drive·volea·remate) | bolas que B no alcanza');
-for (const k of [undefined, ...ATTR_KEYS] as (keyof Attributes | undefined)[]) {
+for (const k of [undefined, ...(KEYS ?? ATTR_KEYS)] as (keyof Attributes | undefined)[]) {
   const sa = skillFrom(card(), STYLE);
   const sb = skillFrom(card(k), STYLE);
   let ptsB = 0;
