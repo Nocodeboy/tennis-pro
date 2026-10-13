@@ -2,13 +2,13 @@
 
 Germán: «Hagamos una lista de vídeos de pádel, pickleball y tenis que podamos usar» para sacar movimiento, como se hizo con los golpes del pádel (`docs/notas-golpes-video.md` en padel-pro).
 
-## Antes de nada: tres avisos de licencia
+## Licencias
 
 1. **KNSU no quiere uso comercial.** En YouTube sus vídeos salen como CC BY («Creative Commons, reutilización permitida»), pero su web dice otra cosa ([knsu.de](https://knsu.de)):
    - «eine kommerzielle Nutzung lehnen wir ab» (rechazamos el uso comercial);
    - licencia CC BY-SA 4.0.
 
-   La licencia CC BY de YouTube permite el uso comercial y no se puede retirar. Aun así, el autor ha dicho claramente que no lo quiere. **Esto afecta ya al pádel**: el saque, el revés, el remate y la bajada vienen de KNSU. Antes de vender o monetizar cualquiera de los tres juegos hay que escribirles pidiendo permiso (contacto en [knsu.de/impressum](https://knsu.de/impressum)) y, si dicen que no, cambiar esos clips.
+   **Decisión de Germán (13 oct):** se usan con la licencia de YouTube, CC BY, que permite el uso comercial y no se puede retirar, sin pedirles permiso aparte. Vale también para los clips del pádel que ya vienen de KNSU (saque, revés, remate y bajada). Se citan en los créditos como pide CC BY.
 2. **La etiqueta CC la pone quien sube el vídeo**, y no garantiza que el vídeo sea suyo. He descartado los canales que resuben retransmisiones o vídeos de otros. Por ejemplo:
    - MENACE PADEL: clips de Premier Padel, World Padel Tour y el Open de Australia, con la marca de agua de thrill.com;
    - un programa de televisión antiguo subido por Padel Star.
@@ -108,7 +108,7 @@ Germán: «Hagamos una lista de vídeos de pádel, pickleball y tenis que podamo
 
 ## Pádel
 
-**Ya convertidos de KNSU** (`assets/anims/` en padel-pro; ver el primer aviso de licencia):
+**Ya convertidos de KNSU** (`assets/anims/` en padel-pro):
 - en uso: saque, revés, remate y bajada;
 - convertidos sin usar: globo, cortado, remate liftado y la «bandeja» (que en realidad es una derecha alta).
 
@@ -189,7 +189,8 @@ Con el pack de captura de Motion Cast para el tenis, estos vídeos quedarían pa
 - **Descarga:** como en el pádel, el servidor no puede bajar de YouTube. `tools/descargar_clips_raqueta.bat` se pone en una carpeta del portátil y se le da doble clic:
   - baja yt-dlp y Deno;
   - baja los vídeos ★★★ y ★★ a `tenis\`, `padel\` y `pickleball\`, hasta 1080p y con el audio aparte (para encontrar el golpe por el sonido);
-  - salta los que ya estén bajados y deja un registro en `descarga.log`.
+  - salta los que ya estén bajados y deja un registro en `descarga.log`;
+  - en total son unos 70 minutos de vídeo, entre 1 y 2 GB.
 - **Conversión:** la misma del pádel, `tools/video_pose.py` → `art/blender/padel_clip.py`. Para el tenis hay que cambiar:
   - el largo de la raqueta;
   - las dos manos en el revés;
