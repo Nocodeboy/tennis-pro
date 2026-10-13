@@ -290,6 +290,12 @@ const VIDEO: Partial<Record<SwingKind, { file: string; def: SwingDef }>> = {
   slice_l: { file: 'backhand_video', def: { find: 0.78, out: 1.2, fade: 0.1, ik: 0.22, pre: 0.3, lead: 0.55, drop: 0.12 } },
   // (the backhand volley: the same body, a third of its path, short)
   volley_l: { file: 'backhand_video', def: { find: 0.78, out: 1.05, fade: 0.08, ik: 0.14, pre: 0.2, lead: 0.35, scale: 0.4, upper: 0.85, drop: 0.08 } },
+  // the serve: Alexander Zverev's kick serve at Indian Wells, filmed in slow motion (Jim Fawcette, CC BY), played at
+  // its real speed (the video ×9.9): from the toss to the landing, the trophy, the knees bent and the back arched, the
+  // racket drop, the jump into the ball and the left leg kicked back on the way down. Its contact (1.05 s) is
+  // SERVE_CLIP.contact; the jump is the character's (SERVE_JUMP: the conversion keeps the feet on the floor); the ball
+  // leaves the hand at SERVE_VIDEO_TOSS
+  serve: { file: 'serve_kick_video', def: { find: 1.05, out: 1.5, fade: 0.2, ik: 0.2, lead: 1.05, reach: 0.1 } },
 };
 /** the swings played from motion capture and their contact (s into the clip), for keyposes.ts */
 export const MOCAP_CONTACT: Record<string, number> = {};
@@ -302,6 +308,10 @@ const urlOff = (name: string) => {
 };
 const mocapOff = urlOff('mocap');
 const videoOff = urlOff('video');
+/** the serve from video (VIDEO.serve, unless ?video=off): its own toss */
+export const SERVE_FROM_VIDEO = !videoOff && !!VIDEO.serve;
+/** the video serve's toss: the ball leaves the left hand this far into its clip (s) */
+const SERVE_VIDEO_TOSS = 0.08;
 for (const [table, on] of [
   [MOCAP, !mocapOff],
   [VIDEO, !videoOff],
@@ -839,7 +849,7 @@ const LOCO_HEADING: Record<string, number> = { run: -0.162, walk: 0.246 };
  * The serve's toss (keyposes.ts SERVE_TOSS): the ball leaves the free hand `release` s into the serve's clip, whose
  * contact is SERVE_CLIP.contact (the simulation's SERVE_WINDUP after the serve starts); the view draws its flight.
  */
-export const TOSS = { release: SERVE_TOSS.release, contact: SERVE_CLIP.contact };
+export const TOSS = { release: SERVE_FROM_VIDEO ? SERVE_VIDEO_TOSS : SERVE_TOSS.release, contact: SERVE_CLIP.contact };
 /**
  * The overhead: a ball out of reach standing is met with the body under it (`under` m of the hips at most,
  * horizontally); the jump is held through the air once it is guessed (SMASH_JUMP).

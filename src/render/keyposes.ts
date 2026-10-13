@@ -536,6 +536,11 @@ export const SERVE_CLIP = {
 };
 /** the serve's toss: the ball leaves the free hand this far into the serve's clip (s) */
 export const SERVE_TOSS = { release: 0.38 };
+/**
+ * the serve from video (chars.ts VIDEO.serve): the clip times (s) the racket arm is SERVE_ARM's instead of the video's
+ * (blended over `fade`): from the arm going up behind the body to the racket drop, where the video lost it
+ */
+const SERVE_VIDEO_ARM = { from: 0.4, to: 1.0, fade: 0.1 };
 type ArmKey = { t: number; wrist: [number, number, number]; axis: [number, number, number]; normal: [number, number, number]; pole: [number, number, number] };
 /** the racket arm through the serve (see SERVE_CLIP): the wrist, the racket's axis and face, the elbow from the shoulder */
 const SERVE_ARM: ArmKey[] = [
@@ -996,7 +1001,8 @@ export function refineClips(template: THREE.Object3D, clips: Record<string, THRE
   // the volley: a short punch from the ready stance (the clip made for it swung the paddle back, away from the net):
   // the paddle up in front, a short take-back, out to meet the ball in front with the face to the net and the wrist
   // firm, held a moment, back to ready; the legs stay in the ready stance
-  if (clips.volley && ready) {
+  // (a volley from capture or video, chars.ts MOCAP_CONTACT, is played as captured)
+  if (clips.volley && ready && !('volley' in mocap)) {
     const K = 0.46;
     const V = VOLLEY;
     const times = timesOf(clips.volley.duration, 20);
@@ -1022,18 +1028,56 @@ export function refineClips(template: THREE.Object3D, clips: Record<string, THRE
     );
   }
   lap('drive+volley');
-  const smash = clips.serve;
+  // (a serve from video, chars.ts VIDEO.serve, is played as captured; the waiting stance is still the built serve's,
+  // on the overhead's capture, and the video's clip fades in from it)
+  const videoServe = 'serve' in mocap;
+  const smash = videoServe ? clips.smash : clips.serve;
   if (smash) {
     // the tennis serve (SERVE_CLIP), built on the overhead's capture (CLIP_FILES.serve is smash_mocap)
     const times = timesOf(SERVE_CLIP.duration, 30);
-    clips.serve = r.bake(
-      'serve',
-      times,
-      times.map((t) => {
-        servePose(r, kin, smash, t);
-        return r.grab();
-      }),
-    );
+    if (!videoServe)
+      clips.serve = r.bake(
+        'serve',
+        times,
+        times.map((t) => {
+          servePose(r, kin, smash, t);
+          return r.grab();
+        }),
+      );
+    else if (clips.serve) {
+      // the video's racket arm is lost behind the body from the toss to the racket drop (the camera sees the server's
+      // left side): there the arm is the built serve's (SERVE_ARM), its wrist and elbow kept where they are from the
+      // shoulder as the video's body moves the shoulder (the trophy's arch, the knees, the jump), blended in and out
+      // (SERVE_VIDEO_ARM); before and after, and through the contact, the video's own arm
+      const c = clips.serve;
+      const vt = timesOf(c.duration, 30);
+      const A = SERVE_VIDEO_ARM;
+      clips.serve = r.bake(
+        'serve',
+        vt,
+        vt.map((t) => {
+          const w = smooth(A.from, A.from + A.fade, t) * (1 - smooth(A.to - A.fade, A.to, t));
+          if (w <= 0) {
+            r.pose(c, t);
+            return r.grab();
+          }
+          servePose(r, kin, smash, t);
+          const shBuilt = r.pos('RightArm');
+          r.pose(c, t);
+          const clipR = armNow(r, ARM_R);
+          const off = r.pos('RightArm').sub(shBuilt);
+          const wrist = along(SERVE_ARM, t, (q) => q.wrist).add(off);
+          const axis = along(SERVE_ARM, t, (q) => q.axis).normalize();
+          const normal = along(SERVE_ARM, t, (q) => q.normal).normalize();
+          const pole = along(SERVE_ARM, t, (q) => q.pole).add(r.pos('RightArm'));
+          holdPaddle(r, kin, { wrist }, axis, normal, pole);
+          armMix(r, ARM_R, clipR, armNow(r, ARM_R), w);
+          return r.grab();
+        }),
+        ARM_R,
+        c,
+      );
+    }
     // the server waiting for his wind-up: the serve's first pose, held (its life is the waiting stance's: IDLE in chars.ts)
     clips.serveset = r.bake(
       'serveset',

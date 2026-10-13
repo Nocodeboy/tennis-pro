@@ -12,6 +12,7 @@ MediaPipe da 33 puntos en metros con el origen entre las caderas. Aquí:
      el codo o la rodilla están estirados su plano no está definido y se arrastra el del fotograma anterior.
 """
 import math
+import os
 
 import bpy
 import numpy as np
@@ -111,9 +112,23 @@ def profundidad(datos, P):
                     for k in range(n)])
     e2 = np.convolve(np.pad(esc, (r, r), mode="edge"), ker, mode="valid")
     out = np.zeros_like(P)
+    # (TRONCO=delante: el tronco y el cuello solo se inclinan hacia el pecho, nunca hacia la espalda. Con la cámara de
+    # frente, MediaPipe cambia a veces de signo la profundidad de los hombros respecto a la cadera y el jugador sale
+    # echado hacia atrás mirando al cielo; en los golpes de fondo y las voleas el tronco va siempre hacia delante.
+    # El pecho se mira con la línea de los hombros y la nariz, que va delante de ella.)
+    tronco_delante = os.environ.get("TRONCO") == "delante"
     for k in range(n):
         s = e2[k]
         pos = {"cad": np.zeros(3)}
+        frente = None
+        if tronco_delante:
+            hl = P[k, I["left_shoulder"]] - P[k, I["right_shoulder"]]
+            f = np.array([-hl[1], hl[0], 0.0])                          # horizontal, perpendicular a los hombros
+            nariz = P[k, I["nose"]] - pt(P[k], "hom")
+            if np.dot(f[:2], nariz[:2]) < 0:
+                f = -f
+            nf = np.linalg.norm(f)
+            frente = f / nf if nf > 1e-6 else None
         for a, b in ARBOL:
             d2 = (pt(Q[k], b) - pt(Q[k], a)) / s                       # metros, en la imagen
             L = largo[(a, b)]
@@ -123,6 +138,10 @@ def profundidad(datos, P):
             # (si MediaPipe lo ve casi de frente, su profundidad manda: el signo ahí es poco fiable)
             if abs(dz_mp) < 0.25 * abs(dz):
                 dz = dz_mp
+            if frente is not None and (a, b) in (("cad", "hom"), ("hom", "nose")):
+                # de los dos signos, el que echa el hueso hacia el pecho
+                if d2[0] * frente[0] + dz * frente[1] < d2[0] * frente[0] - dz * frente[1]:
+                    dz = -dz
             pos[b] = pos[a] + np.array([d2[0], dz, d2[1]])
         for nm, j in I.items():
             if nm in pos:
@@ -297,6 +316,7 @@ def construir(P, fps, jugador, nombre="fuente_video"):
     orden = sorted(HUESOS, key=lambda b: _prof(b))
     ob.animation_data_create()
     ob.animation_data.action = bpy.data.actions.new(nombre)
+    mano_firme = os.environ.get("MANO") == "firme"
     for k in range(n):
         hl, hr = g("left_hip", k), g("right_hip", k)
         sl, sr = g("left_shoulder", k), g("right_shoulder", k)
@@ -339,7 +359,16 @@ def construir(P, fps, jugador, nombre="fuente_video"):
         for b in orden:
             p, c = HUESOS[b]
             head = Vector(J[b][k])
-            if b in ("Neck", "Head"):
+            if mano_firme and b.endswith(("Hand", "HandMiddle1")):
+                # (MANO=firme: la mano sigue al antebrazo, la muñeca recta, girada con el plano del codo. Los puntos de
+                # los dedos de MediaPipe con la mano borrosa de un golpe dan vueltas de un fotograma a otro, y con ellos
+                # la raqueta)
+                L = "Left" if b.startswith("Left") else "Right"
+                y = head - Vector(J[L + "ForeArm"][k]) if b.endswith("Hand") else Vector(J[L + "Hand"][k]) - Vector(J[L + "ForeArm"][k])
+                y = y.normalized() if y.length > 1e-6 else Vector((0, 0, 1))
+                if L + "Arm" in planos:
+                    ref[b] = planos[L + "Arm"] * (1 if L == "Right" else -1)   # (en T: el del codo es (0, 0, −s), el de la mano (0, 0, 1))
+            elif b in ("Neck", "Head"):
                 # (las orejas de MediaPipe no sirven para inclinar la cabeza: el cuello sigue al tronco, como en
                 # reposo, y la cabeza solo gira con la línea de las orejas)
                 y = rest_dir[b].copy()
