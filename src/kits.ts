@@ -6,6 +6,8 @@
 // human in red, his doubles partner in the same colours turned round (white with red). On clay and hard courts they
 // wear their colours; on grass, all white with a thin trim in their colour (the grass-court tradition: onSurface).
 // No real brands: the mark on the kit and the rackets is an invented one.
+// (`serve: 'b'`: the player serves with the second serve from video, render/chars.ts SERVE_B: De Miñor, Siner and Marcel;
+// the rest, and you, with the main one)
 // (shirtHue … paddleEdge: the old CPU recolour, the fallback without a GPU painter.)
 
 import type { Kit } from './render/chars';
@@ -89,6 +91,7 @@ export const RIVAL_KITS: Record<string, KitInfo> = {
   // de Miñor, the counterpuncher: plum fading to aubergine, white wristbands
   lola: {
     kit: {
+      serve: 'b',
       shirtHue: 290, shirtSat: 0.4, shirtLight: -0.18, shortsHue: 260, shortsLight: -0.02, paddle: 0xd9468f, paddleEdge: 0x2a1a2a,
       outfit: {
         shirt: 0x6f3b7c, panel: 0x2d1832, trim: 0xeee6f2, logo: 0xeee6f2, style: 'fade',
@@ -122,6 +125,7 @@ export const RIVAL_KITS: Record<string, KitInfo> = {
   // Siner, the early hitter: petrol teal with dark side panels and a dotted print, auburn hair
   nuria: {
     kit: {
+      serve: 'b',
       shirtHue: 174, shirtSat: 0.6, shirtLight: -0.18, shortsHue: 180, shortsLight: -0.1, paddle: 0x18a090, paddleEdge: 0x0d3a3a,
       outfit: {
         shirt: 0x14857a, panel: 0x0d3a3a, trim: WHITE, logo: WHITE, style: 'sides', print: 'dots',
@@ -157,6 +161,7 @@ export const RIVAL_KITS: Record<string, KitInfo> = {
 /** Doubles: the human's partner (Marcel, id marta), in his colours turned round: white with a red chest band, charcoal shorts. */
 export const PARTNER_KIT: KitInfo = {
   kit: {
+    serve: 'b',
     shirtHue: 216, shirtSat: 0, shirtLight: 0.3, shortsHue: 220, shortsLight: -0.1, paddle: 0xc8372d, paddleEdge: 0x1f2531,
     outfit: {
       shirt: WHITE, panel: 0xb8302a, trim: 0x1f2531, logo: 0xb8302a, style: 'band',

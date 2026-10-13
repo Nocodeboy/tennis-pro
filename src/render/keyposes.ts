@@ -772,6 +772,7 @@ const FACE: Record<string, { k: number; tilt: number }> = {
   dink: { k: 1.58, tilt: 0.55 },
   smash: { k: 0.9, tilt: -0.2 },
   serve: { k: SERVE_CLIP.contact, tilt: -0.12 },
+  serve_b: { k: SERVE_CLIP.contact, tilt: -0.12 },
   slice: { k: 0.46, tilt: 0.5 },
   slice_l: { k: 0.95, tilt: 0.5 },
   volley_l: { k: 0.95, tilt: 0.2 },
@@ -1044,16 +1045,18 @@ export function refineClips(template: THREE.Object3D, clips: Record<string, THRE
           return r.grab();
         }),
       );
-    else if (clips.serve) {
-      // the video's racket arm is lost behind the body from the toss to the racket drop (the camera sees the server's
-      // left side): there the arm is the built serve's (SERVE_ARM), its wrist and elbow kept where they are from the
-      // shoulder as the video's body moves the shoulder (the trophy's arch, the knees, the jump), blended in and out
-      // (SERVE_VIDEO_ARM); before and after, and through the contact, the video's own arm
-      const c = clips.serve;
+    // the video's racket arm is lost behind the body from the toss to the racket drop (the camera sees the server's
+    // left side): there the arm is the built serve's (SERVE_ARM), its wrist and elbow kept where they are from the
+    // shoulder as the video's body moves the shoulder (the trophy's arch, the knees, the jump), blended in and out
+    // (SERVE_VIDEO_ARM); before and after, and through the contact, the video's own arm. The same for the second
+    // serve from video (chars.ts SERVE_B, the clip serve_b)
+    for (const name of videoServe ? ['serve', 'serve_b'] : []) {
+      const c = clips[name];
+      if (!c) continue;
       const vt = timesOf(c.duration, 30);
       const A = SERVE_VIDEO_ARM;
-      clips.serve = r.bake(
-        'serve',
+      clips[name] = r.bake(
+        name,
         vt,
         vt.map((t) => {
           const w = smooth(A.from, A.from + A.fade, t) * (1 - smooth(A.to - A.fade, A.to, t));

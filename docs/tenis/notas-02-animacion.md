@@ -73,3 +73,37 @@ MANO=firme PROFUNDIDAD=1 RED=camara python3 art/blender/padel_clip.py . video zv
   - el saque cortado de Raonic (`fofFYc-obTI`, desde la grada);
   - el saque de Nadal (`6NRbLwWxx6w`).
 - **En pádel y pickleball** casi todo lo de la lista está grabado de frente o desde detrás: con este método no van a salir bien.
+
+## Segunda pasada: lo que vale para el prototipo (13 oct, tarde)
+
+Germán: «De momento para la versión prototipo vamos a sacar lo que nos valga y luego veo si merece la pena pillar el pack». Se revisaron los vídeos que quedaban grabados de lado o casi:
+
+| Vídeo | Resultado |
+|---|---|
+| **Saque de Nadal** (`6NRbLwWxx6w`, Jim Fawcette, vertical, 60 fps a cámara lenta) | **Entra** como segundo saque (ver abajo) |
+| Derechas de Fonseca (`5lf-t4obkkU`, TK Tennis) | **No vale.** La primera parte está grabada desde detrás de la pista; la segunda, de lado, pero con cámara en mano, el jugador pequeño (335 px) y a tiempo real con mucho desenfoque. Convertida (del 44 al 62 s, fotogramas 290–400), en el muñeco parece más un baile con los brazos abiertos que una derecha. La de captura (Rokoko) es mejor |
+| Saque cortado de Raonic (`fofFYc-obTI`) | Desde la grada, en diagonal por detrás y lejos: no se probó |
+| Saques de Vinay Easwaran (`H2wDveavYpc`) | De frente: la misma pega que la volea de revés |
+| Remate (`7ElgcnvmVHk`) | Lejos y en movimiento: no se probó |
+| Desplazamientos de Federer (`pPFw6sJmCUU`) | Partido con la cámara siguiéndole; la carrera que hay (CMU) ya es captura |
+
+### El segundo saque: Nadal
+
+- **Clip:** `assets/anims/serve_nadal_video.json` (1,55 s), papel `serve_b` (`SERVE_B` en `chars.ts`).
+- **El vídeo:**
+  - recortado a su franja vertical (660–1260 px) y reflejado, porque es zurdo;
+  - pasado a tiempo real ×4 (grabado a 240 y puesto a 60 fps): del lanzamiento (fotograma 160) al contacto (362) quedan 0,84 s;
+  - el tramo va del fotograma 110 al 482, con el contacto en 1,05 s, como el otro saque.
+- **El lanzamiento:** sale de la mano a 0,21 s, más bajo que el liftado de Zverev. La vista lo toma de cada jugador (`CharacterView.tossRelease`).
+- **El brazo y la cara de la raqueta:** el mismo arreglo que el de Zverev (`SERVE_VIDEO_ARM` y `FACE.serve_b` en `keyposes.ts`).
+- **Quién saca con él:** De Miñor, Siner y tu pareja Marcel (`serve: 'b'` en `kits.ts`); tú y los demás, con el de Zverev.
+  - `?serve=b` pone a todos a sacar con el de Nadal;
+  - `?serve=a`, con el de Zverev.
+- **Medido** (`stage-tenis.ts saque` con `?serve=b`): el punto dulce a 9,3 cm de la bola en el contacto (el de Zverev, 7,0) y el mismo salto.
+- **En la página:** se ve un saque distinto. Trofeo más erguido, lanzamiento más bajo, la misma caída hacia la pista.
+- **Créditos:** los dos vídeos de Jim Fawcette.
+
+### Lo que queda tras esta pasada
+
+- **Ya no hay en la lista ningún vídeo de lado que aporte algo.** Para los golpes de fondo y las voleas haría falta captura de verdad (el pack de Motion Cast) o vídeos grabados a propósito, de lado.
+- **Pádel y pickleball:** nada nuevo desde vídeo; lo de la lista está grabado de frente.

@@ -950,7 +950,9 @@ export class View {
     // (as far through this wind-up as the clip's release is through the clip's: the clip is played at the pace that
     // brings its contact onto the match's)
     const len = Math.max(0.3, w.at - s.from);
-    s.rel = w.at - len * ((TOSS.contact - TOSS.release) / TOSS.contact);
+    // (each server's own clip: chars.ts SERVE_B)
+    const release = this.chars[w.pid]?.tossRelease ?? TOSS.release;
+    s.rel = w.at - len * ((TOSS.contact - release) / TOSS.contact);
     if (m.t < s.rel || !s.out) {
       if (h && m.t < s.rel) return { x: h.x, y: h.y - 0.02, z: h.z };
       if (!s.out) {

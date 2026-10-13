@@ -48,6 +48,8 @@ export interface Kit {
    * it, or while it has not loaded (or failed to), the AI-made one
    */
   model?: string;
+  /** the serve from video this player serves with ('b': SERVE_B, Nadal's; default the main one, Zverev's) */
+  serve?: 'b';
 }
 
 export interface CharAssets {
@@ -312,6 +314,14 @@ const videoOff = urlOff('video');
 export const SERVE_FROM_VIDEO = !videoOff && !!VIDEO.serve;
 /** the video serve's toss: the ball leaves the left hand this far into its clip (s) */
 const SERVE_VIDEO_TOSS = 0.08;
+/**
+ * A second serve from video, for the players whose kit says `serve: 'b'`: Rafael Nadal's at Indian Wells, filmed in
+ * slow motion (Jim Fawcette, CC BY), mirrored (he is left-handed) and played at its real speed (the video ×4): a
+ * lower toss than the kick serve's, the ball out of the hand at `toss` s, the same contact (SERVE_CLIP.contact). The
+ * same SwingDef as the main serve; keyposes.ts gives it the same arm through the racket drop and the same face.
+ */
+export const SERVE_B = { file: 'serve_nadal_video', toss: 0.21 };
+if (SERVE_FROM_VIDEO) CLIP_FILES.serve_b = SERVE_B.file;
 for (const [table, on] of [
   [MOCAP, !mocapOff],
   [VIDEO, !videoOff],
@@ -1052,7 +1062,7 @@ function layersOf(a: CharAssets) {
     const up = c.tracks.filter((t) => !isLo(t));
     const lo = c.tracks.filter(isLo);
     L[k] = [];
-    for (let i = 0; i < (k in SWINGS ? 2 : 1); i++) L[k].push({ up: new THREE.AnimationClip(`${k}:up${i}`, c.duration, up), lo: new THREE.AnimationClip(`${k}:lo${i}`, c.duration, lo) });
+    for (let i = 0; i < (k in SWINGS || k === 'serve_b' ? 2 : 1); i++) L[k].push({ up: new THREE.AnimationClip(`${k}:up${i}`, c.duration, up), lo: new THREE.AnimationClip(`${k}:lo${i}`, c.duration, lo) });
   }
   layerCache.set(a, L);
   return L;
@@ -1410,11 +1420,27 @@ export class CharacterView {
   /** the player's own body (see Person), when they have one and it loaded */
   readonly person: Person | null;
 
+  /** the clip this player serves with (Kit.serve), and when the ball leaves the hand in it (s) */
+  private serveClip: string = 'serve';
+  readonly tossRelease: number = TOSS.release;
+
   constructor(
     private a: CharAssets,
     kit: Kit,
     private height = 1.78,
   ) {
+    // (?serve=b: everyone serves with SERVE_B; ?serve=a: nobody, to compare)
+    const force = (() => {
+      try {
+        return new URLSearchParams(location.search).get('serve');
+      } catch {
+        return null;
+      }
+    })();
+    if ((force === 'b' || (kit.serve === 'b' && force !== 'a')) && a.clips.serve_b) {
+      this.serveClip = 'serve_b';
+      this.tossRelease = SERVE_B.toss;
+    }
     // a body of their own (Rocketbox, see Person) with its own painter; without it, the AI-made one
     const own = (kit.model && a.people?.[kit.model]?.painter && a.people[kit.model]) || null;
     this.person = own;
@@ -2915,7 +2941,7 @@ export class CharacterView {
     const def = SWINGS[kind];
     const k = this.a.contact[kind] ?? 0.8;
     // a free copy of the clip (the other may still be fading out)
-    const copies = this.act[kind];
+    const copies = this.act[kind === 'serve' ? this.serveClip : kind] ?? this.act[kind];
     const L = copies.find((c) => !this.shots.some((s) => s.layer === c)) ?? copies[0];
     const old = this.shots.find((s) => s.layer === L);
     if (old) this.dropShot(old);

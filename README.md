@@ -6,7 +6,7 @@ Juego de tenis en 3D para web y móvil, propio del estudio Nocodeboy Games. El n
 
 - **Web:** [tennis-pro-zeta.vercel.app](https://tennis-pro-zeta.vercel.app), proyecto `tennis-pro` de Vercel enlazado a `main`: se publica sola con cada push. Las demás ramas solo tienen vista previa, con inicio de sesión de Vercel.
 - **Origen:** el motor del pádel 0.6 (`Nocodeboy/padel-pro@33e2ba3`) más lo que el pickleball sabía de individual (`Nocodeboy/Pickleball`). Las notas del pádel siguen en `docs/` y las del pickleball en `docs/pickleball/` como referencia; las del tenis, en `docs/tenis/`.
-- **13 oct, después de la 0.1:** el saque es el de un profesional de verdad, sacado de un vídeo a cámara lenta con licencia CC BY (el saque liftado de Zverev en Indian Wells), con el brazo de la raqueta del saque de antes donde el vídeo no lo ve (`docs/tenis/notas-02-animacion.md`; `?video=off` vuelve al de antes). La lista de vídeos libres para animar los tres juegos está en `docs/tenis/videos-cc.md`.
+- **13 oct, después de la 0.1:** dos saques de profesionales de verdad, sacados de vídeos a cámara lenta con licencia CC BY: el liftado de Zverev (tú y la mayoría) y el de Nadal, reflejado (De Miñor, Siner y Marcel); el brazo de la raqueta es el del saque de antes donde el vídeo no lo ve (`docs/tenis/notas-02-animacion.md`; `?video=off` vuelve al de antes, `?serve=a` o `?serve=b` pone a todos con uno). La lista de vídeos libres para animar los tres juegos está en `docs/tenis/videos-cc.md`.
 - **Versión:** 0.1 (12–13 oct 2026), la primera jugable:
   - **individual** contra un cuadro de cinco rivales, de dieciseisavos a la final;
   - **dobles** con tu pareja, Marcel Granoyers, contra cuatro parejas, de octavos a la final;
